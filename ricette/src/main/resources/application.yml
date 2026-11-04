@@ -2,9 +2,10 @@
 #
 # Sintassi ${VARIABILE:default}: Spring usa la variabile d'ambiente se esiste,
 # altrimenti il valore dopo i due punti.
-#   - avvio da IntelliJ -> valgono i default (Postgres su localhost)
-#   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano
-#     al container del DB (ricette-db)
+#   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
+#     su localhost:5442, gateway su localhost:8080)
+#   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
+#     container (ricette-db:5432, gateway:8080)
 
 spring:
   application:
@@ -13,7 +14,7 @@ spring:
 
   datasource:
     # Database PRIVATO di questo servizio: nessun altro servizio lo usa
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ricette}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5442}/${DB_NAME:ricette}
     username: ${DB_USER:ricette}
     password: ${DB_PASSWORD:ricette}
 
@@ -25,6 +26,23 @@ spring:
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Dove scaricare le chiavi PUBBLICHE del gateway (JWKS). Il servizio le
+          # scarica al primo token, le tiene in cache e le riscarica solo se arriva
+          # un token firmato con una chiave ("kid") che non conosce.
+          jwk-set-uri: ${JWKS_URI:http://localhost:8080/.well-known/jwks.json}
+          # Valore atteso del claim "iss": token di altri emittenti -> 401.
+          # Con jwk-set-uri presente Spring non contatta questo indirizzo: lo usa
+          # solo per il confronto (per questo può essere un nome e non un URL).
+          issuer-uri: ${JWT_ISSUER:ginvault-gateway}
+          # Il claim "roles" diventa le authority di Spring Security con prefisso
+          # ROLE_: ["SOCIO"] -> ROLE_SOCIO -> @PreAuthorize("hasRole('SOCIO')")
+          authorities-claim-name: roles
+          authority-prefix: ROLE_
 
 server:
   # Porta fissa per servizio (8082 = ricette), uguale in locale e in Docker
@@ -40,6 +58,7 @@ management:
         include: health
   endpoint:
     health:
-      # Mostra il dettaglio dei componenti (es. "db": UP). Quando aggiungeremo
-      # la sicurezza lo limiteremo agli utenti autorizzati.
-      show-details: always
+      # when-authorized: da fuori /health risponde solo {"status":"UP"/"DOWN"};
+      # i dettagli (es. "db": UP) solo a chi presenta un JWT con ruolo ADMIN.
+      show-details: when-authorized
+      roles: ADMIN

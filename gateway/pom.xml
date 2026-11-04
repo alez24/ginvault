@@ -55,6 +55,29 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
+
+        <!--
+            Spring Security + client OAuth2: login con Google/GitHub (oauth2Login).
+            Porta con sé anche spring-security-oauth2-jose (libreria Nimbus), che
+            usiamo per FIRMARE il JWT interno e pubblicare la chiave pubblica (JWKS).
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
+
+        <!-- Test: JUnit 5, AssertJ, WebTestClient... -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Test: utenti finti già autenticati (mockOAuth2Login) -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

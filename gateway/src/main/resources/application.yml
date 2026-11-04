@@ -1,23 +1,59 @@
 # Configurazione dell'API Gateway: l'unico servizio raggiungibile dall'esterno.
 #
-# Ogni route ha:
-#   - uri:        dove inoltrare la richiesta. ${X_URI:default} -> in Docker Compose
-#                 X_URI vale es. http://edizioni:8081 (nome del servizio = hostname
-#                 nella rete Docker); da IntelliJ vale il default su localhost.
-#   - predicates: quando la route si applica (qui: in base al path)
-#   - filters:    trasformazioni della richiesta. StripPrefix=2 toglie i primi 2
-#                 segmenti del path:  /api/edizioni/health  ->  /health
-#
-# Le route sono definite in modo DICHIARATIVO, senza codice Java.
+# Ruoli del gateway:
+#   1) client OAuth2: fa il login degli utenti con Google o GitHub
+#   2) tiene la SESSIONE dell'utente (cookie SESSION nel browser)
+#   3) emittente del JWT interno: a ogni richiesta verso i servizi firma un JWT
+#      con identità e ruoli e lo aggiunge come "Authorization: Bearer ..."
+#      (pattern BFF, Backend For Frontend: il JWT non arriva mai al browser)
+#   4) routing verso i microservizi
 
 spring:
   application:
     name: gateway
 
+  security:
+    oauth2:
+      client:
+        # "Registrazione" = il gateway come applicazione registrata presso il provider.
+        # Per google e github Spring Security conosce già gli URL dei provider
+        # (authorize, token, userinfo, chiavi): servono solo id e secret, che
+        # arrivano dal file .env tramite docker-compose.
+        # Redirect URI (da registrare sulle console): {baseUrl}/login/oauth2/code/{id}
+        #   -> http://localhost:8080/login/oauth2/code/google  (e .../github)
+        registration:
+          google:
+            client-id: ${GOOGLE_CLIENT_ID}
+            client-secret: ${GOOGLE_CLIENT_SECRET}
+            # "openid" attiva OpenID Connect: Google restituisce anche un ID token
+            # (JWT firmato da Google) con identità ed email verificata.
+            scope: openid,profile,email
+          github:
+            client-id: ${GITHUB_CLIENT_ID}
+            client-secret: ${GITHUB_CLIENT_SECRET}
+            # GitHub non supporta OIDC: il gateway legge il profilo da
+            # https://api.github.com/user. read:user basta per id, login e nome.
+            scope: read:user
+
   cloud:
     gateway:
       server:
         webflux:
+          # Filtri applicati a TUTTE le route
+          default-filters:
+            # Il cookie di sessione serve solo al gateway: i servizi non lo
+            # ricevono (un servizio compromesso non può rubare le sessioni).
+            - RemoveRequestHeader=Cookie
+
+          # Ogni route ha:
+          #   - uri:        dove inoltrare. ${X_URI:default} -> in Docker Compose X_URI
+          #                 vale es. http://edizioni:8081; da IntelliJ vale localhost.
+          #   - predicates: quando la route si applica (qui: in base al path)
+          #   - filters:    StripPrefix=2 toglie i primi 2 segmenti del path:
+          #                 /api/edizioni/health  ->  /health
+          # La route di notifiche funziona anche per i WebSocket: se la richiesta
+          # chiede l'upgrade, il gateway passa da http:// a ws:// da solo, e il
+          # filtro del JWT vale anche per l'handshake.
           routes:
             - id: edizioni
               uri: ${EDIZIONI_URI:http://localhost:8081}
@@ -61,6 +97,22 @@ spring:
               filters:
                 - StripPrefix=2
 
+# Configurazione specifica di GinVault (classi JwtProperties e RuoliProperties)
+ginvault:
+  jwt:
+    # Valore del claim "iss" (issuer): i servizi accettano solo token con questo valore
+    issuer: ginvault-gateway
+    # Durata del JWT interno. Il gateway ne firma uno nuovo a ogni richiesta,
+    # quindi può durare poco: se venisse intercettato, scade in fretta.
+    durata: 5m
+  ruoli:
+    # Elenchi separati da virgola di identità "google:<email>" o "github:<login>".
+    # Chi non compare in nessun elenco riceve il ruolo CLIENTE.
+    socio: ${RUOLI_SOCIO:}
+    distillatore: ${RUOLI_DISTILLATORE:}
+    resp-acquisti: ${RUOLI_RESP_ACQUISTI:}
+    admin: ${RUOLI_ADMIN:}
+
 server:
   port: 8080
 
@@ -70,12 +122,14 @@ management:
       base-path: /
       exposure:
         # health  -> GET /health          (stato del gateway)
-        # gateway -> GET /gateway/routes  (elenco delle route caricate: utile per
-        #            mostrare la configurazione; da proteggere quando arriva la security)
+        # gateway -> GET /gateway/routes  (route caricate; solo ADMIN, vedi SecurityConfig)
         include: health,gateway
   endpoint:
     health:
-      show-details: always
+      # when-authorized: chi non è autenticato vede solo {"status":"UP"/"DOWN"};
+      # i dettagli (componenti, spazio disco...) solo agli utenti con ruolo ADMIN.
+      show-details: when-authorized
+      roles: ADMIN
     gateway:
       # Di default l'endpoint "gateway" è disattivato (access: none).
       # read-only = solo le GET (vedere le route), niente modifiche a runtime.

@@ -1,8 +1,14 @@
 # =============================================================================
-# GinVault - Docker Compose (passo 1: fondamenta)
+# GinVault - Docker Compose
 #
-#   Avvio:  docker compose up -d --build --wait
+#   Production mode (demo d'esame), legge SOLO questo file:
+#           docker compose -f docker-compose.yml up -d --build --wait
+#   Sviluppo, legge anche docker-compose.override.yml (porte dei DB esposte):
+#           docker compose up -d --build --wait
 #   Stop:   docker compose down          (con -v cancella anche i dati dei DB)
+#
+# Prima del primo avvio: copiare .env.example in .env e compilarlo (client
+# id/secret OAuth, elenchi dei ruoli). Compose legge .env in automatico.
 #
 # Reti:
 #   - backend            -> condivisa da gateway, microservizi e Kafka
@@ -165,6 +171,11 @@ services:
   # ===========================================================================
   # build: ./cartella -> Compose costruisce l'immagine con il Dockerfile lì dentro.
   # environment: valorizza le ${VARIABILI} usate in application.yml.
+  #   DB_PORT: 5432 -> dentro la rete Docker Postgres ascolta sulla porta standard
+  #     (il default 544x di application.yml vale per l'avvio da IntelliJ).
+  #   JWKS_URI -> chiavi pubbliche del gateway, per verificare la firma dei JWT.
+  #     Vengono scaricate al primo token: per questo i servizi non devono
+  #     aspettare il gateway all'avvio (è il gateway ad aspettare loro).
   # depends_on + service_healthy: il servizio parte solo quando il suo DB
   #   risponde a pg_isready (non solo quando il container è partito).
   # healthcheck: chiama GET /health. L'Actuator risponde 503 se il DB è giù
@@ -175,9 +186,11 @@ services:
     restart: unless-stopped
     environment:
       DB_HOST: edizioni-db
+      DB_PORT: 5432
       DB_NAME: edizioni
       DB_USER: edizioni
       DB_PASSWORD: edizioni
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     depends_on:
       edizioni-db:
         condition: service_healthy
@@ -193,9 +206,11 @@ services:
     restart: unless-stopped
     environment:
       DB_HOST: ricette-db
+      DB_PORT: 5432
       DB_NAME: ricette
       DB_USER: ricette
       DB_PASSWORD: ricette
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     depends_on:
       ricette-db:
         condition: service_healthy
@@ -211,9 +226,11 @@ services:
     restart: unless-stopped
     environment:
       DB_HOST: produzione-db
+      DB_PORT: 5432
       DB_NAME: produzione
       DB_USER: produzione
       DB_PASSWORD: produzione
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     depends_on:
       produzione-db:
         condition: service_healthy
@@ -229,9 +246,11 @@ services:
     restart: unless-stopped
     environment:
       DB_HOST: magazzino-db
+      DB_PORT: 5432
       DB_NAME: magazzino
       DB_USER: magazzino
       DB_PASSWORD: magazzino
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     depends_on:
       magazzino-db:
         condition: service_healthy
@@ -247,9 +266,11 @@ services:
     restart: unless-stopped
     environment:
       DB_HOST: pagamenti-db
+      DB_PORT: 5432
       DB_NAME: pagamenti
       DB_USER: pagamenti
       DB_PASSWORD: pagamenti
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     depends_on:
       pagamenti-db:
         condition: service_healthy
@@ -268,6 +289,7 @@ services:
     restart: unless-stopped
     environment:
       PORT: 8086
+      JWKS_URI: http://gateway:8080/.well-known/jwks.json
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8086/health"]
@@ -291,6 +313,18 @@ services:
       MAGAZZINO_URI: http://magazzino:8084
       PAGAMENTI_URI: http://pagamenti:8085
       NOTIFICHE_URI: http://notifiche:8086
+      # Segreti OAuth, presi dal file .env (non committato).
+      # ${VAR:?messaggio}: se la variabile manca o è vuota, Compose si ferma
+      # subito con quel messaggio invece di avviare un gateway che non funziona.
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?manca in .env - copia .env.example in .env e compilalo}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?manca in .env}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:?manca in .env}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:?manca in .env}
+      # Elenchi dei ruoli ("${VAR:-}" = vuoto se non impostata: tutti CLIENTE)
+      RUOLI_SOCIO: ${RUOLI_SOCIO:-}
+      RUOLI_DISTILLATORE: ${RUOLI_DISTILLATORE:-}
+      RUOLI_RESP_ACQUISTI: ${RUOLI_RESP_ACQUISTI:-}
+      RUOLI_ADMIN: ${RUOLI_ADMIN:-}
     # Il gateway parte per ultimo: quando è "healthy" tutto il sistema è pronto
     depends_on:
       edizioni:
