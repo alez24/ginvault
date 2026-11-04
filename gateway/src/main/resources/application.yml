@@ -1,0 +1,82 @@
+# Configurazione dell'API Gateway: l'unico servizio raggiungibile dall'esterno.
+#
+# Ogni route ha:
+#   - uri:        dove inoltrare la richiesta. ${X_URI:default} -> in Docker Compose
+#                 X_URI vale es. http://edizioni:8081 (nome del servizio = hostname
+#                 nella rete Docker); da IntelliJ vale il default su localhost.
+#   - predicates: quando la route si applica (qui: in base al path)
+#   - filters:    trasformazioni della richiesta. StripPrefix=2 toglie i primi 2
+#                 segmenti del path:  /api/edizioni/health  ->  /health
+#
+# Le route sono definite in modo DICHIARATIVO, senza codice Java.
+
+spring:
+  application:
+    name: gateway
+
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: edizioni
+              uri: ${EDIZIONI_URI:http://localhost:8081}
+              predicates:
+                - Path=/api/edizioni/**
+              filters:
+                - StripPrefix=2
+
+            - id: ricette
+              uri: ${RICETTE_URI:http://localhost:8082}
+              predicates:
+                - Path=/api/ricette/**
+              filters:
+                - StripPrefix=2
+
+            - id: produzione
+              uri: ${PRODUZIONE_URI:http://localhost:8083}
+              predicates:
+                - Path=/api/produzione/**
+              filters:
+                - StripPrefix=2
+
+            - id: magazzino
+              uri: ${MAGAZZINO_URI:http://localhost:8084}
+              predicates:
+                - Path=/api/magazzino/**
+              filters:
+                - StripPrefix=2
+
+            - id: pagamenti
+              uri: ${PAGAMENTI_URI:http://localhost:8085}
+              predicates:
+                - Path=/api/pagamenti/**
+              filters:
+                - StripPrefix=2
+
+            - id: notifiche
+              uri: ${NOTIFICHE_URI:http://localhost:8086}
+              predicates:
+                - Path=/api/notifiche/**
+              filters:
+                - StripPrefix=2
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        # health  -> GET /health          (stato del gateway)
+        # gateway -> GET /gateway/routes  (elenco delle route caricate: utile per
+        #            mostrare la configurazione; da proteggere quando arriva la security)
+        include: health,gateway
+  endpoint:
+    health:
+      show-details: always
+    gateway:
+      # Di default l'endpoint "gateway" è disattivato (access: none).
+      # read-only = solo le GET (vedere le route), niente modifiche a runtime.
+      access: read-only

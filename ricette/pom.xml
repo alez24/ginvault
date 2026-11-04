@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Il parent di Spring Boot fornisce:
+        - le versioni compatibili di tutte le dipendenze Spring/terze parti (non le scriviamo noi);
+        - la configurazione dei plugin Maven (compiler, surefire, spring-boot-maven-plugin...).
+        relativePath vuoto = cercalo nel repository Maven, non in una cartella padre:
+        ogni servizio è un progetto Maven indipendente.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.16</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>it.ginvault</groupId>
+    <artifactId>ricette</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>ricette</name>
+    <description>GinVault - microservizio Ricette</description>
+
+    <properties>
+        <!-- Letta dal parent per configurare il compilatore (release 21) -->
+        <java.version>21</java.version>
+    </properties>
+
+    <dependencies>
+        <!-- API REST: Spring MVC + Tomcat embedded -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Endpoint di monitoraggio: da qui arriva GET /health -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Accesso al DB: JPA/Hibernate + pool di connessioni HikariCP -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Driver JDBC di PostgreSQL: serve solo a runtime, non in compilazione -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Crea il "fat jar" eseguibile con java -jar (codice + tutte le dipendenze) -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

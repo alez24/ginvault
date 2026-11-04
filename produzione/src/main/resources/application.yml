@@ -1,0 +1,45 @@
+# Configurazione del microservizio Produzione.
+#
+# Sintassi ${VARIABILE:default}: Spring usa la variabile d'ambiente se esiste,
+# altrimenti il valore dopo i due punti.
+#   - avvio da IntelliJ -> valgono i default (Postgres su localhost)
+#   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano
+#     al container del DB (produzione-db)
+
+spring:
+  application:
+    # Nome logico del servizio: compare nei log (e in futuro in tracing/metriche)
+    name: produzione
+
+  datasource:
+    # Database PRIVATO di questo servizio: nessun altro servizio lo usa
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:produzione}
+    username: ${DB_USER:produzione}
+    password: ${DB_PASSWORD:produzione}
+
+  jpa:
+    hibernate:
+      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity.
+      # Comodo in sviluppo; quando ci saranno le entità valuteremo Flyway.
+      ddl-auto: update
+    # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
+    # durante tutta la richiesta HTTP (evita query nascoste nei controller)
+    open-in-view: false
+
+server:
+  # Porta fissa per servizio (8083 = produzione), uguale in locale e in Docker
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      # Gli endpoint Actuator stanno alla radice: /health invece di /actuator/health
+      base-path: /
+      exposure:
+        # Esponiamo via HTTP solo l'health check
+        include: health
+  endpoint:
+    health:
+      # Mostra il dettaglio dei componenti (es. "db": UP). Quando aggiungeremo
+      # la sicurezza lo limiteremo agli utenti autorizzati.
+      show-details: always

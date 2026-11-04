@@ -1,0 +1,5 @@
+# File esclusi dal "build context" inviato a Docker:
+# build più veloce e nessun file locale finisce per sbaglio nell'immagine.
+target/
+.idea/
+*.iml

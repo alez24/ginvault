@@ -1,0 +1,334 @@
+# =============================================================================
+# GinVault - Docker Compose (passo 1: fondamenta)
+#
+#   Avvio:  docker compose up -d --build --wait
+#   Stop:   docker compose down          (con -v cancella anche i dati dei DB)
+#
+# Reti:
+#   - backend            -> condivisa da gateway, microservizi e Kafka
+#   - <servizio>-db-net  -> rete privata tra UN servizio e il SUO database.
+#     Il DB di edizioni non è raggiungibile da ricette, ecc.: il pattern
+#     "database per service" è garantito anche a livello di rete.
+#   - Dall'host (il portatile) si raggiunge SOLO il gateway: localhost:8080.
+#
+# In una rete Compose ogni servizio è raggiungibile usando il suo NOME come
+# hostname (DNS interno di Docker): es. jdbc:postgresql://edizioni-db:5432/...
+# =============================================================================
+
+# Nome del progetto: prefisso di container, reti, volumi (es. ginvault-kafka-1)
+name: ginvault
+
+# -----------------------------------------------------------------------------
+# Blocchi riutilizzabili. Le chiavi "x-..." sono ignorate da Compose; servono
+# solo come "anchor" YAML (&nome) da richiamare con "<<: *nome", che copia
+# lì le chiavi del blocco.
+# -----------------------------------------------------------------------------
+x-postgres: &postgres
+  image: postgres:17-alpine
+  restart: unless-stopped
+  healthcheck:
+    # pg_isready: il DB accetta connessioni?
+    # "$$" = "$" letterale: la variabile viene espansa DENTRO il container
+    # (non da Compose), così lo stesso healthcheck vale per tutti i DB.
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+
+# Tempi dell'healthcheck dei microservizi (il comando "test" lo mette ognuno).
+x-app-healthcheck: &app-healthcheck
+  interval: 10s       # ogni quanto controllare a regime
+  timeout: 3s         # oltre questo tempo il controllo è fallito
+  retries: 5          # dopo 5 fallimenti consecutivi -> "unhealthy"
+  start_period: 60s   # tempo di avvio: i fallimenti qui non contano...
+  start_interval: 2s  # ...e nel frattempo si controlla ogni 2s
+
+services:
+
+  # ===========================================================================
+  # DATABASE - un'istanza PostgreSQL per microservizio
+  # ===========================================================================
+  # Al primo avvio (volume vuoto) l'immagine postgres crea utente e database
+  # indicati da POSTGRES_USER / POSTGRES_DB. Le credenziali sono di sviluppo:
+  # i DB non sono esposti all'host. I segreti veri (es. OAuth) andranno in .env.
+
+  edizioni-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: edizioni
+      POSTGRES_USER: edizioni
+      POSTGRES_PASSWORD: edizioni
+    volumes:
+      # Volume con nome: i dati sopravvivono a "docker compose down"
+      - edizioni-db-data:/var/lib/postgresql/data
+    networks:
+      - edizioni-db-net
+
+  ricette-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: ricette
+      POSTGRES_USER: ricette
+      POSTGRES_PASSWORD: ricette
+    volumes:
+      - ricette-db-data:/var/lib/postgresql/data
+    networks:
+      - ricette-db-net
+
+  produzione-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: produzione
+      POSTGRES_USER: produzione
+      POSTGRES_PASSWORD: produzione
+    volumes:
+      - produzione-db-data:/var/lib/postgresql/data
+    networks:
+      - produzione-db-net
+
+  magazzino-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: magazzino
+      POSTGRES_USER: magazzino
+      POSTGRES_PASSWORD: magazzino
+    volumes:
+      - magazzino-db-data:/var/lib/postgresql/data
+    networks:
+      - magazzino-db-net
+
+  pagamenti-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: pagamenti
+      POSTGRES_USER: pagamenti
+      POSTGRES_PASSWORD: pagamenti
+    volumes:
+      - pagamenti-db-data:/var/lib/postgresql/data
+    networks:
+      - pagamenti-db-net
+
+  # ===========================================================================
+  # KAFKA - modalità KRaft (senza ZooKeeper), un solo nodo
+  # ===========================================================================
+  kafka:
+    image: apache/kafka:4.3.0
+    restart: unless-stopped
+    environment:
+      # --- Ruoli KRaft ---
+      # Questo unico nodo è sia "broker" (riceve/consegna i messaggi) sia
+      # "controller" (gestisce i metadati del cluster: topic, partizioni,
+      # leader... il lavoro che prima faceva ZooKeeper).
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Chi vota nel quorum dei controller: formato id@host:porta (solo noi)
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+
+      # --- Listener (porte su cui Kafka ascolta) ---
+      #   PLAINTEXT  :9092 -> traffico dei client (i nostri microservizi)
+      #   CONTROLLER :9093 -> traffico interno del quorum KRaft
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      # Indirizzo che Kafka comunica ai client per collegarsi: il nome del
+      # servizio nella rete Docker. I servizi useranno bootstrap "kafka:9092".
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Protocollo di ogni listener: in chiaro (siamo in una rete Docker privata)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      # --- Cluster con un solo nodo ---
+      # I topic interni di Kafka (offset dei consumer group, transazioni)
+      # vorrebbero 3 repliche: con un nodo solo dobbiamo dire 1.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # --- Storage ---
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # ID del cluster (generato con "kafka-storage.sh random-uuid"): al primo
+      # avvio lo storage viene "formattato" con questo ID.
+      CLUSTER_ID: KW4Oo2dGSAeJoAiERBOALA
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Il broker risponde alle richieste dei client?
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+      start_interval: 3s
+    networks:
+      - backend
+
+  # ===========================================================================
+  # MICROSERVIZI SPRING BOOT
+  # ===========================================================================
+  # build: ./cartella -> Compose costruisce l'immagine con il Dockerfile lì dentro.
+  # environment: valorizza le ${VARIABILI} usate in application.yml.
+  # depends_on + service_healthy: il servizio parte solo quando il suo DB
+  #   risponde a pg_isready (non solo quando il container è partito).
+  # healthcheck: chiama GET /health. L'Actuator risponde 503 se il DB è giù
+  #   -> wget fallisce -> il container diventa "unhealthy".
+
+  edizioni:
+    build: ./edizioni
+    restart: unless-stopped
+    environment:
+      DB_HOST: edizioni-db
+      DB_NAME: edizioni
+      DB_USER: edizioni
+      DB_PASSWORD: edizioni
+    depends_on:
+      edizioni-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health"]
+    networks:
+      - backend
+      - edizioni-db-net
+
+  ricette:
+    build: ./ricette
+    restart: unless-stopped
+    environment:
+      DB_HOST: ricette-db
+      DB_NAME: ricette
+      DB_USER: ricette
+      DB_PASSWORD: ricette
+    depends_on:
+      ricette-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/health"]
+    networks:
+      - backend
+      - ricette-db-net
+
+  produzione:
+    build: ./produzione
+    restart: unless-stopped
+    environment:
+      DB_HOST: produzione-db
+      DB_NAME: produzione
+      DB_USER: produzione
+      DB_PASSWORD: produzione
+    depends_on:
+      produzione-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health"]
+    networks:
+      - backend
+      - produzione-db-net
+
+  magazzino:
+    build: ./magazzino
+    restart: unless-stopped
+    environment:
+      DB_HOST: magazzino-db
+      DB_NAME: magazzino
+      DB_USER: magazzino
+      DB_PASSWORD: magazzino
+    depends_on:
+      magazzino-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8084/health"]
+    networks:
+      - backend
+      - magazzino-db-net
+
+  pagamenti:
+    build: ./pagamenti
+    restart: unless-stopped
+    environment:
+      DB_HOST: pagamenti-db
+      DB_NAME: pagamenti
+      DB_USER: pagamenti
+      DB_PASSWORD: pagamenti
+    depends_on:
+      pagamenti-db:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8085/health"]
+    networks:
+      - backend
+      - pagamenti-db-net
+
+  # ===========================================================================
+  # NOTIFICHE - NestJS (servizio "tecnico", per ora senza database)
+  # ===========================================================================
+  notifiche:
+    build: ./notifiche
+    restart: unless-stopped
+    environment:
+      PORT: 8086
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8086/health"]
+    networks:
+      - backend
+
+  # ===========================================================================
+  # GATEWAY - unico punto di ingresso dall'esterno
+  # ===========================================================================
+  gateway:
+    build: ./gateway
+    restart: unless-stopped
+    ports:
+      # HOST:CONTAINER -> http://localhost:8080 sul portatile
+      - "8080:8080"
+    environment:
+      # Destinazioni delle route (vedi gateway/application.yml)
+      EDIZIONI_URI: http://edizioni:8081
+      RICETTE_URI: http://ricette:8082
+      PRODUZIONE_URI: http://produzione:8083
+      MAGAZZINO_URI: http://magazzino:8084
+      PAGAMENTI_URI: http://pagamenti:8085
+      NOTIFICHE_URI: http://notifiche:8086
+    # Il gateway parte per ultimo: quando è "healthy" tutto il sistema è pronto
+    depends_on:
+      edizioni:
+        condition: service_healthy
+      ricette:
+        condition: service_healthy
+      produzione:
+        condition: service_healthy
+      magazzino:
+        condition: service_healthy
+      pagamenti:
+        condition: service_healthy
+      notifiche:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+    networks:
+      - backend
+
+# -----------------------------------------------------------------------------
+# Reti: Compose le crea come reti "bridge" con nome ginvault_<nome>
+# -----------------------------------------------------------------------------
+networks:
+  backend:
+  edizioni-db-net:
+  ricette-db-net:
+  produzione-db-net:
+  magazzino-db-net:
+  pagamenti-db-net:
+
+# -----------------------------------------------------------------------------
+# Volumi con nome: gestiti da Docker, persistono finché non si usa "down -v"
+# -----------------------------------------------------------------------------
+volumes:
+  edizioni-db-data:
+  ricette-db-data:
+  produzione-db-data:
+  magazzino-db-data:
+  pagamenti-db-data:
+  kafka-data:

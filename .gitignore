@@ -1,0 +1,18 @@
+# --- Build Java/Maven ---
+target/
+
+# --- Node/NestJS ---
+node_modules/
+dist/
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+
+# --- Segreti locali (es. client secret OAuth, nei passi successivi) ---
+.env
+
+# --- File di sistema ---
+.DS_Store
+Thumbs.db

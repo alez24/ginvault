@@ -1,0 +1,6 @@
+# node_modules locale escluso: l'immagine installa le sue dipendenze con npm ci
+# (inoltre alcuni pacchetti compilati per Windows non funzionerebbero su Linux)
+node_modules/
+dist/
+.idea/
+*.iml
