@@ -24,8 +24,8 @@ metadata:
     app.kubernetes.io/part-of: ginvault
 data:
   # Destinazioni delle route (gateway/application.yml): i nomi dei Service.
-  # Per ora esiste solo "edizioni": le altre route rispondono con un errore
-  # finché non aggiungiamo i relativi servizi, senza dover toccare il gateway.
+  # Per ora esistono "edizioni" e "ricette": le altre route rispondono con un
+  # errore finché non aggiungiamo i relativi servizi, senza toccare il gateway.
   EDIZIONI_URI: http://edizioni:8081
   RICETTE_URI: http://ricette:8082
   PRODUZIONE_URI: http://produzione:8083
@@ -73,7 +73,8 @@ spec:
       enableServiceLinks: false   # vedi edizioni-db.yaml
       containers:
         - name: gateway
-          image: ginvault/gateway:0.1
+          # 0.2 = CSRF con cookie XSRF-TOKEN e header X-Forwarded-* verso i servizi
+          image: ginvault/gateway:0.2
           imagePullPolicy: Never   # immagine costruita dentro Minikube
           ports:
             - name: http

@@ -21,5 +21,8 @@ resources:
   - namespace.yaml
   - edizioni-db.yaml
   - edizioni.yaml
+  - ricette-db.yaml
+  - ricette.yaml
+  - networkpolicy-db.yaml
   - gateway.yaml
   - ingress.yaml

@@ -5,12 +5,14 @@ Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose
 e, in parte, su Kubernetes (Minikube).
 Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
-> **Stato: passo 1 (fondamenta), sicurezza OAuth2/JWT e Kubernetes minimo.**
+> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes e la storia di Marco.**
 > Ogni servizio si avvia, ha `GET /health`, il proprio database e un endpoint di
-> prova protetto da ruolo. Su Minikube girano gateway, edizioni e il suo
-> database dietro un Ingress, con login funzionante
+> prova protetto da ruolo. Ricette ed Edizioni hanno la logica di dominio:
+> formulazioni con prove di assaggio, edizioni validate da Ricette via REST,
+> tiratura e ricalcolo. Su Minikube girano gateway, edizioni, ricette e i loro
+> database dietro un Ingress, con i database isolati da NetworkPolicy
 > ([`k8s/README.md`](k8s/README.md)).
-> Mancano ancora la logica di dominio, gRPC e gli altri servizi su Kubernetes.
+> Mancano ancora Kafka tra i servizi, gRPC e gli altri servizi su Kubernetes.
 
 ## Architettura
 
@@ -115,7 +117,7 @@ dipendenze Maven/npm. I successivi sono molto più rapidi grazie alla cache.
 
 ### Su Kubernetes (Minikube)
 
-Gateway, edizioni ed edizioni-db, esposti con un Ingress su `http://localhost`:
+Gateway, edizioni, ricette e i loro database, esposti con un Ingress su `http://localhost`:
 prerequisiti, avvio, spiegazione di ogni oggetto e demo d'esame sono in
 [`k8s/README.md`](k8s/README.md).
 
@@ -135,6 +137,16 @@ un cookie di sessione, il JWT viaggia esclusivamente tra gateway e servizi.
 3. **I servizi** (resource server) verificano firma, scadenza e issuer usando la
    chiave pubblica del gateway (`/.well-known/jwks.json`) e controllano i ruoli
    con `@PreAuthorize` (Spring) o `@Ruoli` (NestJS).
+4. **CSRF sulle richieste che modificano** (POST, PUT, DELETE). Le risposte delle
+   API portano il cookie `XSRF-TOKEN`, leggibile da JavaScript; la richiesta deve
+   rimandare lo stesso valore nell'header `X-XSRF-TOKEN`, altrimenti il gateway
+   risponde 403. Un sito malevolo può far partire una POST con i cookie
+   dell'utente, ma non può leggere il cookie per copiarlo nell'header.
+5. **Header `X-Forwarded-*` verso i servizi** (`Host`, `Proto`, `Port`, `Prefix`).
+   Così i servizi costruiscono link pubblici giusti, ad esempio
+   `Location: http://localhost/api/ricette/formulazioni/{id}` anche se ricevono
+   solo `/formulazioni`. Il gateway li accetta e li aggiunge solo se chi si
+   collega ha un IP fidato (`trusted-proxies`: loopback e reti private).
 
 | Situazione                                   | Risposta |
 |----------------------------------------------|----------|
@@ -142,6 +154,7 @@ un cookie di sessione, il JWT viaggia esclusivamente tra gateway e servizi.
 | Pagina senza login (es. `/gateway/routes`)   | redirect a `/login` |
 | JWT assente, scaduto, firmato da altri, issuer sbagliato | 401 |
 | JWT valido ma ruolo mancante                 | 403      |
+| POST/PUT/DELETE senza `X-XSRF-TOKEN` uguale al cookie | 403 (dal gateway) |
 | `/health` senza login                        | solo `{"status":"UP"}` |
 | `/health` con ruolo ADMIN                    | anche i dettagli (DB, disco...) |
 
@@ -171,17 +184,120 @@ curl http://localhost:8080/.well-known/jwks.json      # chiave pubblica del gate
 > **Windows PowerShell:** usare `curl.exe` invece di `curl`, perché `curl` è
 > un alias di `Invoke-WebRequest`. In alternativa si può aprire l'URL nel browser.
 
+## Edizioni chiama Ricette: validazione REST
+
+Quando Marco (DISTILLATORE) crea un'edizione con `POST /edizioni`, Edizioni
+chiede a Ricette se la formulazione si può usare. La chiamata è diretta, da
+servizio a servizio sulla rete interna, e non passa dal gateway.
+
+```
+Marco ──POST /api/edizioni/edizioni──▶ gateway ──JWT──▶ edizioni
+                                                         │ 1. GET  /formulazioni/{id}           (deve essere SCELTA)
+                                                         │ 2. regole dell'edizione, in memoria
+                                                         │ 3. POST /formulazioni/{id}/utilizzo  (diventa USATA)
+                                                         ▼    stesso JWT di Marco, timeout 2 s
+                                                       ricette
+                                                         │
+                                     4. solo se il 3 va a buon fine: INSERT in edizioni-db
+```
+
+- **Anti-Corruption Layer.** Il dominio di Edizioni vede solo l'interfaccia
+  `CatalogoRicette` e il suo modello (`FormulazioneInCatalogo`). URL, JSON e
+  codici HTTP di Ricette li conosce solo l'adapter `CatalogoRicetteRest`.
+- **Cosa conserva l'Edizione.** Della formulazione tiene il riferimento
+  (id + versione) e un solo dato: i grammi di botanica di stagione per
+  bottiglia, che servono per la tiratura. Le dosi non le copia. Copiare quel
+  dato è sicuro e utile:
+  - **la versione è immutabile:** in Ricette una versione non si modifica mai
+    (se ne crea una nuova), quindi la copia non può diventare vecchia;
+  - **Edizioni resta autonomo:** il ricalcolo della tiratura non chiama
+    Ricette, e funziona anche se Ricette è giù.
+- **Token relay.** Edizioni inoltra a Ricette lo stesso JWT che ha ricevuto,
+  quindi Ricette applica le sue regole sui ruoli.
+- **Rete di sicurezza.** Nel database di Edizioni c'è un vincolo `unique` su
+  (`formulazione_id`, `formulazione_versione`).
+
+| Caso                                                    | Risposta a Marco | Edizione creata? |
+|---------------------------------------------------------|------------------|------------------|
+| formulazione SCELTA, versione giusta                    | 201 + `Location` | sì               |
+| formulazione inesistente, non scelta o versione diversa | 422              | no               |
+| già usata (dalla GET, dalla `/utilizzo` o dal vincolo)  | 409              | no               |
+| Ricette spento, irraggiungibile o oltre i 2 s           | 503 + `Retry-After`, messaggio chiaro, nessuno stack trace | no |
+| nessun JWT / ruolo diverso da DISTILLATORE              | 401 / 403 (Ricette non viene chiamato) | no |
+
+**Limiti, voluti per ora:**
+
+- **Le due chiamate sincrone non sono transazionali.** Ricette può segnare la
+  formulazione USATA e poi Edizioni non riuscire a salvare l'edizione: database
+  giù, vincolo violato, timeout sulla risposta di `/utilizzo`. In quel caso la
+  formulazione resta "usata" da un'edizione che non esiste, e va sistemata a
+  mano. Con Kafka diventerà una **SAGA**: Edizioni salva l'edizione e pubblica
+  l'evento `EdizioneCreata`, Ricette la segna USATA. Se Ricette non può, pubblica
+  un evento che fa annullare l'edizione (compensazione).
+- **Niente circuit breaker nel codice: arriverà con Istio.** Timeout, retry e
+  *outlier detection* diventeranno configurazione del sidecar Envoy. Per ora
+  ogni richiesta prova Ricette e al peggio aspetta 2 secondi.
+
+## Edizione: tiratura, quote e ricalcolo
+
+```
+tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sempre tra 1 e 600, per difetto
+
+  12 kg   di lavanda, 20 g per bottiglia  →  600 bottiglie   SOCI 300  BAR 150  ONLINE 150
+  10,8 kg (la lavanda nuova arriva scarsa) →  540 bottiglie   SOCI 300  BAR 150  ONLINE  90
+```
+
+- **Creazione:** una quota per canale (SOCI, BAR, ONLINE), e la somma delle
+  quote deve essere uguale alla tiratura, altrimenti 422.
+- **Ricalcolo:** `POST /edizioni/{id}/ricalcolo` (solo DISTILLATORE) con
+  `{"botanicaDisponibileKg": 10.8}`. Se la tiratura scende:
+  - si toglie prima da ONLINE, poi da BAR, **mai da SOCI**;
+  - **nessuna quota scende sotto le bottiglie già prenotate**: se ONLINE è
+    prenotato si passa a BAR;
+  - se non basta (bisognerebbe toccare SOCI o le prenotate) la risposta è 409
+    con la spiegazione, e l'edizione resta com'era.
+- **Prenotazioni:** il modello tiene le bottiglie prenotate per canale, ma per
+  ora le crea solo `Edizione.prenota()` nei test. L'endpoint arriverà con la
+  storia delle prenotazioni.
+
+**Scelta da discutere:** se la tiratura **sale** (es. arriva altra lavanda),
+oggi tutte le bottiglie in più vanno a ONLINE. Alternative: rimetterle prima
+dove erano state tolte (BAR, poi ONLINE), ripartirle in proporzione, oppure
+lasciarle "da assegnare" e farle decidere a Marco.
+
+**Evento di dominio `TiraturaRidotta`** (id edizione, tiratura vecchia e
+nuova, quote nuove):
+- lo registra l'aggregato `Edizione` quando la tiratura scende;
+- Spring Data lo pubblica al `save()` (`@DomainEvents`);
+- dopo il commit lo riceve `InoltroTiratureRidotte` (`@TransactionalEventListener`),
+  che per ora lo scrive solo nel log, dentro il processo.
+
+Con la storia di Elena passerà su **Kafka** verso **Notifiche**, che avviserà
+chi aveva prenotato. Per non perdere eventi se Kafka è giù, si potrà usare una
+*transactional outbox*.
+
 ## Test
 
 Ogni servizio Spring ha test di sicurezza (401/403/200, token scaduto, firma
 falsa, issuer sbagliato). Il gateway ha test sul flusso BFF: JWT inoltrato,
 header falsi rimossi, pagina di login, JWKS, ruoli.
+Ricette ed Edizioni hanno anche:
+- test di dominio;
+- test web (`@WebMvcTest`);
+- test di integrazione con un PostgreSQL vero, avviato da
+  [Testcontainers](https://testcontainers.com/).
+
+In Edizioni la parte di Ricette la fa [WireMock](https://wiremock.org/): un
+server HTTP vero, con cui si provano 404, 409, timeout e il JWT inoltrato.
+
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
-oppure senza Maven installato, in un container:
+oppure senza Maven installato, in un container. Docker Desktop deve essere
+avviato: il container di Maven usa il Docker del portatile per avviare i
+container di Testcontainers.
 
 ```bash
 # PowerShell, dalla cartella ginvault (sostituire "edizioni" con il servizio voluto)
-docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
 ```
 
 Il volume `ginvault-m2` conserva le dipendenze Maven tra un'esecuzione e l'altra.
@@ -251,8 +367,14 @@ avviato in IntelliJ.
   bisogna rifare il login. Con più repliche del gateway, la sessione andrà su
   Redis e tutte le repliche dovranno firmare con la stessa chiave, letta da un
   segreto condiviso.
-- **CSRF è attivo sul gateway** (sessione a cookie). Quando arriverà il front-end
-  andrà configurato per la SPA, cioè per le POST fatte da JavaScript.
+- **CSRF con cookie `XSRF-TOKEN` e header `X-XSRF-TOKEN`**: pronto per la SPA.
+  Il front-end deve leggere il cookie e rimandarlo nell'header; Angular lo fa da
+  solo.
 - **WebSocket di notifiche.** Il gateway inoltra il JWT anche sull'handshake
   WebSocket. Resta da far verificare il token alla connessione, con
   `VerificaJwtService`, e da controllare l'header `Origin`.
+- **Aumento di tiratura tutto su ONLINE:** scelta provvisoria, da discutere (vedi
+  [Edizione: tiratura, quote e ricalcolo](#edizione-tiratura-quote-e-ricalcolo)).
+- **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
+  [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
+  Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.
