@@ -1,0 +1,45 @@
+# =============================================================================
+# Ingress: la "porta d'ingresso" HTTP del cluster.
+#
+# Un Ingress è solo una REGOLA ("le richieste per localhost, qualunque path,
+# vanno al Service gateway sulla porta 8080"). A metterla in pratica è
+# l'Ingress Controller: nel nostro caso ingress-nginx (addon "ingress" di
+# Minikube), un nginx che gira nel namespace ingress-nginx, legge gli Ingress
+# di tutto il cluster e si riconfigura da solo.
+#
+#   browser -> localhost:80 -> minikube tunnel -> ingress-nginx -> Service gateway
+#           -> pod gateway -> (JWT) -> Service edizioni -> pod edizioni
+#
+# Con il driver Docker su Windows l'IP del nodo (192.168.49.2) non è
+# raggiungibile dal portatile: "minikube tunnel" (PowerShell da amministratore,
+# da lasciare aperto) porta la porta 80 dell'Ingress su 127.0.0.1:80.
+#
+# Il gateway resta l'unico punto di ingresso applicativo (login, sessione, JWT,
+# routing verso i servizi): l'Ingress gli porta solo il traffico da fuori.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ginvault
+  labels:
+    app.kubernetes.io/name: ginvault
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: ginvault
+spec:
+  # Quale controller deve applicare questa regola (kubectl get ingressclass)
+  ingressClassName: nginx
+  rules:
+    # Solo le richieste con Host "localhost": è l'indirizzo registrato come
+    # redirect URI su Google e GitHub. Chi apre http://127.0.0.1 riceve un 404
+    # invece di un login che fallirebbe con redirect_uri_mismatch.
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            # Prefix: "/" e tutto ciò che c'è sotto (/login, /api/..., /auth/me)
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http

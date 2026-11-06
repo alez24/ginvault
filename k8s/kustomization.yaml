@@ -1,0 +1,25 @@
+# =============================================================================
+# Kustomize (integrato in kubectl): l'elenco dei manifest di GinVault.
+#
+#   kubectl apply -k k8s/     crea o aggiorna tutti gli oggetti elencati
+#   kubectl apply -k k8s/ --dry-run=server
+#                             prova l'applicazione sul cluster senza salvare nulla
+#                             (utile per scoprire errori nei manifest)
+#
+# "namespace: ginvault" mette ogni oggetto nel namespace ginvault, così non va
+# ripetuto in ogni file.
+#
+# I Secret NON sono in questo elenco: li crea k8s/crea-secret.ps1 partendo dal
+# file .env, così i valori non finiscono mai in un file del repository.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ginvault
+
+resources:
+  - namespace.yaml
+  - edizioni-db.yaml
+  - edizioni.yaml
+  - gateway.yaml
+  - ingress.yaml

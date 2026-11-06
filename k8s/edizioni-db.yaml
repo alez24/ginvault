@@ -1,0 +1,169 @@
+# =============================================================================
+# edizioni-db: il database PostgreSQL PRIVATO del servizio Edizioni.
+#
+# Tre oggetti, separati da "---":
+#   1) PersistentVolumeClaim  -> il disco su cui Postgres salva i dati
+#   2) Deployment             -> il pod che esegue Postgres
+#   3) Service                -> il nome DNS stabile "edizioni-db" per raggiungerlo
+#
+# Utente e password arrivano dal Secret "edizioni-db" (k8s/crea-secret.ps1).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1) PersistentVolumeClaim: una RICHIESTA di spazio disco ("mi serve 1 GiB").
+#    Non dice dove sta il disco: ci pensa la StorageClass di default di Minikube
+#    ("standard"), che crea da sola un PersistentVolume (PV) e lo lega a questa
+#    richiesta (provisioning dinamico). Stato atteso: Bound.
+#    Il PVC vive indipendentemente dai pod: se il pod di Postgres viene
+#    cancellato o ricreato, i dati restano.
+#    Attenzione: la StorageClass "standard" ha reclaimPolicy Delete, quindi
+#    cancellare il PVC cancella anche i dati.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: edizioni-db-dati
+  labels:
+    app.kubernetes.io/name: edizioni-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  # ReadWriteOnce: il volume può essere montato in scrittura da UN solo nodo
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName non indicata -> si usa quella di default ("standard")
+
+---
+# -----------------------------------------------------------------------------
+# 2) Deployment: dice "voglio 1 pod con questo container, sempre in esecuzione".
+#    Il Deployment crea un ReplicaSet, che a sua volta crea il pod; se il pod
+#    muore, il ReplicaSet ne crea un altro.
+#
+#    Nota d'esame: per i database il caso "da manuale" è lo StatefulSet (nome
+#    stabile del pod, un volume per replica). Con UNA replica e un PVC un
+#    Deployment funziona; la strategia Recreate evita che durante un
+#    aggiornamento girino due Postgres sullo stesso volume.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edizioni-db
+  labels:
+    app.kubernetes.io/name: edizioni-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  replicas: 1
+  strategy:
+    # Recreate: prima spegne il pod vecchio, poi avvia il nuovo (il default,
+    # RollingUpdate, farebbe il contrario e li terrebbe accesi insieme)
+    type: Recreate
+  # Quali pod appartengono a questo Deployment: quelli con questa label
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: edizioni-db
+  # "Stampo" dei pod: metadata + spec di ogni pod creato
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edizioni-db
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: ginvault
+    spec:
+      # Senza questa riga Kubernetes inietta in ogni container variabili come
+      # EDIZIONI_DB_PORT=tcp://10.x.x.x:5432 per ogni Service del namespace
+      # (vecchio meccanismo "docker link"). Usiamo il DNS, non ci servono.
+      enableServiceLinks: false
+      containers:
+        - name: postgres
+          image: postgres:17-alpine     # stessa immagine di docker-compose.yml
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: edizioni
+            # I dati in una SOTTOcartella del volume: initdb vuole una cartella
+            # vuota, e alcuni tipi di volume contengono già file (es. lost+found)
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Tutte le chiavi del Secret diventano variabili d'ambiente:
+          # POSTGRES_USER e POSTGRES_PASSWORD
+          envFrom:
+            - secretRef:
+                name: edizioni-db
+          volumeMounts:
+            - name: dati
+              mountPath: /var/lib/postgresql/data
+
+          # --- Probe: controlli periodici fatti dal kubelet --------------------
+          # pg_isready -h 127.0.0.1: il server accetta connessioni TCP? Durante
+          # la prima inizializzazione Postgres gira solo su socket locale, quindi
+          # il controllo passa solo quando il server "vero" è pronto.
+          # startupProbe: tempo concesso per partire (fino a 30 x 2s = 60s);
+          #   finché non passa, le altre due probe non vengono eseguite.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 2
+            failureThreshold: 30
+          # readinessProbe: se fallisce, il pod esce dal Service (niente traffico)
+          #   ma NON viene riavviato.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            failureThreshold: 3
+          # livenessProbe: se fallisce 6 volte di fila (1 minuto), il kubelet
+          #   RIAVVIA il container.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 10
+            failureThreshold: 6
+
+          # --- Risorse ----------------------------------------------------------
+          # requests: quanto lo scheduler RISERVA al pod sul nodo
+          # limits:   tetto massimo; oltre il limite di memoria il container
+          #           viene ucciso (OOMKilled). Nessun limite di CPU: oltre la
+          #           richiesta il container rallenterebbe invece di fallire.
+          resources:
+            requests:
+              cpu: 100m        # 0,1 CPU
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        # Il volume "dati" del pod è il PVC definito sopra
+        - name: dati
+          persistentVolumeClaim:
+            claimName: edizioni-db-dati
+
+---
+# -----------------------------------------------------------------------------
+# 3) Service: un indirizzo stabile davanti ai pod. I pod hanno IP che cambiano
+#    a ogni riavvio; il Service ha un IP fisso (ClusterIP) e un nome DNS:
+#        edizioni-db                          (dallo stesso namespace)
+#        edizioni-db.ginvault.svc.cluster.local  (nome completo)
+#    Inoltra il traffico ai pod con la label del selector che sono "Ready".
+#    ClusterIP = raggiungibile solo DENTRO il cluster: il DB non è esposto fuori.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: edizioni-db
+  labels:
+    app.kubernetes.io/name: edizioni-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: edizioni-db
+  ports:
+    - name: postgres
+      port: 5432            # porta del Service
+      targetPort: postgres  # porta del container (per nome, vedi "ports" sopra)
