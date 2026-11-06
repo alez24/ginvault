@@ -1,9 +1,9 @@
 # GinVault su Kubernetes (Minikube)
 
 Deploy **parziale**, ammesso dal piano ([`docs/piano.md`](../docs/piano.md)):
-gateway, edizioni e il suo database, esposti con un Ingress. Gli altri servizi
-e Kafka arrivano nei passi successivi, insieme alle NetworkPolicy che isolano
-ogni database.
+gateway, edizioni, ricette e i loro database, esposti con un Ingress. Ogni
+database è isolato da una NetworkPolicy. Gli altri servizi e Kafka arrivano
+nei passi successivi.
 
 ```
 browser
@@ -17,10 +17,16 @@ Service gateway :8080    →  pod gateway     login OAuth2, sessione, firma del 
    │  Authorization: Bearer <JWT>            ▲
    ▼                                         │ GET /.well-known/jwks.json
 Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per verificare il JWT)
-   │  JDBC
+   │  JDBC          │ REST + stesso JWT (validazione della formulazione, timeout 2 s)
+   │                ▼
+   │             Service ricette :8082  →  pod ricette  ── JDBC ──▶ Service ricette-db :5432
    ▼
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
+
+NetworkPolicy: edizioni-db accetta solo edizioni, ricette-db solo ricette.
 ```
+
+Il gateway inoltra anche `/api/ricette/**` al Service `ricette`.
 
 ## File
 
@@ -29,10 +35,13 @@ Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 | `namespace.yaml` | Namespace `ginvault` |
 | `edizioni-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `edizioni.yaml` | ConfigMap, Deployment, Service |
+| `ricette-db.yaml` | PersistentVolumeClaim, Deployment, Service |
+| `ricette.yaml` | ConfigMap, Deployment, Service |
+| `networkpolicy-db.yaml` | Due NetworkPolicy: ogni database accetta solo il suo servizio |
 | `gateway.yaml` | ConfigMap, Deployment, Service |
 | `ingress.yaml` | Ingress |
 | `kustomization.yaml` | Elenco dei file: `kubectl apply -k k8s/` li applica tutti |
-| `crea-secret.ps1` | Secret `gateway-segreti` (dal `.env`) ed `edizioni-db` (password casuale) |
+| `crea-secret.ps1` | Secret `gateway-segreti` (dal `.env`), `edizioni-db` e `ricette-db` (password casuali) |
 
 I Secret non stanno in nessun file del repository: li crea lo script.
 
@@ -67,8 +76,9 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.1 .\edizioni
-minikube image build -t ginvault/gateway:0.1  .\gateway
+minikube image build -t ginvault/edizioni:0.2 .\edizioni
+minikube image build -t ginvault/ricette:0.1  .\ricette
+minikube image build -t ginvault/gateway:0.2  .\gateway
 
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
@@ -94,7 +104,11 @@ E nel browser, sempre con `localhost` e mai con `127.0.0.1`:
 2. `http://localhost/auth/me` → identità e ruoli, letti dalla sessione del gateway
 3. `http://localhost/api/edizioni/me` → la stessa identità, letta da edizioni nel JWT
 4. `http://localhost/api/edizioni/prova` → consentito solo al ruolo SOCIO
-5. `http://localhost/logout`
+5. `http://localhost/api/ricette/me` → la stessa identità, letta da ricette
+6. `http://localhost/logout`
+
+La storia di Marco (formulazioni → edizione → ricalcolo) si prova come in
+[`docs/demo-storia-marco.md`](../docs/demo-storia-marco.md).
 
 **Dopo un riavvio del PC:** Docker Desktop → `minikube start` → `minikube tunnel`
 (da amministratore). Oggetti e dati del DB restano; il gateway riparte senza
@@ -280,6 +294,39 @@ kubectl logs -n ingress-nginx deploy/ingress-nginx-controller -f   # ogni richie
 Dashboard: **Service → Ingresses**; namespace `ingress-nginx` → **Workloads →
 Pods** per il controller e i suoi log.
 
+### NetworkPolicy
+
+Di default ogni pod del cluster può collegarsi a qualsiasi altro. In Compose
+l'isolamento dei database lo danno le reti private (`edizioni-db-net`,
+`ricette-db-net`); qui lo dà una **NetworkPolicy** per database
+(`networkpolicy-db.yaml`):
+
+- `podSelector`: i pod protetti (il pod del database);
+- `policyTypes: [Ingress]`: da quel momento rifiutano tutto il traffico in
+  entrata, tranne quello elencato;
+- `ingress.from.podSelector`: le uniche sorgenti ammesse, cioè i pod del servizio
+  proprietario, solo sulla porta 5432.
+
+Le applica il plugin di rete (kindnet). Non toccano le probe `exec` di Postgres,
+`kubectl exec` e `kubectl port-forward`, che non passano dalla rete dei pod.
+I servizi tra loro restano raggiungibili, come sulla rete `backend` di Compose:
+edizioni deve poter chiamare ricette.
+
+```powershell
+kubectl get networkpolicy -n ginvault
+kubectl describe networkpolicy ricette-db-solo-da-ricette -n ginvault
+
+# Un pod qualsiasi NON raggiunge i database (timeout dopo 3 s)...
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 edizioni-db 5432 && echo APERTO || echo BLOCCATO; nc -z -w 3 ricette-db 5432 && echo APERTO || echo BLOCCATO"
+# ...ma raggiunge ricette, che non è un database
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 ricette 8082 && echo APERTO || echo BLOCCATO"
+
+# I servizi invece raggiungono il proprio database: sono Ready, e la readiness include "db"
+kubectl get pods -n ginvault
+```
+
+Dashboard: **Service → Network Policies**.
+
 ## Demo per l'esame
 
 **Self-healing**: il pod cancellato viene ricreato dal ReplicaSet, con un altro nome.
@@ -319,8 +366,8 @@ kubectl scale deployment/edizioni -n ginvault --replicas=1
 **Rolling update** con una nuova versione dell'immagine:
 
 ```powershell
-minikube image build -t ginvault/edizioni:0.2 .\edizioni
-# cambiare il tag in k8s/edizioni.yaml (0.1 -> 0.2), poi:
+minikube image build -t ginvault/edizioni:0.3 .\edizioni
+# cambiare il tag in k8s/edizioni.yaml (0.2 -> 0.3), poi:
 kubectl apply -k k8s/
 kubectl rollout status deployment/edizioni -n ginvault   # il nuovo pod parte prima che il vecchio si spenga
 kubectl rollout history deployment/edizioni -n ginvault
@@ -354,6 +401,9 @@ $b64 = kubectl get secret edizioni-db -n ginvault -o jsonpath='{.data.POSTGRES_U
 | edizioni: `password authentication failed` | Secret `edizioni-db` ricreato, ma il volume ricorda la vecchia password | Cancellare insieme Secret e PVC (si perdono i dati), poi script e `apply` |
 | Cambiato `.env` o una ConfigMap, nessun effetto | Le variabili si leggono solo all'avvio | `kubectl rollout restart deployment/<nome> -n ginvault` |
 | `kubectl diff` → `executable file not found` | Su Windows manca il programma `diff` | `kubectl apply -k k8s/ --dry-run=server` |
+| `POST /api/...` → 403 subito, senza arrivare al servizio | Manca l'header `X-XSRF-TOKEN` uguale al cookie `XSRF-TOKEN` (CSRF del gateway) | Vedi [`docs/demo-storia-marco.md`](../docs/demo-storia-marco.md) |
+| `POST /api/edizioni/edizioni` → 503 "Ricette non disponibile" | Pod di ricette spento o non Ready | `kubectl get pods -n ginvault`; `kubectl scale deployment/ricette -n ginvault --replicas=1` |
+| Un servizio resta `0/1` dopo aver aggiunto le NetworkPolicy | Label del pod diversa da quella ammessa dalla policy | `kubectl get pods -n ginvault --show-labels` |
 
 In PowerShell 5.1: `curl` è un alias di `Invoke-WebRequest`, usare `curl.exe`;
 negli argomenti di `kubectl exec` evitare le virgolette doppie annidate, che
@@ -377,8 +427,10 @@ vanno perse.
   e/o strumenti come Sealed Secrets o External Secrets.
 - **Niente HTTPS**: Google accetta redirect `http://` solo verso `localhost`. Con
   un dominio vero servirebbe TLS sull'Ingress (es. cert-manager).
-- **NetworkPolicy**: kindnet le applica; arrivano con gli altri servizi, per
-  isolare ogni database come le reti `<servizio>-db-net` di Compose.
+- **NetworkPolicy solo sui database**, come le reti `<servizio>-db-net` di
+  Compose. Un passo successivo è il "default deny" su tutto il namespace, con
+  regole esplicite (Ingress → gateway → servizi, edizioni → ricette). Con Istio
+  diventerà anche autorizzazione per identità (mTLS).
 - **Solo requests di CPU, nessun limite**: oltre la richiesta un container
   rallenta invece di fallire.
 
@@ -395,5 +447,5 @@ vanno perse.
 | `restart: unless-stopped` | il ReplicaSet ricrea il pod |
 | `depends_on: condition: service_healthy` | nessun equivalente: si riavvia finché le dipendenze non ci sono, e la readiness tiene il pod fuori dal Service |
 | `ports: "8080:8080"` | Ingress + `minikube tunnel` |
-| reti private `<servizio>-db-net` | NetworkPolicy (da aggiungere) |
+| reti private `<servizio>-db-net` | NetworkPolicy (`networkpolicy-db.yaml`) |
 | `docker compose up --build` | `minikube image build` + `kubectl apply -k k8s/` |

@@ -47,6 +47,23 @@ spring:
 server:
   # Porta fissa per servizio (8081 = edizioni), uguale in locale e in Docker
   port: 8081
+  # Il gateway toglie /api/edizioni dal path (StripPrefix) e lo dice con
+  # X-Forwarded-Prefix, insieme a X-Forwarded-Host/Proto/Port. Con "framework"
+  # Spring li applica alla richiesta, quindi i link costruiti qui (il Location
+  # del 201) puntano all'indirizzo pubblico, es.
+  # http://localhost/api/edizioni/... e non http://edizioni:8081/...
+  # Ci si può fidare perché il servizio si raggiunge solo dalla rete interna
+  # (il gateway, che accetta X-Forwarded-* solo da proxy fidati).
+  forward-headers-strategy: framework
+
+# Chiamata diretta a Ricette (sulla rete interna, NON passa dal gateway) per
+# validare la formulazione quando si crea un'edizione: vedi CatalogoRicetteRest.
+ricette:
+  # In Compose e su Kubernetes la variabile punta al servizio: http://ricette:8082
+  url: ${RICETTE_URI:http://localhost:8082}
+  # Sia per aprire la connessione sia per aspettare la risposta: oltre -> 503.
+  # Il circuit breaker vero arriverà con Istio (configurazione della mesh).
+  timeout: 2s
 
 management:
   endpoints:

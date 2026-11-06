@@ -1,0 +1,71 @@
+# =============================================================================
+# NetworkPolicy: ogni database accetta connessioni SOLO dal proprio servizio.
+#
+# È l'equivalente delle reti private di Compose (edizioni-db-net, ricette-db-net...):
+# lì edizioni-db sta su una rete condivisa solo con edizioni; qui tutti i pod
+# sono sulla stessa rete del cluster, e a filtrare è la NetworkPolicy.
+#
+# Come funziona:
+#  - podSelector sceglie i pod PROTETTI (qui: il pod del database);
+#  - policyTypes: [Ingress] -> da quel momento il pod rifiuta tutto il traffico
+#    in ENTRATA tranne quello elencato sotto "ingress";
+#  - "from.podSelector" senza namespaceSelector = pod dello STESSO namespace
+#    con quella label (cioè il servizio proprietario del database).
+#
+# Le applica il plugin di rete (CNI). Il CNI di Minikube con containerd,
+# kindnet, le applica davvero (verificato). Con un CNI che non le supporta
+# verrebbero accettate ma ignorate.
+#
+# Non toccano: le probe exec di Postgres (girano dentro il container) e
+# "kubectl exec" / "kubectl port-forward" (non passano dalla rete dei pod).
+#
+# Prova (vedi k8s/README.md): da un pod qualsiasi "nc -z edizioni-db 5432"
+# va in timeout; edizioni invece resta Ready perché raggiunge il suo DB.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: edizioni-db-solo-da-edizioni
+  labels:
+    app.kubernetes.io/name: edizioni-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: edizioni-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: edizioni
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ricette-db-solo-da-ricette
+  labels:
+    app.kubernetes.io/name: ricette-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ricette-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ricette
+      ports:
+        - protocol: TCP
+          port: 5432

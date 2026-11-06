@@ -21,7 +21,9 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.gateway.filter.headers.TrustedProxies;
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -238,6 +240,87 @@ class GatewaySicurezzaTest {
                     .expectBody()
                     .jsonPath("$.status").isEqualTo("UP");
         }
+    }
+
+    // ---------------------------------------------------------------- CSRF sulle API (cookie XSRF-TOKEN)
+
+    @Test
+    void unaPostSenzaTokenCsrfRisponde403ENonArrivaAlServizio() {
+        client.mutateWith(utenteGitHub("DISTILLATORE"))
+                .post().uri("/api/edizioni/edizioni")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        assertThat(pathRicevuto.get()).isNull();
+    }
+
+    @Test
+    void ilTokenCsrfArrivaInUnCookieERimandatoNellHeaderFaPassareLaPost() {
+        // 1) una GET qualsiasi delle API porta il cookie, leggibile da JavaScript
+        String token = client.mutateWith(utenteGitHub("DISTILLATORE"))
+                .get().uri("/auth/me")
+                .exchange()
+                .expectStatus().isOk()
+                .expectCookie().exists("XSRF-TOKEN")
+                .expectCookie().httpOnly("XSRF-TOKEN", false)
+                .returnResult(String.class).getResponseCookies().getFirst("XSRF-TOKEN").getValue();
+
+        // 2) la POST rimanda lo stesso valore nell'header
+        client.mutateWith(utenteGitHub("DISTILLATORE"))
+                .post().uri("/api/edizioni/edizioni")
+                .cookie("XSRF-TOKEN", token)
+                .header("X-XSRF-TOKEN", token)
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange()
+                .expectStatus().isOk();
+
+        assertThat(pathRicevuto.get()).isEqualTo("/edizioni");
+        assertThat(headerRicevuti.get().get("X-XSRF-TOKEN")).isNull();   // ai servizi non serve
+    }
+
+    @Test
+    void unTokenCsrfDiversoDalCookieRisponde403() {
+        client.mutateWith(utenteGitHub("DISTILLATORE"))
+                .post().uri("/api/edizioni/edizioni")
+                .cookie("XSRF-TOKEN", "valore-del-cookie")
+                .header("X-XSRF-TOKEN", "valore-indovinato")
+                .contentType(MediaType.APPLICATION_JSON).bodyValue("{}")
+                .exchange()
+                .expectStatus().isForbidden();
+
+        assertThat(pathRicevuto.get()).isNull();
+    }
+
+    // ---------------------------------------------------------------- X-Forwarded-* verso i servizi
+
+    @Test
+    void ilServizioSaQualePrefissoHaToltoIlGateway() {
+        // Serve ai servizi per costruire link giusti (es. Location: .../api/edizioni/edizioni/{id})
+        client.mutateWith(utenteGitHub("SOCIO"))
+                // URI completo, come quello che il gateway ricostruisce dietro l'Ingress
+                .get().uri("http://localhost/api/edizioni/me")
+                .exchange()
+                .expectStatus().isOk();
+
+        Headers ricevuti = headerRicevuti.get();
+        assertThat(pathRicevuto.get()).isEqualTo("/me");
+        assertThat(ricevuti.getFirst("X-Forwarded-Prefix")).isEqualTo("/api/edizioni");
+        assertThat(ricevuti.getFirst("X-Forwarded-Host")).isEqualTo("localhost");
+        assertThat(ricevuti.getFirst("X-Forwarded-Proto")).isEqualTo("http");
+    }
+
+    @Test
+    void siFidaDegliXForwardedSoloDaReteLocaleEPrivata(
+            @Value("${spring.cloud.gateway.server.webflux.trusted-proxies}") String fidati) {
+        TrustedProxies proxy = TrustedProxies.from(fidati);
+
+        // IntelliJ, Docker Compose, Ingress di Minikube
+        assertThat(List.of("127.0.0.1", "0:0:0:0:0:0:0:1", "172.18.0.1", "10.244.0.7", "192.168.49.2"))
+                .allMatch(proxy::isTrusted);
+        // indirizzi pubblici o "quasi privati"
+        assertThat(List.of("8.8.8.8", "172.32.0.1", "11.0.0.1", "127.0.0.10x"))
+                .noneMatch(proxy::isTrusted);
     }
 
     // ---------------------------------------------------------------- supporto

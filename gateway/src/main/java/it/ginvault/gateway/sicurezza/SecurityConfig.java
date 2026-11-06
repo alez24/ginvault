@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
+import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.oauth2.client.web.server.WebSessionServerOAuth2AuthorizedClientRepository;
 import org.springframework.security.web.server.SecurityWebFilterChain;
@@ -14,7 +15,13 @@ import org.springframework.security.web.server.authentication.HttpStatusServerEn
 import org.springframework.security.web.server.authentication.RedirectServerAuthenticationSuccessHandler;
 import org.springframework.security.web.server.authentication.logout.RedirectServerLogoutSuccessHandler;
 import org.springframework.security.web.server.context.WebSessionServerSecurityContextRepository;
+import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
+import org.springframework.security.web.server.csrf.CsrfToken;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
+import org.springframework.web.server.WebFilter;
+
+import reactor.core.publisher.Mono;
 
 /**
  * Sicurezza del gateway. Il gateway è reattivo (WebFlux), quindi si usano le
@@ -48,10 +55,35 @@ class SecurityConfig {
                 // Non autenticato -> 401 (nessun redirect verso una pagina HTML)
                 .exceptionHandling(errori -> errori
                         .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED)))
-                // CSRF resta ATTIVO (default): con una sessione basata su cookie, un sito
-                // malevolo potrebbe far partire richieste dal browser dell'utente.
-                // Quando arriverà il front-end lo configureremo per la SPA.
+                // CSRF ATTIVO, con il token in un cookie (schema "double submit cookie").
+                // Con una sessione a cookie, un sito malevolo potrebbe far partire una
+                // POST dal browser dell'utente. Quindi:
+                //  - le risposte delle API portano il cookie XSRF-TOKEN, leggibile da
+                //    JavaScript (HttpOnly=false);
+                //  - ogni richiesta che modifica (POST, PUT, DELETE...) deve rimandare
+                //    lo stesso valore nell'header X-XSRF-TOKEN, altrimenti 403.
+                // Il sito malevolo può far inviare i cookie, ma non può LEGGERLI per
+                // copiare il valore nell'header. È lo schema che usano i front-end
+                // JavaScript (Angular lo gestisce da solo), e serve anche alle demo con
+                // curl o con la console del browser.
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse())
+                        // Header con il token "in chiaro", uguale al cookie. Il gestore di
+                        // default (Xor) vuole un valore mascherato, diverso a ogni risposta:
+                        // è pensato per i form HTML generati dal server, non per le SPA.
+                        .csrfTokenRequestHandler(new ServerCsrfTokenRequestAttributeHandler()))
+                // Il token è "pigro": senza questo filtro il cookie verrebbe scritto solo
+                // quando qualcuno lo legge. Così arriva già con la prima GET (es. /auth/me).
+                .addFilterAfter(scriviIlCookieCsrf(), SecurityWebFiltersOrder.CSRF)
                 .build();
+    }
+
+    /** Legge il token CSRF a ogni richiesta delle API: se il cookie XSRF-TOKEN manca, viene creato. */
+    private static WebFilter scriviIlCookieCsrf() {
+        return (scambio, catena) -> {
+            Mono<CsrfToken> token = scambio.getAttributeOrDefault(CsrfToken.class.getName(), Mono.empty());
+            return token.then(catena.filter(scambio));
+        };
     }
 
     @Bean
