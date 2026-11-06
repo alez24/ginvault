@@ -1,12 +1,16 @@
 # GinVault
 
 Progetto d'esame per il corso TAASS: backend a microservizi con API Gateway,
-Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose.
+Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose
+e, in parte, su Kubernetes (Minikube).
 Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
-> **Stato: passo 1 (fondamenta) e sicurezza OAuth2/JWT.** Ogni servizio si avvia,
-> ha `GET /health`, il proprio database e un endpoint di prova protetto da ruolo.
-> Mancano ancora la logica di dominio, gRPC e Kubernetes.
+> **Stato: passo 1 (fondamenta), sicurezza OAuth2/JWT e Kubernetes minimo.**
+> Ogni servizio si avvia, ha `GET /health`, il proprio database e un endpoint di
+> prova protetto da ruolo. Su Minikube girano gateway, edizioni e il suo
+> database dietro un Ingress, con login funzionante
+> ([`k8s/README.md`](k8s/README.md)).
+> Mancano ancora la logica di dominio, gRPC e gli altri servizi su Kubernetes.
 
 ## Architettura
 
@@ -51,7 +55,8 @@ ginvault/
 ├── ricette/  produzione/  magazzino/  pagamenti/   # stessa struttura
 ├── gateway/                      # Spring Cloud Gateway: login, sessione, JWT
 ├── notifiche/                    # NestJS
-├── frontend/  k8s/               # (vuoti per ora)
+├── k8s/                          # manifest Kubernetes (Minikube): vedi k8s/README.md
+├── frontend/                     # (vuoto per ora)
 └── docs/piano.md
 ```
 
@@ -71,7 +76,8 @@ ginvault/
    Il file `.env` non viene committato (è nel `.gitignore`).
 2. **Google**: [Cloud Console](https://console.cloud.google.com) → *API e servizi* →
    *Credenziali* → *Crea credenziali* → *ID client OAuth* → tipo *Applicazione web*.
-   - URI di reindirizzamento autorizzato: `http://localhost:8080/login/oauth2/code/google`
+   - URI di reindirizzamento autorizzati: `http://localhost:8080/login/oauth2/code/google`
+     (Compose) e `http://localhost/login/oauth2/code/google` (Kubernetes)
    - Se la schermata di consenso è in modalità *Testing*, aggiungi gli account
      del gruppo tra gli *utenti di test*.
    - Copia ID client e secret in `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`.
@@ -79,6 +85,11 @@ ginvault/
    - Homepage URL: `http://localhost:8080`
    - Authorization callback URL: `http://localhost:8080/login/oauth2/code/github`
    - Copia Client ID e un nuovo Client secret in `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET`.
+   - Un'OAuth App ha **un solo** callback URL. Per gli indirizzi di loopback
+     GitHub accetta un `redirect_uri` con una porta diversa da quella del
+     callback (documentato per `127.0.0.1`). Con il callback
+     `http://localhost/login/oauth2/code/github` il login su Kubernetes è
+     verificato; quello di Compose (porta 8080) va riverificato.
 4. **Ruoli**: negli elenchi `RUOLI_*` scrivi le identità separate da virgola,
    nella forma `google:<email>` o `github:<login>`. Esempio:
    ```
@@ -101,6 +112,12 @@ docker compose -f docker-compose.yml up -d --build --wait
 
 Il primo avvio richiede qualche minuto, perché scarica le immagini e le
 dipendenze Maven/npm. I successivi sono molto più rapidi grazie alla cache.
+
+### Su Kubernetes (Minikube)
+
+Gateway, edizioni ed edizioni-db, esposti con un Ingress su `http://localhost`:
+prerequisiti, avvio, spiegazione di ogni oggetto e demo d'esame sono in
+[`k8s/README.md`](k8s/README.md).
 
 ## Sicurezza: come funziona
 

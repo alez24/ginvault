@@ -47,7 +47,9 @@ import org.springframework.test.web.reactive.server.WebTestClient;
         "spring.security.oauth2.client.registration.google.client-id=test-google",
         "spring.security.oauth2.client.registration.google.client-secret=test",
         "spring.security.oauth2.client.registration.github.client-id=test-github",
-        "spring.security.oauth2.client.registration.github.client-secret=test"
+        "spring.security.oauth2.client.registration.github.client-secret=test",
+        // Su Kubernetes Spring Boot li attiva da solo (e lo fa anche k8s/gateway.yaml)
+        "management.endpoint.health.probes.enabled=true"
 })
 class GatewaySicurezzaTest {
 
@@ -223,6 +225,19 @@ class GatewaySicurezzaTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.components").exists();
+    }
+
+    @Test
+    void leProbeDiKubernetesSonoPubbliche() {
+        // Senza permitAll risponderebbero 302 verso /login, e Kubernetes considera
+        // "successo" anche un 3xx: la probe passerebbe sempre, anche a gateway bloccato.
+        for (String probe : List.of("/health/liveness", "/health/readiness")) {
+            client.get().uri(probe)
+                    .exchange()
+                    .expectStatus().isOk()
+                    .expectBody()
+                    .jsonPath("$.status").isEqualTo("UP");
+        }
     }
 
     // ---------------------------------------------------------------- supporto

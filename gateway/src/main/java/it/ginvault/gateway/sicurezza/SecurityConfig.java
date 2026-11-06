@@ -59,8 +59,9 @@ class SecurityConfig {
     SecurityWebFilterChain catenaWeb(ServerHttpSecurity http) {
         return http
                 .authorizeExchange(regole -> regole
-                        // Pubblici: health per Docker/Kubernetes, chiavi pubbliche per i servizi
-                        .pathMatchers("/health", "/.well-known/jwks.json").permitAll()
+                        // Pubblici: health per Docker, probe di Kubernetes (/health/liveness,
+                        // /health/readiness), chiavi pubbliche per i servizi
+                        .pathMatchers("/health", "/health/**", "/.well-known/jwks.json").permitAll()
                         // Elenco delle route del gateway: solo amministratori
                         .pathMatchers("/gateway/**").hasRole("ADMIN")
                         .anyExchange().authenticated())

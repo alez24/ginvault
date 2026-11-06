@@ -1,0 +1,24 @@
+# =============================================================================
+# Namespace "ginvault": la "cartella" del cluster che contiene tutti gli
+# oggetti di GinVault.
+#
+# A cosa serve:
+#   - separa i nostri oggetti da quelli di sistema (kube-system, ingress-nginx)
+#   - permette di vederli insieme:  kubectl get all -n ginvault
+#     (nella dashboard: menu dei namespace in alto -> ginvault)
+#   - i nomi sono unici solo DENTRO un namespace: il Service "gateway" di
+#     ginvault non si scontra con un eventuale "gateway" di un altro namespace
+#   - più avanti si applicano regole a tutto il progetto in un colpo solo:
+#     quote di risorse, NetworkPolicy, l'iniezione dei sidecar di Istio
+#     (label istio-injection=enabled)
+#
+# Cancellare il namespace cancella TUTTO ciò che contiene, compresi Secret e
+# volume del database: kubectl delete namespace ginvault
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ginvault
+  labels:
+    # Label "raccomandate" da Kubernetes: le useremo su tutti gli oggetti
+    app.kubernetes.io/part-of: ginvault
