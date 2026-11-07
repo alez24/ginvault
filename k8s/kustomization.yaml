@@ -25,6 +25,8 @@ resources:
   - ricette.yaml
   - networkpolicy-db.yaml
   - networkpolicy-frontend-gateway.yaml
+  - networkpolicy-kafka.yaml
+  - kafka.yaml
   - gateway.yaml
   - frontend.yaml
   - ingress.yaml

@@ -65,11 +65,11 @@ perché tocca tutte e tre le user story e tutti i meccanismi di comunicazione.
 
 ```
 Elena registra la consegna ridotta (10,8 kg invece di 12)     [Magazzino]
-   │  Kafka  magazzino.botaniche   ConsegnaRidotta      key = idBotanica
+   │  Kafka  magazzino.eventi      ConsegnaRegistrata   key = botanica
    ▼
 Produzione ricalcola la resa: 540 bottiglie                    [Produzione]
    │  gRPC   Produzione → Magazzino: lotti disponibili / riserva
-   │  Kafka  produzione.lotti      ResaRicalcolata      key = idEdizione
+   │  Kafka  produzione.eventi     ResaRicalcolata      key = idEdizione
    ▼
 Edizioni riduce la quota online, prelazione intatta            [Edizioni]
    │  Kafka  edizioni.eventi       TiraturaRidotta      key = idEdizione
@@ -86,13 +86,15 @@ Notifiche manda il push a Giulia e alla lista d'attesa         [Notifiche]
 | **Kafka** (asincrono) | la catena di eventi sopra; `LottoImbottigliato` → Edizioni assegna i numeri | Eventi di dominio pubblicati da un contesto e consumati da altri, senza accoppiamento. |
 | **gRPC** (terzo meccanismo) | Produzione → Magazzino: lotti disponibili, riserva e prelievo delle botaniche | Nella context map è una Partnership: contratto tipizzato (`.proto`) condiviso dai due team, chiamate frequenti e interne. |
 
-### Topic Kafka (bozza per il diagramma obbligatorio)
+### Topic Kafka (per il diagramma obbligatorio)
+
+Il contratto completo (busta JSON, versioni, regole) è in [`eventi.md`](eventi.md).
 
 | Topic | Produttore | Eventi | Chiave | Consumer group |
 |---|---|---|---|---|
-| `magazzino.botaniche` | Magazzino | BotanicaRicevuta, ConsegnaRidotta, LottoScartato | idBotanica | `produzione` |
-| `produzione.lotti` | Produzione | ResaRicalcolata, LottoImbottigliato | idEdizione | `edizioni` |
-| `edizioni.eventi` | Edizioni | EdizioneAnnunciata, PrelazioneAperta, TiraturaRidotta, PrenotazioneConfermata, NumeriAssegnati | idEdizione | `notifiche` |
+| `magazzino.eventi` | Magazzino | ConsegnaRegistrata (anche ridotta); più avanti LottoScartato | botanica | `produzione` |
+| `produzione.eventi` | Produzione | ResaRicalcolata; più avanti LottoImbottigliato | idEdizione | `edizioni` |
+| `edizioni.eventi` | Edizioni | EdizioneCreata, TiraturaRidotta, RicalcoloRifiutato; più avanti PrelazioneAperta, PrenotazioneConfermata, NumeriAssegnati | idEdizione | `produzione`, `notifiche` |
 | `pagamenti.comandi` / `pagamenti.esiti` | Edizioni / Pagamenti | RichiestaPagamento / PagamentoRiuscito, PagamentoFallito | idPrenotazione | `pagamenti` / `edizioni` |
 
 ---
@@ -106,7 +108,7 @@ proprio da presentare. Ne scegliamo quattro, ognuno motivato dal dominio: non pe
 | # | Plus | Dove | Perché ha senso per GinVault |
 |---|---|---|---|
 | 1 | **SAGA** (orchestrata) | Prenotazione: Edizioni ↔ Pagamenti | La prenotazione tocca due servizi con DB separati: si riservano le bottiglie nella quota, poi si paga con Stripe. Se il pagamento fallisce o scade, la **compensazione** rilascia le bottiglie. Senza SAGA la quota potrebbe restare occupata da prenotazioni mai pagate, o venire superata. Si collega alla regola dell'aggregato "le prenotazioni non superano mai la tiratura". |
-| 2 | **Consumer Kafka scalato e partizionato per chiave** | Edizioni (consumer di `produzione.lotti`) | Gli eventi della stessa edizione devono arrivare in ordine: prima `ResaRicalcolata`, poi `LottoImbottigliato`, altrimenti si assegnano numeri su una tiratura vecchia. Con chiave = idEdizione e più repliche, l'ordine per edizione resta garantito mentre il carico si divide. |
+| 2 | **Consumer Kafka scalato e partizionato per chiave** | Edizioni (consumer di `produzione.eventi`) | Gli eventi della stessa edizione devono arrivare in ordine: prima `ResaRicalcolata`, poi `LottoImbottigliato`, altrimenti si assegnano numeri su una tiratura vecchia. Con chiave = idEdizione e più repliche, l'ordine per edizione resta garantito mentre il carico si divide. |
 | 3 | **Servizio non Spring + WebSocket** | Notifiche in NestJS, push al front-end | L'avviso "la tiratura scende a 540, la tua prenotazione è confermata" deve arrivare a Giulia mentre è nell'area soci: è esattamente il nostro mockup. |
 | 4 | **Istio + Circuit Breaker** | Su Kubernetes, chiamate verso Pagamenti / Stripe | È il requisito non funzionale già scritto nella relazione: "un guasto del provider di pagamento non deve bloccare le funzioni interne". Si simula Stripe giù e si mostra il circuito che si apre. |
 

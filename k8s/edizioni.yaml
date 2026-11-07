@@ -74,6 +74,9 @@ spec:
         app.kubernetes.io/name: edizioni
         app.kubernetes.io/component: microservizio
         app.kubernetes.io/part-of: ginvault
+        # Pubblica e consuma eventi: la NetworkPolicy di Kafka lo fa entrare
+        # (networkpolicy-kafka.yaml), come la rete kafka-net di Compose
+        ginvault/usa-kafka: "true"
     spec:
       enableServiceLinks: false   # vedi edizioni-db.yaml
       containers:

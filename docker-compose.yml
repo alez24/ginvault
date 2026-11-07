@@ -12,7 +12,10 @@
 #
 # Reti:
 #   - frontend-net       -> solo front-end e gateway: nginx non vede i servizi
-#   - backend            -> condivisa da gateway, microservizi e Kafka
+#   - backend            -> condivisa da gateway e microservizi
+#   - kafka-net          -> Kafka e SOLO i servizi che pubblicano o consumano
+#     eventi (edizioni, produzione, magazzino): gateway, front-end, ricette e
+#     i database non lo raggiungono
 #   - <servizio>-db-net  -> rete privata tra UN servizio e il SUO database.
 #     Il DB di edizioni non è raggiungibile da ricette, ecc.: il pattern
 #     "database per service" è garantito anche a livello di rete.
@@ -150,6 +153,19 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
 
+      # --- Topic ---
+      # Niente topic creati "al volo" quando un servizio scrive su un nome che
+      # non esiste (con 1 partizione e un errore di battitura nel nome): i topic
+      # li crea solo kafka-topic, qui sotto, con 3 partizioni.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # --- Memoria ---
+      # Heap della JVM al massimo 512 MB (il default dell'immagine è 1 GB fisso):
+      # per pochi topic e pochi messaggi basta, e Minikube ha 8 GB in tutto.
+      # La stessa variabile vale per gli strumenti lanciati nel container
+      # (kafka-topics.sh, il controllo di salute...).
+      KAFKA_HEAP_OPTS: -Xmx512m
+
       # --- Storage ---
       KAFKA_LOG_DIRS: /var/lib/kafka/data
       # ID del cluster (generato con "kafka-storage.sh random-uuid"): al primo
@@ -158,15 +174,49 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      # Il broker risponde alle richieste dei client?
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      # Il broker risponde alle richieste dei client? (lo strumento è un
+      # programma Java: con 64 MB di heap parte comunque, e non ne prende 512)
+      test: ["CMD-SHELL", "KAFKA_HEAP_OPTS=-Xmx64m /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
       start_interval: 3s
     networks:
-      - backend
+      - kafka-net
+
+  # Crea i topic e termina: un "job" da eseguire una volta (restart "no"). È
+  # idempotente (--if-not-exists), quindi a ogni "up" ricontrolla e non tocca i
+  # topic che esistono già. Gli stessi topic, con le stesse partizioni, li crea
+  # su Kubernetes il Job kafka-topic (k8s/kafka.yaml).
+  #   3 partizioni: fino a 3 istanze di uno stesso consumer group leggono in
+  #   parallelo; i messaggi con la stessa chiave (id dell'edizione o della
+  #   botanica) vanno sempre nella stessa partizione, quindi restano in ordine.
+  #   Replication factor 1: c'è un solo broker.
+  # Il contratto degli eventi (chiavi, formato JSON) è in docs/eventi.md.
+  kafka-topic:
+    image: apache/kafka:4.3.0
+    restart: "no"
+    environment:
+      TOPIC: edizioni.eventi magazzino.eventi produzione.eventi
+      PARTIZIONI: 3
+      KAFKA_HEAP_OPTS: -Xmx128m
+    # $$ = un "$" per la shell: Compose non prova a sostituirlo con una variabile
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        for t in $$TOPIC; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic "$$t" --partitions "$$PARTIZIONI" --replication-factor 1
+        done
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --describe
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - kafka-net
 
   # ===========================================================================
   # MICROSERVIZI SPRING BOOT
@@ -200,11 +250,16 @@ services:
     depends_on:
       edizioni-db:
         condition: service_healthy
+      # Usa Kafka: parte quando i topic esistono (e "up --wait" non tratta
+      # come un errore l'uscita di kafka-topic, perché è una dipendenza)
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health"]
     networks:
       - backend
+      - kafka-net
       - edizioni-db-net
 
   ricette:
@@ -240,11 +295,16 @@ services:
     depends_on:
       produzione-db:
         condition: service_healthy
+      # Usa Kafka: parte quando i topic esistono (e "up --wait" non tratta
+      # come un errore l'uscita di kafka-topic, perché è una dipendenza)
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health"]
     networks:
       - backend
+      - kafka-net
       - produzione-db-net
 
   magazzino:
@@ -260,11 +320,16 @@ services:
     depends_on:
       magazzino-db:
         condition: service_healthy
+      # Usa Kafka: parte quando i topic esistono (e "up --wait" non tratta
+      # come un errore l'uscita di kafka-topic, perché è una dipendenza)
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8084/health"]
     networks:
       - backend
+      - kafka-net
       - magazzino-db-net
 
   pagamenti:
@@ -389,6 +454,7 @@ services:
 networks:
   frontend-net:
   backend:
+  kafka-net:
   edizioni-db-net:
   ricette-db-net:
   produzione-db-net:

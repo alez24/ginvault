@@ -2,8 +2,9 @@
 
 Deploy **parziale**, ammesso dal piano ([`docs/piano.md`](../docs/piano.md)):
 front-end, gateway, edizioni, ricette e i database dei due servizi, esposti con
-un Ingress. Delle NetworkPolicy isolano i database, il front-end e il gateway.
-Gli altri servizi e Kafka arrivano nei passi successivi.
+un Ingress, e Kafka per gli eventi tra i servizi. Delle NetworkPolicy isolano i
+database, il front-end, il gateway e Kafka. Gli altri servizi arrivano nei
+passi successivi.
 
 ```
 browser
@@ -28,8 +29,13 @@ Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per 
    ▼
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 
+Service kafka :9092 (headless) → pod kafka-0 (StatefulSet) → PVC dati-kafka-0 (1 GiB)
+   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi (Job kafka-topic)
+   └─ i servizi che pubblicano o consumano eventi (edizioni; poi produzione e magazzino)
+
 NetworkPolicy: frontend accetta solo l'Ingress Controller; gateway l'Ingress
-Controller e i microservizi (JWKS); edizioni-db solo edizioni, ricette-db solo ricette.
+Controller e i microservizi (JWKS); edizioni-db solo edizioni, ricette-db solo
+ricette; kafka solo i pod con la label ginvault/usa-kafka.
 ```
 
 Il gateway inoltra anche `/api/ricette/**` al Service `ricette`.
@@ -50,6 +56,8 @@ proxy di Vite.
 | `ricette.yaml` | ConfigMap, Deployment, Service |
 | `networkpolicy-db.yaml` | Due NetworkPolicy: ogni database accetta solo il suo servizio |
 | `networkpolicy-frontend-gateway.yaml` | Due NetworkPolicy: il front-end accetta solo l'Ingress Controller, il gateway l'Ingress Controller e i microservizi |
+| `networkpolicy-kafka.yaml` | NetworkPolicy: Kafka accetta solo i pod con la label `ginvault/usa-kafka: "true"` |
+| `kafka.yaml` | Service headless, StatefulSet (con il suo PVC), Job che crea i topic |
 | `gateway.yaml` | ConfigMap, Deployment, Service |
 | `frontend.yaml` | Deployment (2 repliche), Service |
 | `ingress.yaml` | Ingress: `/api`, `/auth`, `/oauth2`, `/login`, `/logout` → gateway; tutto il resto → frontend |
@@ -99,11 +107,12 @@ minikube image build -t ginvault/frontend:0.1 .\frontend   # npm ci, test e buil
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
 
-# 3) Tutti gli altri oggetti
+# 3) Tutti gli altri oggetti (la prima volta il nodo scarica apache/kafka:4.3.0 da Docker Hub)
 kubectl apply -k k8s/
 
 # 4) Attendere che i pod siano pronti
-kubectl wait -n ginvault --for=condition=Ready pod --all --timeout=180s
+kubectl wait -n ginvault --for=condition=Ready pod -l '!job-name' --timeout=180s   # tutti i pod, tranne quelli dei Job
+kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s         # il Job dei topic Kafka è terminato
 kubectl get pods -n ginvault
 ```
 
@@ -308,6 +317,77 @@ kubectl port-forward -n ginvault svc/frontend 18080:80     # il front-end senza 
 
 Dashboard: **Service → Services** (con l'elenco degli endpoint).
 
+### StatefulSet, Service headless, Job: Kafka
+
+Kafka 4.3 in modalità KRaft: un solo nodo che fa da broker e da controller,
+senza ZooKeeper, con la stessa configurazione di Compose
+([`kafka.yaml`](kafka.yaml)). Il contratto degli eventi (topic, chiavi, JSON)
+è in [`docs/eventi.md`](../docs/eventi.md).
+
+**StatefulSet** invece di un Deployment, perché un broker ha un'identità:
+
+- il pod si chiama sempre `kafka-0` (non `kafka-69d7...-2jln8`), anche quando
+  viene ricreato con un altro IP. Kafka si annuncia ai client con quel nome:
+  `kafka-0.kafka.ginvault.svc.cluster.local:9092`;
+- `volumeClaimTemplates` crea un PVC **per ogni pod** (`dati-kafka-0`): il pod
+  ricreato ritrova lo stesso disco, con topic e messaggi. Cancellare lo
+  StatefulSet non cancella il PVC;
+- una replica: con più broker servirebbero un node id per pod e un quorum di 3
+  controller.
+
+Il **Service headless** (`clusterIP: None`) non ha un IP suo: il nome `kafka`
+risponde direttamente con l'IP del pod, e ogni pod ha il suo nome DNS. Il
+client si collega a `kafka:9092`, il broker gli dice "per questa partizione
+parla con `kafka-0.kafka...`", e il client raggiunge proprio quel broker.
+`publishNotReadyAddresses: true` mette il nome nel DNS anche prima che il pod sia
+Ready: all'avvio Kafka si collega al proprio controller con quel nome.
+
+Altre scelte:
+
+- `KAFKA_HEAP_OPTS=-Xmx512m` (il default dell'immagine è 1 GB fisso), limite di
+  memoria 1 GiB: ne usa circa 270 Mi;
+- probe **TCP** sulla 9092. Il controllo di Compose (`kafka-broker-api-versions.sh`)
+  avvierebbe una JVM a ogni probe, che conta nel limite di memoria;
+- `enableServiceLinks: false` qui è necessario: l'immagine trasforma ogni
+  variabile `KAFKA_*` in configurazione, e Kubernetes aggiungerebbe
+  `KAFKA_PORT`, `KAFKA_SERVICE_HOST`... per il Service `kafka`;
+- `runAsUser: 1000`: l'immagine dichiara l'utente per nome (`appuser`) e con
+  `runAsNonRoot` il kubelet vuole il numero;
+- `auto.create.topics.enable=false`: i topic li crea solo il Job.
+
+Il **Job** `kafka-topic` esegue un compito e termina (`Completed`) invece di
+restare acceso: aspetta che il broker risponda, crea `edizioni.eventi`,
+`magazzino.eventi` e `produzione.eventi` con 3 partizioni (`--if-not-exists`:
+ripetibile) e stampa la loro descrizione. Un'ora dopo la fine
+(`ttlSecondsAfterFinished`) Kubernetes lo cancella, e il prossimo `apply` lo
+ricrea. In Compose fa lo stesso il servizio `kafka-topic`, con `restart: "no"`.
+
+```powershell
+kubectl get statefulset,pod,pvc,job -n ginvault -l 'app.kubernetes.io/name in (kafka,kafka-topic)'
+kubectl logs -n ginvault job/kafka-topic                  # topic creati, partizioni, leader
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 describe --status
+kubectl top pod -n ginvault kafka-0
+```
+
+Chiave e partizione, su un topic di prova (il producer legge le righe
+`chiave:valore` da tastiera; Ctrl+C per finire):
+
+```powershell
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --topic prova.chiavi --partitions 3 --replication-factor 1
+kubectl exec -it -n ginvault kafka-0 -- /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic prova.chiavi --reader-property parse.key=true --reader-property key.separator=:
+#   ed-1:uno   ed-2:due   ed-1:tre   lavanda:quattro   ed-1:cinque   (una per riga)
+kubectl exec -it -n ginvault kafka-0 -- /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic prova.chiavi --from-beginning --formatter-property print.key=true --formatter-property print.partition=true
+#   ed-1 sempre nella stessa partizione, in ordine: uno, tre, cinque
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic prova.chiavi
+```
+
+Il topic di prova serve a non lasciare messaggi finti nei topic veri, dove i
+consumer dei passi successivi li leggerebbero.
+
+Dashboard: **Workloads → Stateful Sets** e **Workloads → Jobs**; il PVC in
+**Config and Storage → Persistent Volume Claims**.
+
 ### Ingress, IngressClass, Ingress Controller
 
 L'**Ingress** `ginvault` è solo un insieme di *regole* per l'host `localhost`.
@@ -351,7 +431,7 @@ Pods** per il controller e i suoi log.
 
 Di default ogni pod del cluster può collegarsi a qualsiasi altro. In Compose
 l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
-`frontend-net`); qui lo danno quattro **NetworkPolicy**:
+`frontend-net`, `kafka-net`); qui lo danno cinque **NetworkPolicy**:
 
 | NetworkPolicy | Pod protetti | Sorgenti ammesse | Porta |
 |---|---|---|---|
@@ -359,6 +439,7 @@ l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
 | `ricette-db-solo-da-ricette` | ricette-db | i pod di ricette | 5432 |
 | `frontend-solo-da-ingress` | frontend | il controller ingress-nginx | 8080 |
 | `gateway-da-ingress-e-servizi` | gateway | il controller ingress-nginx; i pod con `app.kubernetes.io/component: microservizio` (scaricano la JWKS) | 8080 |
+| `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni; poi produzione e magazzino); Kafka stesso sulla 9093 del controller | 9092, 9093 |
 
 Come sono fatte:
 
@@ -388,9 +469,14 @@ non gli serve: le chiamate del browser arrivano al gateway dall'Ingress.
 kubectl get networkpolicy -n ginvault
 kubectl describe networkpolicy gateway-da-ingress-e-servizi -n ginvault
 
-# Un pod qualsiasi NON raggiunge database, front-end e gateway (timeout dopo 3 s)...
+# Un pod qualsiasi NON raggiunge database, front-end, gateway e Kafka (timeout dopo 3 s)...
 # (virgolette semplici: con le doppie PowerShell sostituirebbe $s prima di passarlo)
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 frontend:80 gateway:8080; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 frontend:80 gateway:8080 kafka:9092; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+# ...con la label di chi usa Kafka, Kafka risponde
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
+# Da edizioni (ha la label) sì, da ricette (non usa Kafka) no
+kubectl exec -n ginvault deploy/edizioni -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
+kubectl exec -n ginvault deploy/ricette -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
 # ...ma raggiunge ricette, che è un servizio
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 ricette 8082 && echo APERTO || echo BLOCCATO"
 
@@ -441,12 +527,15 @@ Per un'immagine che manca, il suo `minikube image build` di
 
 ```powershell
 kubectl apply -k k8s/
-kubectl wait -n ginvault --for=condition=Ready pod --all --timeout=180s
+kubectl wait -n ginvault --for=condition=Ready pod -l '!job-name' --timeout=180s   # tutti i pod, tranne quelli dei Job
+kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s         # il Job dei topic Kafka è terminato
 kubectl get pods -n ginvault
 ```
 
-Sette pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
-`ricette`, `ricette-db`.
+Otto pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
+`ricette`, `ricette-db`, `kafka-0`. In più il pod del Job `kafka-topic`,
+`0/1 Completed`: ha creato i topic ed è terminato. Il Job sparisce da solo
+un'ora dopo, e il prossimo `apply` lo ricrea.
 
 **4. Tunnel**, in un **PowerShell come amministratore** da lasciare aperto:
 
@@ -604,6 +693,11 @@ $b64 = kubectl get secret edizioni-db -n ginvault -o jsonpath='{.data.POSTGRES_U
 | edizioni: `password authentication failed` | Secret `edizioni-db` ricreato, ma il volume ricorda la vecchia password | Cancellare insieme Secret e PVC (si perdono i dati), poi script e `apply` |
 | Cambiato `.env` o una ConfigMap, nessun effetto | Le variabili si leggono solo all'avvio | `kubectl rollout restart deployment/<nome> -n ginvault` |
 | `kubectl diff` → `executable file not found` | Su Windows manca il programma `diff` | `kubectl apply -k k8s/ --dry-run=server` |
+| `kubectl wait ... pod --all` non finisce mai | Il pod del Job `kafka-topic` è `Completed`, non diventerà mai Ready | `kubectl wait ... pod -l '!job-name'` e `kubectl wait --for=condition=Complete job --all` (vedi Avvio) |
+| `apply` → `Job.batch "kafka-topic" is invalid ... field is immutable` | Cambiato il Job mentre quello vecchio esiste ancora (resta un'ora) | `kubectl delete job kafka-topic -n ginvault`, poi di nuovo `apply` |
+| Job `kafka-topic` in errore, pod `Error` | Kafka non è partito in 3 minuti | `kubectl logs -n ginvault kafka-0`; il Job riprova fino a 4 volte |
+| Un servizio non raggiunge Kafka (timeout su `kafka:9092`) | Al pod manca la label `ginvault/usa-kafka: "true"` | Aggiungerla nel template del Deployment |
+| Un produttore fallisce con `UnknownTopicOrPartition` | Nome del topic sbagliato: la creazione automatica è spenta | Nomi in [`docs/eventi.md`](../docs/eventi.md); `kafka-topics.sh --list` |
 | `POST /api/...` → 403 subito, senza arrivare al servizio | Manca l'header `X-XSRF-TOKEN` uguale al cookie `XSRF-TOKEN` (CSRF del gateway) | Vedi [`docs/demo-storia-marco.md`](../docs/demo-storia-marco.md) |
 | `POST /api/edizioni/edizioni` → 503 "Ricette non disponibile" | Pod di ricette spento o non Ready | `kubectl get pods -n ginvault`; `kubectl scale deployment/ricette -n ginvault --replicas=1` |
 | Un servizio resta `0/1` dopo aver aggiunto le NetworkPolicy | Label del pod diversa da quella ammessa dalla policy | `kubectl get pods -n ginvault --show-labels` |
@@ -651,6 +745,12 @@ vanno perse.
   sulla stessa origine.
 - **Solo requests di CPU, nessun limite**: oltre la richiesta un container
   rallenta invece di fallire.
+- **Kafka a un nodo**: niente repliche dei messaggi (replication factor 1) e un
+  quorum KRaft di un solo controller. Se `kafka-0` si ferma, gli eventi aspettano
+  nell'outbox dei servizi (dal passo 2) finché non torna. In un cluster vero: 3
+  broker, replication factor 3, `min.insync.replicas=2`.
+- **Kafka in chiaro**, senza TLS né autenticazione: lo protegge solo la
+  NetworkPolicy. In un cluster vero si aggiungono TLS e SASL, oppure mTLS con Istio.
 
 ## Da Docker Compose a Kubernetes
 
@@ -663,8 +763,10 @@ vanno perse.
 | volume con nome | PersistentVolumeClaim → PersistentVolume |
 | `healthcheck:` | startup / readiness / liveness probe |
 | `restart: unless-stopped` | il ReplicaSet ricrea il pod |
+| servizio che parte, fa un lavoro e termina (`kafka-topic`, `restart: "no"`) | Job |
+| volume con nome di Kafka, nome `kafka` fisso | StatefulSet con `volumeClaimTemplates` + Service headless |
 | `depends_on: condition: service_healthy` | nessun equivalente: si riavvia finché le dipendenze non ci sono, e la readiness tiene il pod fuori dal Service |
 | `ports: "80:8080"` del front-end | Ingress + `minikube tunnel` |
 | nginx del front-end smista `/api`, `/login`... verso il gateway | regole per path dell'Ingress |
-| reti private `<servizio>-db-net`, `frontend-net` | NetworkPolicy (`networkpolicy-db.yaml`, `networkpolicy-frontend-gateway.yaml`) |
+| reti private `<servizio>-db-net`, `frontend-net`, `kafka-net` | NetworkPolicy (`networkpolicy-db.yaml`, `networkpolicy-frontend-gateway.yaml`, `networkpolicy-kafka.yaml`) |
 | `docker compose up --build` | `minikube image build` + `kubectl apply -k k8s/` |

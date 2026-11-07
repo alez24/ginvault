@@ -33,12 +33,15 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
                  └─────┬─────┘                  └─────────────────┘
                        │  (anche su :8080 dall'host, per curl e per il dev server di Vite)
    rete "backend"      │  /api/<servizio>/**  + Authorization: Bearer <JWT GinVault>
- ┌──────────┬──────────┼──────────┬──────────┬───────────┬───────────┐
- edizioni   ricette    produzione magazzino  pagamenti   notifiche   kafka
-  :8081      :8082      :8083      :8084      :8085       :8086      :9092
-   │          │          │          │          │         (NestJS)   (KRaft)
+ ┌──────────┬──────────┼──────────┬──────────┬───────────┐
+ edizioni   ricette    produzione magazzino  pagamenti   notifiche
+  :8081      :8082      :8083      :8084      :8085       :8086
+   │          │          │          │          │         (NestJS)
  edizioni-db ricette-db produzione-db magazzino-db pagamenti-db
    (ognuno su una rete privata condivisa SOLO con il proprio servizio)
+
+ rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione e magazzino
+   topic edizioni.eventi, magazzino.eventi, produzione.eventi (docs/eventi.md)
 ```
 
 | Servizio    | Tecnologia                  | Porta | Database (porta in sviluppo) | `GET /prova` richiede |
@@ -69,7 +72,7 @@ ginvault/
 ├── notifiche/                    # NestJS
 ├── k8s/                          # manifest Kubernetes (Minikube): vedi k8s/README.md
 ├── frontend/                     # React + Vite, servito da nginx: vedi frontend/README.md
-└── docs/piano.md
+└── docs/                         # piano.md, eventi.md (topic e formato degli eventi), demo
 ```
 
 ## Prerequisiti
@@ -360,9 +363,17 @@ aprire con il *Database tool* di IntelliJ.
 # Stato del quorum KRaft (il nodo 1 è leader e unico votante)
 docker compose exec kafka /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 describe --status
 
-# Elenco dei topic
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+# I topic, con partizioni e leader (li crea il servizio kafka-topic, che poi termina)
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
+docker compose logs kafka-topic
+
+# I messaggi di un topic, con chiave e partizione (Ctrl+C per uscire)
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic magazzino.eventi --from-beginning --formatter-property print.key=true --formatter-property print.partition=true
 ```
+
+Topic, chiavi e formato JSON degli eventi sono in [`docs/eventi.md`](docs/eventi.md).
+I topic esistono solo se li crea `kafka-topic`: la creazione automatica è spenta,
+e un nome sbagliato fa fallire il produttore invece di creare un topic nuovo.
 
 > **Git Bash su Windows:** i percorsi che iniziano con `/` (es. `/opt/kafka/...`)
 > vengono convertiti in percorsi Windows. Anteporre `MSYS_NO_PATHCONV=1` al
@@ -375,6 +386,9 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loca
 docker compose exec ricette sh -c "nc -z -w 2 edizioni-db 5432"     # → nc: bad address 'edizioni-db'
 # nginx (front-end) vede solo il gateway: i servizi non sono sulla sua rete
 docker compose exec frontend sh -c "nc -z -w 2 edizioni 8081"       # → nc: bad address 'edizioni'
+# Kafka lo vedono solo i servizi che usano gli eventi (rete kafka-net)
+docker compose exec ricette sh -c "nc -z -w 2 kafka 9092"           # → nc: bad address 'kafka'
+docker compose exec edizioni sh -c "nc -z -w 2 kafka 9092 && echo raggiungibile"   # → raggiungibile
 # Un servizio chiamato senza passare dal gateway (quindi senza JWT) rifiuta la richiesta
 docker compose exec gateway sh -c "wget -S -qO /dev/null http://edizioni:8081/me"   # → 401
 ```
