@@ -1,21 +1,27 @@
 # =============================================================================
 # Ingress: la "porta d'ingresso" HTTP del cluster.
 #
-# Un Ingress è solo una REGOLA ("le richieste per localhost, qualunque path,
-# vanno al Service gateway sulla porta 8080"). A metterla in pratica è
-# l'Ingress Controller: nel nostro caso ingress-nginx (addon "ingress" di
-# Minikube), un nginx che gira nel namespace ingress-nginx, legge gli Ingress
-# di tutto il cluster e si riconfigura da solo.
+# Un Ingress è solo un insieme di REGOLE ("le richieste per localhost con questo
+# path vanno a quel Service"). A metterle in pratica è l'Ingress Controller: nel
+# nostro caso ingress-nginx (addon "ingress" di Minikube), un nginx che gira nel
+# namespace ingress-nginx, legge gli Ingress di tutto il cluster e si
+# riconfigura da solo.
 #
-#   browser -> localhost:80 -> minikube tunnel -> ingress-nginx -> Service gateway
-#           -> pod gateway -> (JWT) -> Service edizioni -> pod edizioni
+#   browser -> localhost:80 -> minikube tunnel -> ingress-nginx
+#      ├── /api /auth /oauth2 /login /logout -> Service gateway  -> pod gateway
+#      │                                          -> (JWT) -> Service edizioni...
+#      └── tutto il resto (/, /soci, /assets/...) -> Service frontend -> pod nginx
+#
+# Pagine e API hanno la stessa origine, http://localhost: i cookie SESSION e
+# XSRF-TOKEN del gateway valgono anche per le pagine, senza CORS. È lo stesso
+# smistamento che fanno il proxy di Vite in sviluppo e nginx con Docker Compose.
 #
 # Con il driver Docker su Windows l'IP del nodo (192.168.49.2) non è
 # raggiungibile dal portatile: "minikube tunnel" (PowerShell da amministratore,
 # da lasciare aperto) porta la porta 80 dell'Ingress su 127.0.0.1:80.
 #
-# Il gateway resta l'unico punto di ingresso applicativo (login, sessione, JWT,
-# routing verso i servizi): l'Ingress gli porta solo il traffico da fuori.
+# Il gateway resta l'unico punto di ingresso verso i servizi (login, sessione,
+# JWT, routing): l'Ingress gli porta solo il traffico che è suo.
 # =============================================================================
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -26,7 +32,7 @@ metadata:
     app.kubernetes.io/component: ingress
     app.kubernetes.io/part-of: ginvault
 spec:
-  # Quale controller deve applicare questa regola (kubectl get ingressclass)
+  # Quale controller deve applicare queste regole (kubectl get ingressclass)
   ingressClassName: nginx
   rules:
     # Solo le richieste con Host "localhost": è l'indirizzo registrato come
@@ -34,12 +40,53 @@ spec:
     # invece di un login che fallirebbe con redirect_uri_mismatch.
     - host: localhost
       http:
+        # pathType Prefix confronta il path a pezzi interi, separati da "/":
+        # "/login" vale per /login e /login/oauth2/code/github, non per /loginx.
+        # Se più regole vanno bene vince la più lunga: /api/edizioni/me va al
+        # gateway, /soci (nessun'altra regola) al front-end.
         paths:
-          - path: /
-            # Prefix: "/" e tutto ciò che c'è sotto (/login, /api/..., /auth/me)
+          # --- il gateway: API, identità, login OAuth2 e logout ---
+          - path: /api
             pathType: Prefix
             backend:
               service:
                 name: gateway
+                port:
+                  name: http
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+          - path: /login
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+          - path: /logout
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  name: http
+
+          # --- il front-end: tutto il resto ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
                 port:
                   name: http

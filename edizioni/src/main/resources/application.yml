@@ -26,6 +26,10 @@ spring:
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+    properties:
+      # Elenco delle edizioni: le quote si caricano a blocchi di 50 edizioni
+      # invece che con una query per edizione (il problema "N+1").
+      hibernate.default_batch_fetch_size: 50
 
   security:
     oauth2:

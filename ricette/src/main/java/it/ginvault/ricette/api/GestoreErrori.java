@@ -1,11 +1,14 @@
 package it.ginvault.ricette.api;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import it.ginvault.ricette.applicazione.FormulazioneNonTrovata;
 import it.ginvault.ricette.dominio.FormulazioneNonValida;
 import it.ginvault.ricette.dominio.TransizioneNonConsentita;
 
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -17,6 +20,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
@@ -29,6 +33,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  *   modifica concorrente (blocco ottim.)-> 409
  *   FormulazioneNonValida               -> 422 (forma giusta, contenuto non accettabile)
  *   Bean Validation (@Valid)            -> 400, con l'elenco dei campi sbagliati
+ *   parametro di tipo sbagliato         -> 400 (es. ?stato=PRONTA, con i valori ammessi)
  *
  * La classe base (ResponseEntityExceptionHandler) gestisce già gli errori
  * standard di Spring MVC: JSON illeggibile, UUID malformato nel path, metodo
@@ -74,6 +79,27 @@ class GestoreErrori extends ResponseEntityExceptionHandler {
                 "Alcuni campi non sono validi");
         problema.setProperty("campi", campi);
         return ResponseEntity.badRequest().body(problema);
+    }
+
+    /**
+     * Parametro del tipo sbagliato: stato inesistente in ?stato=..., UUID malformato
+     * nel path. 400 con un messaggio in italiano e, per le enum, i valori ammessi
+     * (il messaggio di Spring sarebbe in inglese e con i nomi delle classi Java).
+     */
+    @Override
+    protected ResponseEntity<Object> handleTypeMismatch(@NonNull TypeMismatchException errore,
+                                                        @NonNull HttpHeaders headers,
+                                                        @NonNull HttpStatusCode status,
+                                                        @NonNull WebRequest richiesta) {
+        String parametro = errore instanceof MethodArgumentTypeMismatchException delMetodo
+                ? delMetodo.getName() : errore.getPropertyName();
+        Class<?> tipo = errore.getRequiredType();
+        String ammessi = tipo != null && tipo.isEnum()
+                ? " Valori ammessi: " + Arrays.stream(tipo.getEnumConstants()).map(String::valueOf)
+                        .collect(Collectors.joining(", ")) + "."
+                : "";
+        return ResponseEntity.badRequest().body(problema(HttpStatus.BAD_REQUEST, "Richiesta non valida",
+                "Il valore \"" + errore.getValue() + "\" non è valido per \"" + parametro + "\"." + ammessi));
     }
 
     private static ProblemDetail problema(HttpStatus status, String titolo, String dettaglio) {

@@ -1,10 +1,12 @@
 package it.ginvault.ricette.api;
 
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 import it.ginvault.ricette.applicazione.FormulazioneVista;
 import it.ginvault.ricette.applicazione.ServizioFormulazioni;
+import it.ginvault.ricette.dominio.StatoFormulazione;
 
 import jakarta.validation.Valid;
 
@@ -15,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
@@ -77,6 +80,17 @@ public class FormulazioniController {
     @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
     public FormulazioneVista trova(@PathVariable UUID id) {
         return servizio.trova(id);
+    }
+
+    /**
+     * Elenco, dalla formulazione con la prova più recente. Filtro facoltativo:
+     * GET /formulazioni?stato=SCELTA -> solo quelle pronte per un'edizione.
+     * Uno stato inesistente -> 400 con i valori ammessi (GestoreErrori).
+     */
+    @GetMapping
+    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
+    public List<FormulazioneVista> elenco(@RequestParam(required = false) StatoFormulazione stato) {
+        return servizio.elenco(stato);
     }
 
     /** /formulazioni/{id}, costruito dall'indirizzo della richiesta corrente. */

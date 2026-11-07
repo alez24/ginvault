@@ -3,12 +3,15 @@ package it.ginvault.ricette;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.hamcrest.Matchers.everyItem;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 import com.jayway.jsonpath.JsonPath;
@@ -161,10 +164,40 @@ class FormulazioniIntegrazioneTest {
     }
 
     @Test
+    void lElencoFiltraPerStatoSulDatabaseVero() throws Exception {
+        String inProva = crea("Prova d'elenco in corso", "salvia");
+        String scelta = crea("Prova d'elenco scelta", "timo");
+        scrivi("/formulazioni/" + scelta + "/scelta", "{\"versione\": 1}").andExpect(status().isOk());
+
+        // Tutte: ci sono entrambe (più quelle degli altri test, stesso database)
+        String tutte = mvc.perform(get("/formulazioni").header(HttpHeaders.AUTHORIZATION, bearer("ADMIN")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<String>>read(tutte, "$[*].id")).contains(inProva, scelta);
+
+        // Solo le SCELTA: c'è quella scelta e non quella in prova
+        String soloScelte = mvc.perform(get("/formulazioni").param("stato", "SCELTA")
+                        .header(HttpHeaders.AUTHORIZATION, bearer("DISTILLATORE")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].stato", everyItem(is("SCELTA"))))
+                .andReturn().getResponse().getContentAsString();
+        assertThat(JsonPath.<List<String>>read(soloScelte, "$[*].id")).contains(scelta).doesNotContain(inProva);
+    }
+
+    @Test
     void formulazioneInesistenteRisponde404() throws Exception {
         mvc.perform(get("/formulazioni/{id}", UUID.randomUUID()).header(HttpHeaders.AUTHORIZATION, bearer("DISTILLATORE")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404));
+    }
+
+    /** Una formulazione IN_PROVA con una sola prova; restituisce l'id. */
+    private String crea(String nome, String botanica) throws Exception {
+        return JsonPath.read(scrivi("/formulazioni", """
+                {"nome": "%s", "botanicaDiStagione": "%s",
+                 "dosi": [{"botanica": "%s", "grammiPerBottiglia": 8}]}
+                """.formatted(nome, botanica, botanica))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
     }
 
     private ResultActions scrivi(String percorso, String json) throws Exception {

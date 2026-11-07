@@ -1,0 +1,1578 @@
+/* =============================================================================
+   GinVault: gin di montagna, luminoso. Classico moderno: titoli in EB Garamond
+   (come il logo), testo in Inter Tight. Fondo neve con sezioni avorio alterne,
+   verde abete solo per testo, pulsanti e piè di pagina, ottone per linee e
+   dettagli, lavanda solo per l'edizione d'estate.
+   Tra le sezioni, al posto di righe e riquadri, sagome di montagne.
+   Si parte dal telefono; i contrasti del testo sono almeno 4,5:1.
+   ============================================================================= */
+
+:root {
+  /* palette */
+  --neve: #f7f5f0;
+  --avorio: #efe9dc;
+  --abete: #2f4a3a;
+  --salvia: #9db4a0;
+  --cielo: #c9d8e3;
+  --ottone: #b08a4a;
+  --lavanda: #b9a9f5;
+  --bianco: #fff;
+
+  /* derivati: testo e stati */
+  --inchiostro: #24332a; /* testo corrente: 12:1 sulla neve */
+  --testo-2: #56685c; /* testo secondario: 5,4:1 sulla neve, 4,9:1 sull'avorio */
+  --ottone-scuro: #7a5b26; /* l'ottone quando diventa testo: 5,7:1 sulla neve */
+  --abete-scuro: #213529;
+  --salvia-scura: #6b8a72;
+  --cielo-profondo: #7c9cb4;
+  --bacca: #4a5874;
+  --piede-testo: #c9d3cb; /* sul verde abete: 6,3:1 */
+  --linea: color-mix(in srgb, var(--ottone) 45%, transparent);
+  --filetto: #ddd6c6;
+  --bordo-campo: #7f9086; /* bordo dei campi: 3:1 sul bianco */
+
+  --ombra: 0 1px 2px rgb(36 51 42 / 5%), 0 12px 30px -16px rgb(36 51 42 / 24%);
+  --ombra-alta: 0 2px 4px rgb(36 51 42 / 6%), 0 22px 44px -18px rgb(36 51 42 / 34%);
+  --raggio: 4px;
+  --raggio-scheda: 10px;
+
+  --font-titoli: 'EB Garamond', Garamond, 'Times New Roman', serif;
+  --font-testo: 'Inter Tight', 'Segoe UI', system-ui, sans-serif;
+  --larghezza: 76rem;
+  --larghezza-testo: 38rem;
+  --margine: clamp(1rem, 4vw, 3rem);
+  --altezza-intestazione: 4.25rem;
+  --dolce: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* i nomi usati dal back-office (stile-distilleria.css) */
+  --rame: var(--ottone-scuro);
+  --rame-luce: var(--ottone);
+  --rame-tenue: color-mix(in srgb, var(--ottone) 12%, var(--bianco));
+  --rame-scuro: #6b4f20;
+  --verde: var(--abete);
+  --grigio: var(--testo-2);
+  --testo-secondario: var(--testo-2);
+  --foglio: var(--bianco);
+  --carta: var(--neve);
+  --filetto-rame: var(--linea);
+
+  color-scheme: light;
+}
+
+@media (min-width: 56rem) {
+  :root {
+    --altezza-intestazione: 5rem;
+  }
+}
+
+/* ------------------------------------------------------------------ base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--altezza-intestazione) + 1rem);
+}
+
+body {
+  margin: 0;
+  background: var(--neve);
+  color: var(--inchiostro);
+  font-family: var(--font-testo);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 0.5em;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-weight: 500;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: clamp(2.6rem, 1.8rem + 3vw, 4.25rem);
+}
+
+h2 {
+  font-size: clamp(2.1rem, 1.5rem + 2.2vw, 3.3rem);
+}
+
+h3 {
+  font-size: 1.5rem;
+}
+
+p {
+  margin: 0 0 1em;
+}
+
+a {
+  color: var(--abete);
+  text-decoration-color: var(--ottone);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  transition: text-decoration-thickness 0.2s;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--abete);
+  outline-offset: 3px;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+img {
+  display: block;
+  height: auto;
+}
+
+code {
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--salvia) 24%, transparent);
+  font-size: 0.88em;
+}
+
+strong {
+  font-weight: 600;
+}
+
+.contenitore {
+  width: min(100% - 2 * var(--margine), var(--larghezza));
+  margin-inline: auto;
+}
+
+.testo-corrente {
+  max-width: var(--larghezza-testo);
+}
+
+.contenitore.testo-corrente {
+  margin-inline: max(var(--margine), (100% - var(--larghezza)) / 2);
+}
+
+.attacco {
+  max-width: 36rem;
+  color: var(--testo-2);
+  font-size: clamp(1.1rem, 1rem + 0.35vw, 1.25rem);
+  line-height: 1.55;
+}
+
+.nota {
+  color: var(--testo-2);
+  font-size: 0.92rem;
+}
+
+.attesa {
+  padding-block: 3rem;
+  color: var(--testo-2);
+}
+
+.saluto {
+  margin-bottom: 0.9rem;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.3rem;
+  font-style: italic;
+}
+
+.spazio-sopra {
+  margin-top: 1.5rem;
+}
+
+.spazio-sotto {
+  margin-bottom: 1.5rem;
+}
+
+.nascosto {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.salta {
+  position: absolute;
+  top: -10rem;
+  left: 1rem;
+  z-index: 50;
+  padding: 0.6rem 1rem;
+  border-radius: var(--raggio);
+  background: var(--abete);
+  color: var(--neve);
+}
+
+.salta:focus {
+  top: 1rem;
+}
+
+/* ------------------------------------------------------------------ intestazione */
+
+.intestazione {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom: 1px solid color-mix(in srgb, var(--ottone) 26%, transparent);
+  background: color-mix(in srgb, var(--neve) 84%, transparent);
+  backdrop-filter: saturate(1.3) blur(12px);
+  -webkit-backdrop-filter: saturate(1.3) blur(12px);
+}
+
+.intestazione__barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: var(--altezza-intestazione);
+}
+
+.marchio {
+  display: block;
+  flex: none;
+}
+
+.marchio picture {
+  display: block;
+}
+
+.marchio img {
+  width: auto;
+  height: calc(var(--altezza-intestazione) - 1rem);
+}
+
+.intestazione__interruttore {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--abete);
+  border-radius: var(--raggio);
+  background: transparent;
+  color: var(--abete);
+  font: 500 0.95rem var(--font-testo);
+  cursor: pointer;
+}
+
+.menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  display: none;
+  padding: 0.75rem var(--margine) 1.5rem;
+  border-bottom: 1px solid var(--linea);
+  background: var(--neve);
+  box-shadow: var(--ombra);
+}
+
+.menu--aperto {
+  display: block;
+}
+
+.menu__voci {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.menu__voci a {
+  display: block;
+  padding: 0.55rem 0;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.4rem;
+  text-decoration: none;
+}
+
+.menu__voci a[aria-current='page'] {
+  text-decoration: underline;
+  text-decoration-color: var(--ottone);
+}
+
+.menu__utente {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin-top: 0.75rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--linea);
+}
+
+.menu__nome {
+  color: var(--abete);
+  font-weight: 600;
+}
+
+@media (min-width: 56rem) {
+  .intestazione__interruttore {
+    display: none;
+  }
+
+  .menu {
+    position: static;
+    display: flex;
+    align-items: center;
+    gap: 1.75rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  .menu__voci {
+    display: flex;
+    gap: 1.75rem;
+  }
+
+  .menu__voci a {
+    padding: 0.3rem 0;
+    border-bottom: 1px solid transparent;
+    font-family: var(--font-testo);
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: border-color 0.3s var(--dolce);
+  }
+
+  .menu__voci a:hover {
+    border-bottom-color: var(--linea);
+  }
+
+  .menu__voci a[aria-current='page'] {
+    border-bottom-color: var(--ottone);
+    text-decoration: none;
+  }
+
+  .menu__utente {
+    margin: 0;
+    padding: 0 0 0 1.75rem;
+    border-top: 0;
+    border-left: 1px solid var(--linea);
+    font-size: 0.95rem;
+  }
+}
+
+/* ------------------------------------------------------------------ pulsanti */
+
+.pulsante {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  padding: 0.7rem 1.45rem;
+  border: 1px solid var(--abete);
+  border-radius: var(--raggio);
+  background: var(--abete);
+  color: var(--neve);
+  font: 600 0.98rem/1.2 var(--font-testo);
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    background-color 0.35s var(--dolce),
+    color 0.35s var(--dolce),
+    box-shadow 0.35s var(--dolce),
+    transform 0.35s var(--dolce);
+}
+
+.pulsante:hover {
+  background: var(--abete-scuro);
+  box-shadow: 0 12px 24px -14px rgb(33 53 41 / 70%);
+  transform: translateY(-2px);
+}
+
+.pulsante:active {
+  transform: translateY(0);
+}
+
+.pulsante:disabled {
+  opacity: 0.6;
+  cursor: progress;
+  transform: none;
+}
+
+/* Il secondo pulsante di una coppia, e i pulsanti meno importanti, sono in contorno */
+.pulsante--contorno,
+.pulsanti-accesso .pulsante:not(:first-child) {
+  background: transparent;
+  color: var(--abete);
+}
+
+.pulsante--contorno:hover,
+.pulsanti-accesso .pulsante:not(:first-child):hover {
+  background: color-mix(in srgb, var(--abete) 8%, transparent);
+  color: var(--abete);
+}
+
+.pulsanti-accesso {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.pulsante-testo {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--abete);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--ottone);
+  text-underline-offset: 0.22em;
+  cursor: pointer;
+}
+
+.pulsante-testo:hover {
+  text-decoration-thickness: 2px;
+}
+
+/* ------------------------------------------------------------------ avvisi e schede */
+
+.avviso {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border-left: 3px solid var(--salvia-scura);
+  border-radius: var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+}
+
+.avviso--problema {
+  border-left-color: var(--ottone-scuro);
+}
+
+.avviso__titolo {
+  margin: 0 0 0.2rem;
+  color: var(--abete);
+  font-weight: 600;
+}
+
+.avviso__testo > :last-child,
+.avviso__testo p:last-child {
+  margin-bottom: 0;
+}
+
+.avviso__elenco {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.avviso__chiudi {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin: -0.35rem -0.45rem 0 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--testo-2);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.avviso__chiudi:hover {
+  background: color-mix(in srgb, var(--abete) 8%, transparent);
+  color: var(--abete);
+}
+
+.scheda {
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border-radius: var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+}
+
+.scheda--stretta {
+  max-width: 44rem;
+}
+
+/* ------------------------------------------------------------------ disegni botanici (decorazione) */
+
+.disegno {
+  --tratto: var(--abete);
+
+  display: block;
+  overflow: visible;
+}
+
+.disegno path,
+.disegno circle {
+  fill: none;
+  stroke: var(--tratto);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.disegno__legno {
+  stroke-width: 1.6;
+}
+
+.disegno__aghi {
+  stroke-width: 1.05;
+}
+
+.disegno__foglia {
+  stroke-width: 1.1;
+}
+
+.disegno .disegno__bacca circle {
+  fill: var(--bacca);
+  stroke-width: 1.15;
+}
+
+.disegno__segno {
+  stroke-width: 0.85;
+}
+
+.disegno .disegno__riflesso {
+  stroke: var(--neve);
+  stroke-width: 1.6;
+}
+
+.disegno .disegno__fiori path {
+  fill: color-mix(in srgb, var(--lavanda) 72%, transparent);
+  stroke-width: 0.75;
+}
+
+/* Fiori di genziana, gemme e pigna del pino mugo */
+.disegno .disegno__pieno {
+  fill: color-mix(in srgb, var(--ottone) 55%, transparent);
+  stroke-width: 0.9;
+}
+
+.disegno--genziana .disegno__legno,
+.disegno--pino-mugo .disegno__legno {
+  stroke-width: 1.3;
+}
+
+/* Rametti piccoli: tratto sempre di un pixel, a qualsiasi grandezza */
+.disegno--rametto path {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.disegno--rametto .disegno__fiore {
+  fill: color-mix(in srgb, var(--lavanda) 65%, transparent);
+}
+
+.disegno--rametto .disegno__bacca-piena {
+  fill: var(--bacca);
+}
+
+/* ------------------------------------------------------------------ la bottiglia e il cartellino */
+
+/* La cornice <picture> non conta nel layout: l'immagine sta direttamente nella figura */
+.bottiglia-cornice {
+  display: contents;
+}
+
+.bottiglia-foto {
+  display: block;
+  width: auto;
+  height: 100%;
+  filter: drop-shadow(0 20px 18px rgb(36 51 42 / 18%));
+}
+
+/* Il cartellino appeso al collo, legato con un filo d'ottone */
+.cartellino {
+  position: absolute;
+  top: 17%;
+  right: calc(50% + 1.9rem);
+  z-index: 2;
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  padding: 0.5rem 0.8rem 0.55rem;
+  border: 1px solid color-mix(in srgb, var(--ottone) 40%, transparent);
+  border-radius: 3px;
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+  color: var(--testo-2);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  transform: rotate(-5deg);
+  transform-origin: right center;
+}
+
+.cartellino::after {
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: 2.1rem;
+  border-top: 1px solid var(--ottone);
+  transform: rotate(-14deg);
+  transform-origin: left center;
+  content: '';
+}
+
+.cartellino__edizione {
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.08rem;
+  font-style: italic;
+}
+
+.cartellino__sotto {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* ------------------------------------------------------------------ montagne tra le sezioni */
+
+/* Il crinale davanti copre di un pixel la sezione che segue: nessuna fessura.
+   Il fondo cambia colore all'82%, sotto il punto più basso del crinale lontano
+   (0,3 dell'altezza): al 70% il bordo si vedeva come una riga dove il crinale
+   tocca il minimo. Sotto i 56rem il disegno resta largo 56rem e si vede il
+   centro: le cime non si schiacciano sul telefono. */
+.divisore {
+  --da-colore: var(--neve);
+  --a-colore: var(--neve);
+
+  position: relative;
+  z-index: 1;
+  margin-bottom: -1px;
+  overflow: hidden;
+  background: linear-gradient(var(--da-colore) 82%, var(--a-colore) 82%);
+}
+
+/* Il disegno sporge di 2px sotto il divisore, che lo taglia: alla base i tre
+   crinali finiscono insieme e, su una riga di pixel a metà, si mescolerebbero
+   in un filo chiaro */
+.divisore svg {
+  display: block;
+  width: max(100%, 56rem);
+  height: clamp(4.5rem, 9vw, 8.5rem);
+  margin-bottom: -2px;
+  margin-left: 50%;
+  translate: -50% 0;
+}
+
+.divisore__lontano {
+  fill: var(--cielo);
+}
+
+.divisore__medio {
+  fill: var(--salvia);
+}
+
+.divisore__vicino {
+  fill: var(--a-colore);
+}
+
+.divisore--da-neve {
+  --da-colore: var(--neve);
+}
+
+.divisore--da-avorio {
+  --da-colore: var(--avorio);
+}
+
+.divisore--da-abete {
+  --da-colore: var(--abete);
+}
+
+.divisore--da-sopra {
+  --da-colore: var(--sopra, var(--neve));
+}
+
+.divisore--da-trasparente {
+  --da-colore: transparent;
+}
+
+.divisore--a-neve {
+  --a-colore: var(--neve);
+}
+
+.divisore--a-avorio {
+  --a-colore: var(--avorio);
+}
+
+.divisore--a-abete {
+  --a-colore: var(--abete);
+}
+
+/* ------------------------------------------------------------------ home: apertura */
+
+.apertura {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 100svh;
+  margin-top: calc(-1 * var(--altezza-intestazione));
+  padding-top: var(--altezza-intestazione);
+  overflow: clip;
+  background: var(--cielo);
+}
+
+.apertura__foto {
+  position: absolute;
+  inset: -2% 0 0;
+  z-index: -3;
+}
+
+.apertura__foto picture,
+.apertura__foto img {
+  width: 100%;
+  height: 100%;
+}
+
+.apertura__foto img {
+  object-fit: cover;
+  object-position: 60% 30%;
+}
+
+/* Il velo chiaro: forte dove c'è il testo, sparisce verso le cime */
+.apertura__velo {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: linear-gradient(
+    180deg,
+    rgb(247 245 240 / 90%) 0%,
+    rgb(247 245 240 / 80%) 50%,
+    rgb(247 245 240 / 72%) 78%,
+    rgb(247 245 240 / 30%) 100%
+  );
+}
+
+.apertura__crinale {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.apertura__crinale svg {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  display: block;
+  width: max(100%, 60rem);
+  height: 100%;
+  translate: -50% 0;
+}
+
+/* Altezze legate alla larghezza: sul telefono, in verticale, i crinali non salgono fino al testo */
+.apertura__crinale--lontano {
+  height: clamp(9rem, 24vw, 19rem);
+}
+
+/* Il crinale lontano lascia trasparire la foto, come la foschia */
+.apertura__crinale--lontano path {
+  fill: var(--cielo);
+  opacity: 0.78;
+}
+
+.apertura__crinale--medio {
+  height: clamp(6rem, 15vw, 12rem);
+}
+
+.apertura__crinale--medio path {
+  fill: var(--salvia);
+}
+
+/* Il crinale più vicino passa davanti alla base della bottiglia */
+.apertura__crinale--vicino {
+  z-index: 2;
+  height: clamp(3.5rem, 7vw, 6rem);
+}
+
+.apertura__crinale--vicino path {
+  fill: var(--neve);
+}
+
+/* Sul telefono la bottiglia sta a destra, accanto ai pulsanti */
+.apertura__griglia {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    'testo testo'
+    'comandi bottiglia';
+  gap: 1.5rem 0.75rem;
+  padding-top: clamp(1.75rem, 6svh, 4rem);
+}
+
+.apertura__testo {
+  grid-area: testo;
+  max-width: 40rem;
+}
+
+/* Sotto i pulsanti resta il posto per il cartellino della bottiglia */
+.apertura__comandi {
+  grid-area: comandi;
+  align-self: start;
+  min-width: 0;
+  padding-bottom: 9rem;
+}
+
+.apertura__testo > .avviso {
+  margin-bottom: 1.5rem;
+}
+
+.apertura__titolo {
+  max-width: 11.5ch;
+  margin-bottom: 0.4em;
+  font-size: clamp(2.9rem, 1.4rem + 4.6vw, 5.6rem);
+  line-height: 0.98;
+  letter-spacing: -0.015em;
+}
+
+.apertura__attacco {
+  max-width: 33rem;
+  color: var(--inchiostro);
+  font-size: clamp(1.08rem, 1rem + 0.35vw, 1.25rem);
+  line-height: 1.55;
+}
+
+.apertura__azioni .saluto {
+  margin-bottom: 0.75rem;
+}
+
+/* Sopra la foto il pulsante in contorno ha un fondo di neve, per leggerlo bene */
+.apertura .pulsanti-accesso .pulsante:not(:first-child),
+.apertura .pulsante--contorno {
+  background: rgb(247 245 240 / 72%);
+}
+
+.apertura .pulsanti-accesso .pulsante:not(:first-child):hover,
+.apertura .pulsante--contorno:hover {
+  background: var(--neve);
+}
+
+.apertura__nota {
+  margin: 0.9rem 0 0;
+  color: var(--inchiostro);
+  font-size: 0.9rem;
+}
+
+.apertura__bottiglia {
+  --altezza-bottiglia: clamp(15rem, 40svh, 21rem);
+
+  position: relative;
+  grid-area: bottiglia;
+  align-self: end;
+}
+
+.apertura__bottiglia figure {
+  position: relative;
+  height: var(--altezza-bottiglia);
+  margin: 0 0 0.5rem;
+}
+
+/* Sul telefono il cartellino è appoggiato alla bottiglia, sopra il crinale */
+.apertura__bottiglia .cartellino {
+  top: auto;
+  right: calc(100% - 1.1rem);
+  bottom: 4.25rem;
+  transform: rotate(-4deg);
+}
+
+.apertura__bottiglia .cartellino::after {
+  display: none;
+}
+
+@media (min-width: 48rem) {
+  .apertura__velo {
+    background:
+      linear-gradient(
+        90deg,
+        rgb(247 245 240 / 86%) 0%,
+        rgb(247 245 240 / 66%) 36%,
+        rgb(247 245 240 / 10%) 64%,
+        rgb(247 245 240 / 0%) 78%
+      ),
+      linear-gradient(180deg, rgb(247 245 240 / 50%) 0%, rgb(247 245 240 / 0%) 55%);
+  }
+
+  .apertura__foto img {
+    object-position: 50% 40%;
+  }
+
+  /* Sul computer il testo sta un po' sopra il centro, la bottiglia a destra */
+  .apertura__griglia {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr);
+    grid-template-rows: 1fr auto auto 1.35fr;
+    grid-template-areas:
+      '. bottiglia'
+      'testo bottiglia'
+      'comandi bottiglia'
+      '. bottiglia';
+    gap: 0 2rem;
+    padding-top: clamp(1rem, 4svh, 2.5rem);
+  }
+
+  .apertura__comandi {
+    padding: 1.75rem 0 0;
+  }
+
+  .apertura__bottiglia {
+    --altezza-bottiglia: clamp(22rem, 72svh, 42rem);
+
+    justify-self: center;
+  }
+
+  .apertura__bottiglia .cartellino {
+    top: 17%;
+    right: calc(50% + 1.9rem);
+    bottom: auto;
+    transform: rotate(-5deg);
+  }
+
+  .apertura__bottiglia .cartellino::after {
+    display: block;
+  }
+
+  .apertura__bottiglia figure {
+    margin-bottom: clamp(0.75rem, 2.5svh, 1.75rem);
+  }
+}
+
+/* ------------------------------------------------------------------ home: i numeri */
+
+.cifre {
+  padding-block: clamp(2.5rem, 5vw, 4.5rem) clamp(1.5rem, 4vw, 3rem);
+}
+
+.cifre__elenco {
+  display: grid;
+  gap: 2.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cifra {
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--linea);
+}
+
+.cifra__numero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.65rem;
+  margin: 0 0 0.6rem;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  line-height: 0.9;
+}
+
+/* Il valore finale, invisibile, e il conteggio stanno nella stessa cella */
+.contatore {
+  display: inline-grid;
+  font-size: clamp(4.5rem, 3rem + 5vw, 7.5rem);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.contatore__misura,
+.contatore__cifra {
+  grid-area: 1 / 1;
+}
+
+.contatore__misura {
+  visibility: hidden;
+}
+
+.cifra__unita {
+  color: var(--ottone-scuro);
+  font-size: clamp(1.5rem, 1.15rem + 0.9vw, 2rem);
+  font-style: italic;
+}
+
+.cifra__testo {
+  max-width: 22rem;
+  margin: 0;
+  color: var(--testo-2);
+}
+
+@media (min-width: 48rem) {
+  .cifre__elenco {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(2rem, 4vw, 4rem);
+  }
+}
+
+/* ------------------------------------------------------------------ home: l'edizione d'estate */
+
+.estate {
+  overflow-x: clip;
+  padding-block: clamp(2rem, 5vw, 4rem) clamp(2rem, 4vw, 3rem);
+  background: var(--avorio);
+}
+
+.estate__griglia {
+  display: grid;
+  gap: 2.5rem;
+  align-items: center;
+}
+
+.estate__figura figure {
+  position: relative;
+  width: max-content;
+  height: clamp(17rem, 52vw, 26rem);
+  margin: 0 auto;
+}
+
+/* L'alone di lavanda dietro la bottiglia: il colore dell'estate */
+.estate__alone {
+  position: absolute;
+  top: 48%;
+  left: 50%;
+  width: 230%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--lavanda) 58%, transparent) 0%,
+    color-mix(in srgb, var(--lavanda) 24%, transparent) 40%,
+    transparent 68%
+  );
+  transform: translate(-50%, -50%);
+}
+
+.estate__lavanda {
+  position: absolute;
+  bottom: 3%;
+  left: -62%;
+  width: 78%;
+  transform: rotate(-14deg);
+}
+
+.estate__lavanda svg {
+  width: 100%;
+  height: auto;
+}
+
+.estate__figura .bottiglia-foto {
+  position: relative;
+}
+
+.estate__totale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.6rem;
+  margin: 0.5rem 0 0.25rem;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.3rem;
+}
+
+.estate__numero {
+  font-size: clamp(3rem, 2.4rem + 2vw, 4rem);
+  line-height: 1;
+}
+
+.estate .quote {
+  margin-top: 1rem;
+}
+
+.estate .nota {
+  margin: 1rem 0 0;
+}
+
+@media (min-width: 62rem) {
+  .estate__griglia {
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+    gap: clamp(3rem, 6vw, 6rem);
+  }
+}
+
+/* ------------------------------------------------------------------ home: la striscia delle botaniche */
+
+.striscia {
+  overflow-x: clip;
+  padding-block: clamp(1.5rem, 4vw, 3rem) clamp(0.5rem, 2vw, 1.5rem);
+  background: var(--avorio);
+}
+
+.striscia__testa {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 1.75rem;
+}
+
+.striscia__testa h2 {
+  margin: 0;
+  font-size: clamp(1.7rem, 1.3rem + 1.4vw, 2.4rem);
+}
+
+.striscia__pausa {
+  font-size: 0.92rem;
+}
+
+.striscia__finestra {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 5%, #000 95%, transparent);
+}
+
+.striscia__nastro {
+  display: flex;
+  width: max-content;
+}
+
+.striscia__elenco {
+  display: flex;
+  gap: clamp(2.5rem, 5vw, 4.5rem);
+  margin: 0;
+  padding: 0 clamp(2.5rem, 5vw, 4.5rem) 0 0;
+  list-style: none;
+}
+
+.botanica {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.botanica__disegno {
+  flex: none;
+  width: 5.5rem;
+  height: 11rem;
+}
+
+.botanica__disegno svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Rimpiccioliti, i disegni avrebbero un tratto sottilissimo: lo fisso in pixel */
+.botanica__disegno .disegno path,
+.botanica__disegno .disegno circle {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.botanica__disegno .disegno .disegno__legno {
+  stroke-width: 1.5;
+}
+
+.botanica__testo {
+  display: grid;
+  gap: 0.1rem;
+  padding-bottom: 0.4rem;
+}
+
+.botanica__nome {
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.6rem;
+  line-height: 1.1;
+}
+
+.botanica__latino {
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.05rem;
+  font-style: italic;
+}
+
+.botanica__parte {
+  max-width: 13rem;
+  color: var(--testo-2);
+  font-size: 0.92rem;
+}
+
+/* Senza movimento: niente nastro, le botaniche vanno a capo */
+.striscia__finestra:has(.striscia__nastro--fermo) {
+  mask-image: none;
+}
+
+.striscia__nastro--fermo {
+  width: auto;
+}
+
+.striscia__nastro--fermo .striscia__elenco {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 2rem;
+  width: min(100% - 2 * var(--margine), var(--larghezza));
+  margin-inline: auto;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ home: come nasce un'edizione */
+
+.nascita {
+  padding-block: clamp(2.5rem, 6vw, 5rem) clamp(1.5rem, 4vw, 3rem);
+}
+
+.nascita__testa {
+  max-width: 40rem;
+  margin-bottom: clamp(2rem, 5vw, 3.5rem);
+}
+
+.sentiero {
+  position: relative;
+}
+
+.sentiero__traccia {
+  display: none;
+}
+
+.passi {
+  position: relative;
+  display: grid;
+  gap: 2.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Sul telefono il sentiero scende in verticale, da una tappa all'altra */
+.passi::before {
+  position: absolute;
+  top: 1.5rem;
+  bottom: 1.5rem;
+  left: 1.4rem;
+  border-left: 1.5px dashed var(--ottone);
+  content: '';
+}
+
+.passo {
+  position: relative;
+  padding-left: 4.25rem;
+}
+
+.passo__segno {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 2.8rem;
+  height: 2.8rem;
+  border: 1.5px solid var(--ottone);
+  border-radius: 50%;
+  background: var(--neve);
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.15rem;
+}
+
+.passo h3 {
+  margin: 0.35rem 0 0.45rem;
+  font-size: 1.6rem;
+}
+
+.passo p {
+  max-width: 24rem;
+  margin: 0;
+  color: var(--testo-2);
+}
+
+/* Sul computer le tappe salgono lungo un sentiero tratteggiato */
+@media (min-width: 62rem) {
+  .sentiero__traccia {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    width: 100%;
+    height: 11rem;
+    overflow: visible;
+  }
+
+  .sentiero__traccia path {
+    fill: none;
+    stroke: var(--ottone);
+    stroke-dasharray: 2 7;
+    stroke-linecap: round;
+    stroke-width: 1.6;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .passi {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 3rem;
+  }
+
+  .passi::before {
+    display: none;
+  }
+
+  .passo {
+    padding-left: 0;
+  }
+
+  .passo:nth-child(1) {
+    margin-top: 9rem;
+  }
+
+  .passo:nth-child(2) {
+    margin-top: 4.5rem;
+  }
+
+  .passo__segno {
+    position: relative;
+    margin-bottom: 1rem;
+  }
+}
+
+/* ------------------------------------------------------------------ home: il club */
+
+.club {
+  padding-block: clamp(2rem, 5vw, 4rem) clamp(3.5rem, 7vw, 6rem);
+  background: var(--avorio);
+}
+
+.club__griglia {
+  display: grid;
+  gap: 2.5rem;
+  align-items: center;
+}
+
+.club__testo .pulsante {
+  margin-top: 0.5rem;
+}
+
+.club__nota {
+  margin: 0;
+}
+
+/* La foto del pascolo con il bordo in alto a forma di crinale */
+.club__foto {
+  width: 100%;
+  max-width: 27rem;
+  aspect-ratio: 4 / 5;
+  margin-inline: auto;
+  object-fit: cover;
+  clip-path: polygon(
+    0 15%,
+    5% 12.5%,
+    9% 13.5%,
+    14% 9.5%,
+    18% 10.5%,
+    24% 6%,
+    29% 8%,
+    35% 1.5%,
+    38% 3%,
+    41% 0,
+    46% 4.5%,
+    51% 7%,
+    55% 6%,
+    61% 10.5%,
+    66% 9%,
+    72% 12.5%,
+    77% 10%,
+    83% 13%,
+    89% 11%,
+    94% 13.5%,
+    100% 12%,
+    100% 100%,
+    0 100%
+  );
+}
+
+@media (min-width: 62rem) {
+  .club__griglia {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(3rem, 6vw, 6rem);
+  }
+}
+
+/* ------------------------------------------------------------------ accesso e area soci: il paesaggio in cima */
+
+.accesso,
+.paesaggio {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  margin-top: calc(-1 * var(--altezza-intestazione));
+  padding-top: calc(var(--altezza-intestazione) + clamp(2rem, 7svh, 4.5rem));
+  overflow: clip;
+}
+
+.accesso {
+  min-height: 92svh;
+  padding-bottom: clamp(5.5rem, 10vw, 9.5rem);
+}
+
+/* Dopo l'accesso il piede risale sulla foto: le sue montagne stanno sul paesaggio */
+.contenuto:has(> .accesso:last-child) + .piede {
+  --sopra: transparent;
+
+  position: relative;
+  margin-top: calc(-1 * clamp(4.5rem, 9vw, 8.5rem));
+}
+
+.paesaggio {
+  min-height: 58svh;
+}
+
+.accesso__foto,
+.paesaggio__foto {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+}
+
+.accesso__foto img,
+.paesaggio__foto img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 55% 40%;
+}
+
+.accesso::before,
+.paesaggio::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgb(247 245 240 / 90%) 0%, rgb(247 245 240 / 82%) 55%, rgb(247 245 240 / 10%) 92%);
+  content: '';
+}
+
+.accesso__griglia,
+.paesaggio__testo {
+  flex: 1;
+}
+
+.accesso__scheda {
+  max-width: 32rem;
+}
+
+.accesso__scheda .nota {
+  margin: 1.25rem 0 0;
+}
+
+.paesaggio__testo .attacco {
+  color: var(--inchiostro);
+}
+
+/* ------------------------------------------------------------------ profilo */
+
+.dati {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.65rem 1.5rem;
+  align-self: start;
+  margin: 0;
+}
+
+.dati dt {
+  color: var(--testo-2);
+  font-size: 0.9rem;
+}
+
+.dati dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ruoli {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.ruolo__nome {
+  margin-bottom: 0.25rem;
+  font-size: 1.45rem;
+  font-style: italic;
+}
+
+.ruolo p {
+  margin: 0;
+  color: var(--testo-2);
+}
+
+/* ------------------------------------------------------------------ piè di pagina */
+
+/* Il fondo sopra le montagne del piede è quello dell'ultima sezione: avorio in home */
+.piede {
+  --sopra: var(--neve);
+
+  color: var(--piede-testo);
+  font-size: 0.92rem;
+}
+
+.contenuto:has(> .club:last-child) + .piede {
+  --sopra: var(--avorio);
+}
+
+.piede__corpo {
+  padding-block: clamp(1rem, 3vw, 2rem) clamp(2.5rem, 6vw, 4rem);
+  background: var(--abete);
+}
+
+.piede__griglia {
+  display: grid;
+  gap: 1.5rem;
+  justify-items: start;
+}
+
+.piede__logo {
+  width: clamp(9rem, 18vw, 12.5rem);
+}
+
+.piede__testi p {
+  margin: 0 0 0.25rem;
+}
+
+.piede__testi p:first-child {
+  margin-bottom: 0.4rem;
+  color: var(--neve);
+  font-family: var(--font-titoli);
+  font-size: 1.4rem;
+}
+
+@media (min-width: 48rem) {
+  .piede__griglia {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: end;
+    gap: 3rem;
+  }
+}
+
+/* ------------------------------------------------------------------ meno movimento */
+
+@media (prefers-reduced-motion: reduce) {
+  .pulsante,
+  .pulsante:hover {
+    transform: none;
+    transition: none;
+  }
+}

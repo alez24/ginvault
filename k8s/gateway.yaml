@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> destinazioni delle route e impostazioni non segrete
-#   2) Deployment  -> il pod con ginvault/gateway:0.1
+#   2) Deployment  -> il pod con ginvault/gateway:0.3
 #   3) Service     -> nome DNS "gateway": lo usano l'Ingress (verso il gateway)
 #                     e i servizi (per scaricare le chiavi pubbliche JWKS)
 #
@@ -74,7 +74,7 @@ spec:
       containers:
         - name: gateway
           # 0.2 = CSRF con cookie XSRF-TOKEN e header X-Forwarded-* verso i servizi
-          image: ginvault/gateway:0.2
+          image: ginvault/gateway:0.3
           imagePullPolicy: Never   # immagine costruita dentro Minikube
           ports:
             - name: http

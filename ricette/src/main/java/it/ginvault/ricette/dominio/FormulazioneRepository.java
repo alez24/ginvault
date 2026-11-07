@@ -1,5 +1,6 @@
 package it.ginvault.ricette.dominio;
 
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -10,4 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * Spring Data JPA.
  */
 public interface FormulazioneRepository extends JpaRepository<Formulazione, UUID> {
+
+    /** Query derivata dal nome del metodo: ... where stato = ? */
+    List<Formulazione> findAllByStato(StatoFormulazione stato);
 }

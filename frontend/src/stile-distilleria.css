@@ -1,0 +1,1077 @@
+/* =============================================================================
+   Pagine riservate (back-office del distillatore, profilo): lo stesso marchio
+   della home, più sobrio. Una fascia avorio in cima che scende sulla neve con un
+   crinale basso, schede bianche con un'ombra leggera, quote come file di bottiglie.
+   Colori dei canali: SOCI abete, BAR ottone, ONLINE cielo.
+   ============================================================================= */
+
+.pagina {
+  --altezza-crinale: clamp(2.25rem, 5vw, 3.75rem);
+
+  padding-bottom: clamp(3rem, 7vw, 5rem);
+}
+
+.pagina__corpo {
+  padding-top: 2.25rem;
+}
+
+/* ------------------------------------------------------------------ la fascia in cima */
+
+.testata-pagina {
+  position: relative;
+  isolation: isolate;
+  padding-top: clamp(1.75rem, 4vw, 2.75rem);
+  overflow: clip;
+  background: var(--avorio);
+}
+
+.testata-pagina__griglia {
+  display: grid;
+  gap: 1.25rem;
+  padding-bottom: 0.75rem;
+}
+
+/* Il crinale in fondo alla fascia: l'avorio scende sulla neve della pagina */
+.testata-pagina__crinale {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: max(100%, 48rem);
+  height: var(--altezza-crinale);
+  margin-left: 50%;
+  translate: -50% 0;
+}
+
+.testata-pagina__lontano {
+  fill: color-mix(in srgb, var(--salvia) 42%, var(--avorio));
+}
+
+.testata-pagina__vicino {
+  fill: var(--neve);
+}
+
+.testata-pagina h1 {
+  margin-bottom: 0.25em;
+  font-size: clamp(2.5rem, 1.8rem + 2.6vw, 4rem);
+}
+
+.testata-pagina .attacco {
+  margin-bottom: 0;
+}
+
+/* Il ritorno all'elenco e lo stato, sulla stessa riga sopra il titolo */
+.testata-pagina__sopra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.75rem;
+  margin-bottom: 1rem;
+}
+
+.ritorno {
+  display: inline-block;
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.ritorno::before {
+  margin-right: 0.4em;
+  color: var(--ottone-scuro);
+  content: '‹';
+}
+
+.ritorno:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--ottone);
+}
+
+.testata-pagina__azioni {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.testata-pagina__piede {
+  margin-top: 1.25rem;
+}
+
+@media (min-width: 48rem) {
+  .testata-pagina__griglia {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 2rem;
+  }
+}
+
+/* ------------------------------------------------------------------ indicatori */
+
+/* Le schede dei numeri si appoggiano sul crinale */
+.indicatori {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: -1.5rem 0 0;
+}
+
+.indicatore {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  padding: 1rem 1.1rem 1.05rem;
+  border-radius: var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+}
+
+.indicatore__valore {
+  margin: 0;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 2.3rem;
+  line-height: 1;
+  font-variant-numeric: lining-nums;
+}
+
+.indicatore__unita {
+  color: var(--testo-2);
+  font-size: 0.5em;
+  font-style: italic;
+}
+
+.indicatore__etichetta {
+  margin-top: 0.35rem;
+  color: var(--testo-2);
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+/* L'indicatore principale ha un filo d'ottone in cima */
+.indicatore--principale {
+  box-shadow: inset 0 2px 0 var(--ottone), var(--ombra);
+}
+
+@media (min-width: 48rem) {
+  .indicatori {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: 1rem;
+  }
+
+  .indicatore {
+    padding: 1.25rem 1.4rem 1.3rem;
+  }
+
+  .indicatore__valore {
+    font-size: 2.8rem;
+  }
+
+  .indicatore--principale .indicatore__valore {
+    font-size: 3.4rem;
+  }
+}
+
+/* ------------------------------------------------------------------ colonne e vuoti */
+
+.due-colonne {
+  display: grid;
+  gap: 2rem;
+}
+
+@media (min-width: 62rem) {
+  .due-colonne {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 2.5rem;
+  }
+
+  /* Le note a lato delle prove restano in vista mentre si scorrono le versioni */
+  .due-colonne > .a-lato-fisso {
+    position: sticky;
+    top: calc(var(--altezza-intestazione) + 1.5rem);
+  }
+}
+
+.vuoto {
+  padding: 2.5rem 1.5rem;
+  border: 1px dashed var(--filetto-rame);
+  border-radius: var(--raggio-scheda);
+  color: var(--testo-secondario);
+  font-family: var(--font-titoli);
+  font-size: 1.2rem;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ stati: un pallino e una parola */
+
+.stato {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--testo-2);
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stato::before {
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  content: '';
+}
+
+.stato--in_prova::before,
+.stato--in_assaggio::before {
+  border-color: var(--cielo-profondo);
+  background: var(--cielo-profondo);
+}
+
+.stato--scelta::before {
+  border-color: var(--salvia-scura);
+  background: var(--salvia-scura);
+}
+
+.stato--usata::before {
+  border-color: var(--ottone);
+  background: var(--ottone);
+}
+
+/* ------------------------------------------------------------------ filtri, in fondo alla fascia */
+
+.filtri {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.75rem;
+}
+
+.filtri__voce {
+  padding-block: 0.6rem 0.5rem;
+  border-bottom: 2px solid transparent;
+  color: var(--testo-2);
+  text-decoration: none;
+  transition:
+    color 0.3s var(--dolce),
+    border-color 0.3s var(--dolce);
+}
+
+.filtri__voce:hover {
+  border-bottom-color: var(--linea);
+  color: var(--abete);
+}
+
+.filtri__voce[aria-current='page'] {
+  border-bottom-color: var(--ottone);
+  color: var(--abete);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ schede degli elenchi */
+
+.carte {
+  display: grid;
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (min-width: 48rem) {
+  .carte {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+  }
+}
+
+@media (min-width: 72rem) {
+  .carte {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.carta {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem 1.5rem 1.35rem;
+  border-radius: var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+  transition:
+    box-shadow 0.4s var(--dolce),
+    transform 0.4s var(--dolce);
+}
+
+.carta:hover {
+  box-shadow: var(--ombra-alta);
+  transform: translateY(-3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .carta,
+  .carta:hover {
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Lo stato in una scheda chiara: testo scuro */
+.carta > .stato {
+  margin-bottom: 0.9rem;
+  color: var(--grigio);
+}
+
+.carta > .stato--scelta {
+  color: var(--verde);
+}
+
+.carta__rametto {
+  position: absolute;
+  top: 1.1rem;
+  right: 1.1rem;
+  width: 2.5rem;
+  height: auto;
+}
+
+.carta__titolo {
+  margin: 0 3rem 0.15rem 0;
+  font-size: 1.8rem;
+}
+
+.carta__collegamento {
+  color: var(--inchiostro);
+  text-decoration: none;
+}
+
+.carta__collegamento:hover {
+  color: var(--inchiostro);
+}
+
+/* Tutta la scheda è cliccabile */
+.carta__collegamento::after {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--raggio-scheda);
+  content: '';
+}
+
+.carta__collegamento:focus-visible {
+  outline: none;
+}
+
+.carta__collegamento:focus-visible::after {
+  outline: 2px solid var(--abete);
+  outline-offset: 2px;
+}
+
+.carta__botanica {
+  margin-bottom: 0.8rem;
+  color: var(--rame);
+  font-family: var(--font-titoli);
+  font-size: 1.15rem;
+  font-style: italic;
+}
+
+.carta__dati {
+  margin-bottom: 0;
+  color: var(--grigio);
+  font-size: 0.92rem;
+}
+
+.carta__nota {
+  margin: auto 0 0;
+  padding-top: 1rem;
+  font-size: 0.95rem;
+}
+
+.carta__nota::before {
+  display: block;
+  width: 2rem;
+  margin-bottom: 0.8rem;
+  border-top: 1px solid var(--filetto-rame);
+  content: '';
+}
+
+.carta__cifra {
+  margin: 0 0 0.8rem;
+  color: var(--rame);
+  font-family: var(--font-titoli);
+  font-size: 2.8rem;
+  line-height: 1;
+}
+
+.carta__cifra span {
+  color: var(--testo-secondario);
+  font-size: 1.1rem;
+  font-style: italic;
+}
+
+.carta .mensola {
+  margin-bottom: 1rem;
+}
+
+/* ------------------------------------------------------------------ ricette (al posto delle tabelle) */
+
+.ricetta {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ricetta__voce {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding-block: 0.28rem;
+}
+
+.ricetta__nome {
+  font-family: var(--font-titoli);
+  font-size: 1.18rem;
+}
+
+.ricetta__puntini {
+  flex: 1;
+  min-width: 1rem;
+  border-bottom: 1px dotted color-mix(in srgb, var(--rame) 55%, var(--filetto));
+  transform: translateY(-0.3em);
+}
+
+.ricetta__valore {
+  font-family: var(--font-titoli);
+  font-size: 1.18rem;
+  white-space: nowrap;
+}
+
+.ricetta__scarto {
+  margin-left: 0.6rem;
+  color: var(--rame);
+  font-family: var(--font-testo);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+/* La botanica di stagione: in corsivo, con un pallino d'ottone */
+.ricetta--dosi .ricetta__voce--evidenza .ricetta__nome {
+  font-style: italic;
+}
+
+.ricetta--dosi .ricetta__voce--evidenza .ricetta__nome::after {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-left: 0.45rem;
+  border-radius: 50%;
+  background: var(--ottone);
+  vertical-align: 0.15em;
+  content: '';
+}
+
+.ricetta__voce--evidenza .ricetta__valore {
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ prove d'assaggio */
+
+.prove {
+  display: grid;
+  gap: 1.25rem;
+  margin: 1.25rem 0 2rem;
+  padding: 0;
+  list-style: none;
+}
+
+.prova {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1.5rem;
+  border-radius: var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+}
+
+.prova > * {
+  margin: 0;
+}
+
+.prova .stato {
+  color: var(--grigio);
+}
+
+.prova--scelta {
+  box-shadow: inset 0 3px 0 var(--verde), var(--ombra-alta);
+}
+
+.prova--archiviata {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--filetto);
+  color: var(--testo-secondario);
+}
+
+.prova__testa {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.prova__testa h3 {
+  margin: 0;
+  font-size: 1.65rem;
+}
+
+.prova > .pulsante {
+  justify-self: start;
+}
+
+.conferma {
+  padding: 1rem 1.1rem;
+  border: 1px solid color-mix(in srgb, var(--verde) 40%, var(--filetto));
+  border-radius: var(--raggio);
+  background: color-mix(in srgb, var(--verde) 6%, var(--foglio));
+}
+
+.conferma p {
+  margin-bottom: 0.8rem;
+}
+
+/* ------------------------------------------------------------------ moduli */
+
+.modulo {
+  display: grid;
+  gap: 1.35rem;
+}
+
+.modulo > h2,
+.modulo > h3,
+.modulo > p {
+  margin-bottom: 0;
+}
+
+.campo {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.campo__etichetta,
+.modulo legend {
+  font-weight: 600;
+}
+
+/* font: inherit = 17 px, sopra i 16 px sotto cui iOS ingrandisce la pagina */
+.campo__input {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--bordo-campo);
+  border-radius: var(--raggio);
+  background: var(--bianco);
+  color: var(--inchiostro);
+  font: inherit;
+}
+
+.campo__input::placeholder {
+  color: var(--testo-2);
+}
+
+.campo__input:hover {
+  border-color: var(--abete);
+}
+
+.campo__input:focus {
+  border-color: var(--abete);
+  outline: 1px solid var(--abete);
+  outline-offset: 0;
+}
+
+.campo__input[aria-invalid='true'] {
+  border-color: var(--ottone-scuro);
+  background: var(--rame-tenue);
+}
+
+.campo__input--corto {
+  max-width: 9rem;
+}
+
+.campo__con-unita {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.campo__unita {
+  color: var(--grigio);
+}
+
+.campo__aiuto {
+  margin: 0;
+  color: var(--grigio);
+  font-size: 0.92rem;
+}
+
+.campo__errore {
+  margin: 0;
+  color: var(--rame-scuro);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.modulo fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.modulo legend {
+  margin-bottom: 0.35rem;
+  padding: 0;
+}
+
+.modulo__azioni {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.5rem;
+}
+
+/* Le anteprime parlano in Garamond, come una nota a margine */
+.anteprima {
+  margin: 0;
+  padding: 0.15rem 0 0.15rem 1rem;
+  border-left: 2px solid var(--ottone);
+  font-family: var(--font-titoli);
+  font-size: 1.18rem;
+  line-height: 1.45;
+}
+
+.anteprima:empty {
+  display: none;
+}
+
+.anteprima > p {
+  margin: 0;
+}
+
+.anteprima .campo__errore {
+  font-family: var(--font-testo);
+  font-size: 0.95rem;
+}
+
+.quote-modulo__campi {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+}
+
+.quote-modulo__campi .campo__etichetta {
+  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.quote-modulo .anteprima,
+.quote-modulo .campo__errore {
+  margin-bottom: 0.85rem;
+}
+
+/* ------------------------------------------------------------------ editor delle dosi */
+
+.dosi__intestazione,
+.dose__campi {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 7.5rem 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dosi__intestazione {
+  margin-top: 0.75rem;
+  color: var(--grigio);
+  font-size: 0.85rem;
+}
+
+.dosi__righe {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.dose {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.dose--stagione {
+  margin-inline: -0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--raggio);
+  background: color-mix(in srgb, var(--salvia) 20%, transparent);
+}
+
+.dose__grammi {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dose__unita {
+  color: var(--grigio);
+}
+
+.dose__togli {
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 0;
+  border-radius: var(--raggio);
+  background: none;
+  color: var(--grigio);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dose__togli:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--inchiostro) 6%, transparent);
+  color: var(--rame);
+}
+
+.dose__togli:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.dose__stagione {
+  font-family: var(--font-titoli);
+  font-size: 0.95rem;
+  font-style: italic;
+}
+
+.dosi__errori {
+  margin-top: 0.75rem;
+  padding-left: 1.2rem;
+}
+
+/* ------------------------------------------------------------------ edizione: la bottiglia nella fascia */
+
+/* La base della bottiglia scende dietro il crinale, come nell'apertura della home */
+.etichetta-edizione {
+  position: relative;
+  justify-self: end;
+  height: 12.5rem;
+  margin: 0 1.5rem calc(-0.75rem - 0.45 * var(--altezza-crinale)) 0;
+}
+
+.etichetta-edizione .bottiglia-foto {
+  position: relative;
+}
+
+.etichetta-edizione__alone {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: -1;
+  width: 280%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--salvia) 50%, transparent) 0%,
+    color-mix(in srgb, var(--salvia) 16%, transparent) 42%,
+    transparent 68%
+  );
+  transform: translate(-50%, -50%);
+}
+
+/* L'edizione d'estate ha l'alone di lavanda */
+.pagina--estate .etichetta-edizione__alone {
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--lavanda) 55%, transparent) 0%,
+    color-mix(in srgb, var(--lavanda) 20%, transparent) 42%,
+    transparent 68%
+  );
+}
+
+.etichetta-edizione .cartellino {
+  font-size: 0.74rem;
+}
+
+.etichetta-edizione .cartellino__edizione {
+  font-size: 1rem;
+}
+
+@media (min-width: 48rem) {
+  .etichetta-edizione {
+    height: 18rem;
+    margin-right: 3rem;
+  }
+}
+
+.tiratura__regola {
+  margin: 0 0 1.75rem;
+}
+
+
+/* ------------------------------------------------------------------ quote in bottiglie */
+
+.sezione-quote {
+  scroll-margin-top: 5.5rem;
+}
+
+.sezione-quote h2 {
+  margin-bottom: 0.2rem;
+}
+
+.quote {
+  display: grid;
+  gap: 1.6rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.quota__testa {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+/* Nome del canale e numero uniti dai puntini, come nelle ricette */
+.quota__nome {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 0.6rem;
+  font-family: var(--font-titoli);
+  font-size: 1.3rem;
+}
+
+.quota__nome::after {
+  flex: 1;
+  min-width: 1rem;
+  border-bottom: 1px dotted color-mix(in srgb, var(--rame) 55%, var(--filetto));
+  transform: translateY(-0.3em);
+  content: '';
+}
+
+.quota__numero {
+  font-family: var(--font-titoli);
+  font-size: 1.65rem;
+  line-height: 1;
+}
+
+.quota__scarto {
+  color: var(--rame);
+  font-weight: 600;
+}
+
+/* Trenta colonne, la quota più grande (300 soci): ogni canale sta su una fila
+   e le file restano confrontabili; su schermi stretti le bottiglie si stringono */
+.quota__bottiglie {
+  display: grid;
+  grid-template-columns: repeat(30, minmax(0, 0.72rem));
+  gap: 0.35rem 0.12rem;
+}
+
+.quota__bottiglie .bottiglia {
+  width: 100%;
+}
+
+.quota__nota {
+  margin: 0.45rem 0 0;
+  color: var(--grigio);
+  font-size: 0.85rem;
+}
+
+.bottiglia {
+  display: block;
+  flex: none;
+  width: 0.56rem;
+  height: auto;
+  aspect-ratio: 12 / 30;
+  overflow: visible;
+}
+
+@media (min-width: 30rem) {
+  .quota__bottiglie {
+    gap: 0.4rem 0.2rem;
+  }
+
+  .bottiglia {
+    width: 0.72rem;
+  }
+}
+
+.bottiglia__vetro {
+  fill: none;
+  stroke: color-mix(in srgb, var(--inchiostro) 62%, transparent);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.bottiglia__tappo {
+  fill: var(--ottone);
+}
+
+.bottiglia__liquido {
+  transform: scaleY(var(--a));
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+.bottiglia__etichetta {
+  fill: var(--neve);
+  opacity: 0.5;
+}
+
+.bottiglia--soci .bottiglia__liquido {
+  fill: var(--abete);
+}
+
+.bottiglia--bar .bottiglia__liquido {
+  fill: var(--ottone);
+}
+
+.bottiglia--online .bottiglia__liquido {
+  fill: var(--cielo-profondo);
+}
+
+/* Le bottiglie tolte restano in contorno, tratteggiate in ottone */
+.bottiglia--vuota .bottiglia__vetro {
+  stroke: var(--ottone-scuro);
+  stroke-dasharray: 2 1.6;
+}
+
+.bottiglia--vuota .bottiglia__tappo {
+  fill: none;
+  stroke: var(--ottone-scuro);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Dopo un ricalcolo: il liquido scende (o sale) una bottiglia dopo l'altra */
+.bottiglia--animata .bottiglia__liquido {
+  animation: livello 520ms cubic-bezier(0.5, 0, 0.3, 1) var(--ritardo) both;
+}
+
+/* Finché il liquido non è sceso la bottiglia tolta ha ancora il vetro e il tappo di una piena */
+.bottiglia--vuota.bottiglia--animata .bottiglia__vetro {
+  animation: vetro-pieno 1ms linear calc(var(--ritardo) + 520ms) both;
+}
+
+.bottiglia--vuota.bottiglia--animata .bottiglia__tappo {
+  animation: tappo-pieno 1ms linear calc(var(--ritardo) + 520ms) both;
+}
+
+/* Il «−60» arriva quando l'ultima bottiglia si è svuotata */
+.quota__scarto {
+  animation: affiora 450ms ease var(--ritardo, 0ms) both;
+}
+
+@keyframes livello {
+  from {
+    transform: scaleY(var(--da));
+  }
+
+  to {
+    transform: scaleY(var(--a));
+  }
+}
+
+@keyframes affiora {
+  from {
+    opacity: 0;
+    transform: translateX(-0.3rem);
+  }
+}
+
+@keyframes vetro-pieno {
+  from {
+    stroke: color-mix(in srgb, var(--inchiostro) 62%, transparent);
+    stroke-dasharray: none;
+  }
+}
+
+@keyframes tappo-pieno {
+  from {
+    fill: var(--ottone);
+    stroke: none;
+  }
+}
+
+/* Chi ha chiesto meno movimento vede subito il risultato */
+@media (prefers-reduced-motion: reduce) {
+  .bottiglia--animata .bottiglia__liquido,
+  .bottiglia--vuota.bottiglia--animata .bottiglia__vetro,
+  .bottiglia--vuota.bottiglia--animata .bottiglia__tappo,
+  .quota__scarto {
+    animation: none;
+  }
+}
+
+/* La mensola degli elenchi: tutte le bottiglie in fila, piccole */
+.mensola {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.1rem;
+}
+
+.mensola .bottiglia {
+  width: 0.42rem;
+}
+
+/* ------------------------------------------------------------------ prima e dopo */
+
+.confronto {
+  margin-top: 2rem;
+  padding: 1.3rem 1.4rem 1.1rem;
+  border-radius: var(--raggio-scheda);
+  background: var(--neve);
+  box-shadow: inset 0 0 0 1px var(--linea);
+}
+
+.confronto__testa {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.confronto__testa h3 {
+  margin-bottom: 0.75rem;
+  font-size: 1.6rem;
+}
+
+.confronto__testa h3:focus {
+  outline: none;
+}
+
+.confronto .nota {
+  margin: 0.9rem 0 0;
+}
+
+/* Sul telefono le righe del confronto devono stare su una riga sola */
+@media (max-width: 30rem) {
+  .confronto {
+    padding-inline: 1rem;
+  }
+
+  .scheda .confronto {
+    margin-inline: -0.35rem;
+  }
+
+  .confronto .ricetta__nome,
+  .confronto .ricetta__valore {
+    font-size: 1.02rem;
+  }
+
+  .confronto .ricetta__scarto {
+    margin-left: 0.35rem;
+  }
+}

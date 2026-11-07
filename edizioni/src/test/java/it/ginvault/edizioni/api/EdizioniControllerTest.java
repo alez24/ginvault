@@ -123,6 +123,36 @@ class EdizioniControllerTest {
         mvc.perform(get("/edizioni/{id}", EDIZIONE)).andExpect(status().isUnauthorized());
     }
 
+    // ---------------------------------------------------------------- elenco: DISTILLATORE e ADMIN
+
+    @Test
+    void elencoSenzaTokenRisponde401() throws Exception {
+        mvc.perform(get("/edizioni")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void elencoComeSocioOClienteRisponde403() throws Exception {
+        for (String ruolo : List.of("SOCIO", "CLIENTE")) {
+            mvc.perform(come(ruolo, get("/edizioni"))).andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void elencoComeDistillatoreOAdminRisponde200() throws Exception {
+        when(servizio.elenco()).thenReturn(List.of(vista("10.800", 540, 90), vista()));
+
+        for (String ruolo : List.of("DISTILLATORE", "ADMIN")) {
+            mvc.perform(come(ruolo, get("/edizioni")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(2))
+                    .andExpect(jsonPath("$[0].tiratura").value(540))
+                    .andExpect(jsonPath("$[0].quote.ONLINE").value(90))
+                    .andExpect(jsonPath("$[1].tiratura").value(600));
+        }
+    }
+
     // ---------------------------------------------------------------- ricalcolo: solo DISTILLATORE
 
     @Test

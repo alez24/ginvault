@@ -1,0 +1,91 @@
+# =============================================================================
+# NetworkPolicy: chi può collegarsi al front-end e al gateway.
+#
+# Da fuori il traffico entra nel cluster solo dall'Ingress Controller
+# (ingress-nginx). Queste policy ne fanno una regola di rete:
+#   - frontend: accetta connessioni SOLO dall'Ingress Controller;
+#   - gateway:  accetta connessioni dall'Ingress Controller (il browser) e dai
+#               microservizi di GinVault, che gli chiedono le chiavi pubbliche
+#               (/.well-known/jwks.json) per verificare la firma dei JWT.
+# Nessun altro pod, né di un altro namespace né di prova in ginvault, raggiunge
+# front-end e gateway. Con Docker Compose lo stesso isolamento lo danno le reti
+# (frontend-net, backend).
+#
+# Come in networkpolicy-db.yaml si filtra solo il traffico in ENTRATA
+# (policyTypes: [Ingress]): quello in uscita resta libero (DNS, chiamate tra
+# servizi).
+#
+# "namespaceSelector" e "podSelector" nella STESSA voce di "from" valgono
+# insieme (AND): i pod con quelle label DENTRO quel namespace. Scritti come due
+# voci separate (due trattini) varrebbero in alternativa (OR): tutto il
+# namespace ingress-nginx, più i pod con quelle label in ginvault.
+#
+# La porta è quella del POD (containerPort), non quella del Service: il
+# Service frontend espone la 80, ma la connessione arriva al pod sulla 8080.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-solo-da-ingress
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Il pod del controller ingress-nginx, nel suo namespace
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/component: controller
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-da-ingress-e-servizi
+  labels:
+    app.kubernetes.io/name: gateway
+    app.kubernetes.io/component: gateway
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1) Il browser, attraverso l'Ingress Controller: API, login, logout
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/component: controller
+      ports:
+        - protocol: TCP
+          port: 8080
+    # 2) I microservizi (edizioni, ricette...) del namespace ginvault: scaricano
+    #    le chiavi JWKS. Non i database, non il front-end.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: microservizio
+      ports:
+        - protocol: TCP
+          port: 8080

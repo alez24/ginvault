@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -103,6 +104,55 @@ class FormulazioniControllerTest {
                     .andExpect(jsonPath("$.prove[1].dosi[0].botanica").value("lavanda"))
                     .andExpect(jsonPath("$.prove[1].dosi[0].grammiPerBottiglia").value(20.00));
         }
+    }
+
+    // ---------------------------------------------------------------- elenco: DISTILLATORE e ADMIN
+
+    @Test
+    void elencoSenzaTokenRisponde401() throws Exception {
+        mvc.perform(get("/formulazioni")).andExpect(status().isUnauthorized());
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void elencoComeSocioOClienteRisponde403() throws Exception {
+        for (String ruolo : List.of("SOCIO", "CLIENTE")) {
+            mvc.perform(come(ruolo, get("/formulazioni"))).andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void elencoComeDistillatoreOAdminRisponde200() throws Exception {
+        when(servizio.elenco(null)).thenReturn(List.of(vista(StatoFormulazione.SCELTA, 2)));
+
+        for (String ruolo : List.of("DISTILLATORE", "ADMIN")) {
+            mvc.perform(come(ruolo, get("/formulazioni")))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(1))
+                    .andExpect(jsonPath("$[0].stato").value("SCELTA"))
+                    .andExpect(jsonPath("$[0].prove.length()").value(2));
+        }
+    }
+
+    @Test
+    void ilFiltroPerStatoArrivaAlServizio() throws Exception {
+        when(servizio.elenco(StatoFormulazione.SCELTA)).thenReturn(List.of(vista(StatoFormulazione.SCELTA, 2)));
+
+        mvc.perform(come("DISTILLATORE", get("/formulazioni").param("stato", "SCELTA")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].versioneScelta").value(2));
+        verify(servizio).elenco(StatoFormulazione.SCELTA);
+    }
+
+    @Test
+    void unoStatoInesistenteRisponde400ConIValoriAmmessi() throws Exception {
+        mvc.perform(come("DISTILLATORE", get("/formulazioni").param("stato", "PRONTA")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Richiesta non valida"))
+                .andExpect(jsonPath("$.detail").value(
+                        "Il valore \"PRONTA\" non è valido per \"stato\". Valori ammessi: IN_PROVA, SCELTA, USATA."));
+        verifyNoInteractions(servizio);
     }
 
     // ---------------------------------------------------------------- scrittura: solo DISTILLATORE

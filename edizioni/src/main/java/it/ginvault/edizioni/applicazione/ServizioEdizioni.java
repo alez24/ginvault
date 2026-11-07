@@ -1,6 +1,7 @@
 package it.ginvault.edizioni.applicazione;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -13,6 +14,7 @@ import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -94,5 +96,13 @@ public class ServizioEdizioni {
     @Transactional(readOnly = true)
     public EdizioneVista trova(UUID id) {
         return repository.findById(id).map(EdizioneVista::di).orElseThrow(() -> new EdizioneNonTrovata(id));
+    }
+
+    /** Elenco per il back-office, dalla più recente. Non chiama Ricette: legge solo il proprio database. */
+    @Transactional(readOnly = true)
+    public List<EdizioneVista> elenco() {
+        return repository.findAll(Sort.by(Sort.Direction.DESC, "creataIl")).stream()
+                .map(EdizioneVista::di)
+                .toList();
     }
 }

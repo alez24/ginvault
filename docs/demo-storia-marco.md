@@ -11,19 +11,22 @@ Marco è il mastro distillatore. In questa demo:
 5. con **Ricette spento** la creazione di un'edizione risponde **503** e non
    lascia niente a metà; riacceso Ricette, la stessa richiesta va a buon fine.
 
-Le chiamate passano tutte dal gateway (`http://localhost`), come farà il
-front-end: sessione di login, JWT verso i servizi, CSRF.
+Le chiamate passano tutte dal gateway (`http://localhost`), come quelle del
+front-end: sessione di login, JWT verso i servizi, CSRF. La stessa storia fatta
+dalle pagine del front-end è nella "Demo completa" di
+[`k8s/README.md`](../k8s/README.md#demo-completa); qui si vedono le richieste
+REST una per una.
 
 ## Prerequisiti
 
 - Cluster avviato e applicato come in [`k8s/README.md`](../k8s/README.md),
-  con le immagini `edizioni:0.2`, `ricette:0.1` e `gateway:0.2`.
+  con le immagini `edizioni:0.3`, `ricette:0.2`, `gateway:0.3` e `frontend:0.1`.
 - `minikube tunnel` aperto in una PowerShell **da amministratore** (lasciarla aperta).
 - Un account con ruolo **DISTILLATORE**, cioè presente in `RUOLI_DISTILLATORE`
   nel `.env` da cui `k8s/crea-secret.ps1` ha creato il Secret `gateway-segreti`.
 
 ```powershell
-kubectl get pods -n ginvault          # 5 pod 1/1 Running
+kubectl get pods -n ginvault          # 7 pod 1/1 Running (2 del front-end)
 curl.exe -i http://localhost/api/ricette/health
 ```
 
@@ -32,10 +35,10 @@ Il secondo comando risponde `200` con `{"status":"UP"}` e un header
 
 ## 1. Login e console del browser
 
-1. Apri `http://localhost/login` (Chrome o Edge) ed entra con **GitHub**: è
-   l'account che ha il ruolo DISTILLATORE.
-2. Dopo il login il gateway ti porta su `http://localhost/auth/me`. Controlla che
-   `ruoli` contenga `DISTILLATORE`.
+1. Apri `http://localhost` (Chrome o Edge) → **Accedi** → **Accedi con GitHub**:
+   è l'account che ha il ruolo DISTILLATORE.
+2. Dopo il login il gateway ti riporta sulla home del front-end. Apri
+   `http://localhost/auth/me` e controlla che `ruoli` contenga `DISTILLATORE`.
 3. Apri gli strumenti per sviluppatori con **F12**, poi la scheda **Console**. La
    prima volta che incolli del codice, Chrome ed Edge chiedono di scrivere
    `allow pasting`.

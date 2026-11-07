@@ -19,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
@@ -326,6 +327,27 @@ class EdizioniIntegrazioneTest {
         assertThat(jdbc.queryForObject("select tiratura from edizione where id = ?", Integer.class,
                 UUID.fromString(edizione))).isEqualTo(600);
         assertThat(eventi.stream(TiraturaRidotta.class)).isEmpty();
+    }
+
+    // ---------------------------------------------------------------- elenco
+
+    @Test
+    void lElencoParteDallEdizionePiuRecenteESenzaChiamareRicette() throws Exception {
+        String prima = edizioneDa600Bottiglie();
+        formulazione = UUID.randomUUID();   // ogni edizione ha la sua formulazione
+        String seconda = edizioneDa600Bottiglie();
+        RICETTE.resetAll();
+
+        String corpo = mvc.perform(MockMvcRequestBuilders.get("/edizioni")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + GATEWAY.token("ADMIN")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Nel database ci sono anche le edizioni degli altri test: conta l'ordine relativo
+        List<String> id = JsonPath.read(corpo, "$[*].id");
+        assertThat(id).contains(prima, seconda);
+        assertThat(id.indexOf(seconda)).isLessThan(id.indexOf(prima));
+        RICETTE.verify(0, anyRequestedFor(anyUrl()));
     }
 
     // ---------------------------------------------------------------- 401 / 403

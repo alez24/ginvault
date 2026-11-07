@@ -24,5 +24,7 @@ resources:
   - ricette-db.yaml
   - ricette.yaml
   - networkpolicy-db.yaml
+  - networkpolicy-frontend-gateway.yaml
   - gateway.yaml
+  - frontend.yaml
   - ingress.yaml
