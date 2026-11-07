@@ -22,15 +22,15 @@ import com.sun.net.httpserver.HttpServer;
  * piccolo server HTTP locale e firma token come quelli del gateway vero.
  * Il servizio sotto test verifica i token esattamente come in produzione.
  */
-final class GatewayDiProva {
+public final class GatewayDiProva {
 
-    static final String ISSUER = "ginvault-gateway";
+    public static final String ISSUER = "ginvault-gateway";
     private static final String KID = "chiave-di-prova";
 
     private final RSAKey chiave;
     private final HttpServer server;
 
-    GatewayDiProva() {
+    public GatewayDiProva() {
         try {
             chiave = nuovaChiave();
             byte[] jwks = new JWKSet(chiave.toPublicJWK()).toString().getBytes(StandardCharsets.UTF_8);
@@ -47,29 +47,29 @@ final class GatewayDiProva {
         }
     }
 
-    String jwksUri() {
+    public String jwksUri() {
         return "http://127.0.0.1:" + server.getAddress().getPort() + "/.well-known/jwks.json";
     }
 
-    void ferma() {
+    public void ferma() {
         server.stop(0);
     }
 
     /** Token valido (5 minuti) dell'utente github:42 con i ruoli indicati. */
-    String token(String... ruoli) {
+    public String token(String... ruoli) {
         return firma(chiave, ISSUER, Instant.now().plus(Duration.ofMinutes(5)), ruoli);
     }
 
-    String tokenScaduto(String... ruoli) {
+    public String tokenScaduto(String... ruoli) {
         return firma(chiave, ISSUER, Instant.now().minus(Duration.ofHours(1)), ruoli);
     }
 
-    String tokenDiUnAltroEmittente(String... ruoli) {
+    public String tokenDiUnAltroEmittente(String... ruoli) {
         return firma(chiave, "un-altro-emittente", Instant.now().plus(Duration.ofMinutes(5)), ruoli);
     }
 
     /** Stesso "kid" ma chiave diversa: la firma non torna con la chiave pubblica della JWKS. */
-    String tokenConFirmaFalsa(String... ruoli) {
+    public String tokenConFirmaFalsa(String... ruoli) {
         try {
             return firma(nuovaChiave(), ISSUER, Instant.now().plus(Duration.ofMinutes(5)), ruoli);
         } catch (Exception e) {

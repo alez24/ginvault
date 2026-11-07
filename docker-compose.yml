@@ -191,6 +191,10 @@ services:
       DB_USER: edizioni
       DB_PASSWORD: edizioni
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Edizioni chiama Ricette direttamente (rete "backend", senza gateway) per
+      # validare la formulazione. Niente depends_on: se Ricette è giù, Edizioni
+      # parte lo stesso e risponde 503 solo quando serve Ricette.
+      RICETTE_URI: http://ricette:8082
     depends_on:
       edizioni-db:
         condition: service_healthy

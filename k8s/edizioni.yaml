@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> configurazione NON segreta (indirizzi, nomi), come variabili
-#   2) Deployment  -> il pod con il container ginvault/edizioni:0.1
+#   2) Deployment  -> il pod con il container ginvault/edizioni:0.2
 #   3) Service     -> nome DNS stabile "edizioni" (lo usa il gateway)
 #
 # Le stesse variabili d'ambiente che docker-compose.yml passa al container:
@@ -32,6 +32,9 @@ data:
   DB_NAME: edizioni
   # Chiavi pubbliche del gateway per verificare i JWT: il nome del Service "gateway"
   JWKS_URI: http://gateway:8080/.well-known/jwks.json
+  # Edizioni chiama Ricette direttamente (Service "ricette", senza gateway) per
+  # validare la formulazione quando si crea un'edizione
+  RICETTE_URI: http://ricette:8082
   # Endpoint per le probe di Kubernetes: /health/liveness e /health/readiness.
   # Spring Boot li attiva da solo quando si accorge di girare su Kubernetes;
   # qui lo diciamo esplicitamente.
@@ -77,7 +80,8 @@ spec:
         - name: edizioni
           # Immagine costruita DENTRO Minikube (minikube image build):
           # Never = non cercarla mai su un registry. Se manca: ErrImageNeverPull
-          image: ginvault/edizioni:0.1
+          # 0.2 = storia di Marco: edizioni, tiratura, chiamata a Ricette
+          image: ginvault/edizioni:0.2
           imagePullPolicy: Never
           ports:
             - name: http

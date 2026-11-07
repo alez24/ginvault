@@ -39,11 +39,23 @@ spring:
     gateway:
       server:
         webflux:
+          # Header X-Forwarded-* verso i servizi (Host, Proto, Port e soprattutto
+          # Prefix: il pezzo /api/<servizio> tolto da StripPrefix). Servono ai servizi
+          # per costruire link giusti, es. Location: http://localhost/api/ricette/formulazioni/{id}.
+          # Il gateway li aggiunge SOLO se chi si collega ha un IP "fidato" (espressione
+          # regolare): altrimenti toglie anche quelli arrivati, così un client non può
+          # falsificarli. Qui: loopback e reti private, cioè IntelliJ (127.0.0.1),
+          # la porta pubblicata da Docker Compose (172.16-31.x) e l'Ingress di
+          # Kubernetes (10.x). In un cluster vero si restringe all'IP dell'Ingress.
+          trusted-proxies: '127\.0\.0\.1|0:0:0:0:0:0:0:1|10\..*|172\.(1[6-9]|2[0-9]|3[01])\..*|192\.168\..*'
+
           # Filtri applicati a TUTTE le route
           default-filters:
             # Il cookie di sessione serve solo al gateway: i servizi non lo
             # ricevono (un servizio compromesso non può rubare le sessioni).
             - RemoveRequestHeader=Cookie
+            # Il token CSRF lo controlla il gateway: ai servizi non serve
+            - RemoveRequestHeader=X-XSRF-TOKEN
 
           # Ogni route ha:
           #   - uri:        dove inoltrare. ${X_URI:default} -> in Docker Compose X_URI

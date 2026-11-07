@@ -47,6 +47,14 @@ spring:
 server:
   # Porta fissa per servizio (8082 = ricette), uguale in locale e in Docker
   port: 8082
+  # Il gateway toglie /api/ricette dal path (StripPrefix) e lo dice con
+  # X-Forwarded-Prefix, insieme a X-Forwarded-Host/Proto/Port. Con "framework"
+  # Spring li applica alla richiesta, quindi i link costruiti qui (il Location
+  # del 201) puntano all'indirizzo pubblico, es.
+  # http://localhost/api/ricette/... e non http://ricette:8082/...
+  # Ci si può fidare perché il servizio si raggiunge solo dalla rete interna
+  # (il gateway, che accetta X-Forwarded-* solo da proxy fidati).
+  forward-headers-strategy: framework
 
 management:
   endpoints:
