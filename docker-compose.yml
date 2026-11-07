@@ -11,11 +11,13 @@
 # id/secret OAuth, elenchi dei ruoli). Compose legge .env in automatico.
 #
 # Reti:
+#   - frontend-net       -> solo front-end e gateway: nginx non vede i servizi
 #   - backend            -> condivisa da gateway, microservizi e Kafka
 #   - <servizio>-db-net  -> rete privata tra UN servizio e il SUO database.
 #     Il DB di edizioni non è raggiungibile da ricette, ecc.: il pattern
 #     "database per service" è garantito anche a livello di rete.
-#   - Dall'host (il portatile) si raggiunge SOLO il gateway: localhost:8080.
+#   - Dall'host (il portatile) si raggiungono SOLO il front-end, su
+#     http://localhost, e il gateway, su localhost:8080 (curl e dev server di Vite).
 #
 # In una rete Compose ogni servizio è raggiungibile usando il suo NOME come
 # hostname (DNS interno di Docker): es. jdbc:postgresql://edizioni-db:5432/...
@@ -332,7 +334,8 @@ services:
       # Dove torna il browser dopo login e logout. "/" = front-end sulla stessa
       # origine; con il dev server di Vite: FRONTEND_URL=http://localhost:5173
       FRONTEND_URL: ${FRONTEND_URL:-/}
-    # Il gateway parte per ultimo: quando è "healthy" tutto il sistema è pronto
+    # Il gateway parte dopo i servizi (e il front-end dopo il gateway): quando
+    # il front-end è "healthy" tutto il sistema è pronto
     depends_on:
       edizioni:
         condition: service_healthy
@@ -351,11 +354,40 @@ services:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
     networks:
       - backend
+      - frontend-net
+
+  # ===========================================================================
+  # FRONTEND - l'app React servita da nginx (frontend/Dockerfile)
+  # ===========================================================================
+  # Il browser apre http://localhost: nginx risponde con l'app e inoltra al
+  # gateway API, /auth/me, login e logout (frontend/nginx/default.conf).
+  # Pagine e API hanno la stessa origine: i cookie SESSION e XSRF-TOKEN
+  # funzionano senza CORS. Su Kubernetes questo lavoro lo fa l'Ingress.
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      # http://localhost (porta 80), lo stesso indirizzo dell'Ingress di
+      # Kubernetes: il redirect URI di Google e GitHub è già registrato
+      # (http://localhost/login/oauth2/code/...). nginx dentro il container
+      # ascolta sulla 8080 perché non è root. La porta 80 la usa anche
+      # "minikube tunnel": Compose e Minikube non insieme.
+      - "80:8080"
+    # nginx cerca il nome "gateway" all'avvio: parte quando il gateway è pronto
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      <<: *app-healthcheck
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+    networks:
+      - frontend-net
 
 # -----------------------------------------------------------------------------
 # Reti: Compose le crea come reti "bridge" con nome ginvault_<nome>
 # -----------------------------------------------------------------------------
 networks:
+  frontend-net:
   backend:
   edizioni-db-net:
   ricette-db-net:

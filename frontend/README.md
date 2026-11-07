@@ -29,8 +29,9 @@ browser ──▶ http://localhost:5173  (dev server di Vite)
   la pagina che l'utente voleva vedere, salvata in `sessionStorage`.
 - **Logout**: `POST /logout` con l'header CSRF.
 - **Stessa origine**: in sviluppo l'unica origine la dà il proxy di Vite
-  ([`vite.config.ts`](vite.config.ts)), in produzione l'Ingress. Per questo non
-  serve CORS.
+  ([`vite.config.ts`](vite.config.ts)), con Docker Compose nginx
+  ([`nginx/default.conf`](nginx/default.conf)), su Kubernetes l'Ingress. Per
+  questo non serve CORS.
 
 ## Avvio in sviluppo, contro Minikube
 
@@ -102,6 +103,43 @@ Altri comandi utili:
   `$env:FRONTEND_URL="http://localhost:5173"; docker compose up -d --build --wait`
 - per passare dall'Ingress (porta 80) invece che dal port-forward, con
   `minikube tunnel` aperto: `$env:GINVAULT_GATEWAY="http://localhost"; npm run dev`
+
+## In produzione: immagine Docker con nginx
+
+Il [`Dockerfile`](Dockerfile) ha due stadi. Il primo, con Node 24, esegue
+`npm ci`, i test e la build. L'immagine finale è nginx
+(`nginxinc/nginx-unprivileged:1.30-alpine`) con la sola cartella `dist/`: niente
+Node, niente sorgenti. nginx gira come utente `nginx` (uid 101), non come root,
+e per questo ascolta sulla 8080.
+
+Cosa risponde nginx ([`nginx/default.conf`](nginx/default.conf)):
+
+| Path | Risposta |
+|---|---|
+| `/assets/...` | il file, in cache per un anno: il nome contiene l'impronta del contenuto (`index-CbeMtITL.js`), quindi non cambia mai. Se manca, 404 |
+| `/api/...`, `/auth/...`, `/oauth2/...`, `/login`, `/logout` | proxy verso `gateway:8080`, con l'`Host` del browser (il gateway lo usa per il `redirect_uri` OAuth) e l'upgrade per i WebSocket. Serve con Docker Compose: su Kubernetes questi path li manda al gateway l'Ingress |
+| tutto il resto (`/`, `/soci`, `/distilleria/...`) | `index.html`, senza cache: le pagine sono route di React Router |
+
+Le pagine hanno alcune intestazioni di sicurezza
+([`nginx/intestazioni.conf`](nginx/intestazioni.conf)), che le risposte del
+gateway non ricevono:
+
+- `Content-Security-Policy`: script, stili, font e immagini solo da questa
+  origine, richieste (fetch e WebSocket) solo verso questa origine, niente
+  `'unsafe-inline'`, e la pagina non si apre dentro l'iframe di un altro sito;
+- `X-Content-Type-Options: nosniff` e `Referrer-Policy`.
+
+Con Docker Compose, dalla cartella principale del repository:
+
+```powershell
+docker compose -f docker-compose.yml up -d --build --wait
+```
+
+poi si apre **http://localhost**. Il container `frontend` pubblica la porta 80
+(dentro ascolta sulla 8080) e sta su una rete, `frontend-net`, condivisa solo
+con il gateway: da nginx i servizi e i database non si raggiungono.
+
+Per costruire solo l'immagine: `docker build -t ginvault/frontend:prova frontend`.
 
 ## Back-office del distillatore (storia di Marco)
 
@@ -252,6 +290,9 @@ verticale sul telefono.
 ## Struttura
 
 ```
+Dockerfile              build con Node e immagine finale con nginx
+nginx/                  default.conf (pagine, cache, proxy verso il gateway) e
+                        intestazioni.conf (Content-Security-Policy e altre intestazioni)
 src/
   api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, errori.ts,
                         soci.ts (tipi e dati dell'area soci)

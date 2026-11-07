@@ -12,17 +12,25 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 > tiratura e ricalcolo. Su Minikube girano gateway, edizioni, ricette e i loro
 > database dietro un Ingress, con i database isolati da NetworkPolicy
 > ([`k8s/README.md`](k8s/README.md)).
+> Il front-end React ha il back-office di Marco e l'area soci di Giulia (con dati
+> finti finché non ci sono le prenotazioni); con Docker Compose è servito da
+> nginx su `http://localhost` ([`frontend/README.md`](frontend/README.md)).
 > Mancano ancora Kafka tra i servizi, gRPC e gli altri servizi su Kubernetes.
 
 ## Architettura
 
 ```
                     browser
+                       │  http://localhost (:80): pagine, API, login
                        │  cookie SESSION (il JWT non arriva mai qui)
-                       │  :8080  (unica porta esposta)
+                 ┌─────▼─────┐
+                 │ frontend  │  nginx: l'app React e, per /api /auth /oauth2
+                 └─────┬─────┘  /login /logout, proxy verso il gateway
+   rete "frontend-net" │
                  ┌─────▼─────┐   login OAuth2   ┌─────────────────┐
                  │  gateway  │ ◀──────────────▶ │ Google / GitHub │
                  └─────┬─────┘                  └─────────────────┘
+                       │  (anche su :8080 dall'host, per curl e per il dev server di Vite)
    rete "backend"      │  /api/<servizio>/**  + Authorization: Bearer <JWT GinVault>
  ┌──────────┬──────────┼──────────┬──────────┬───────────┬───────────┐
  edizioni   ricette    produzione magazzino  pagamenti   notifiche   kafka
@@ -34,6 +42,7 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
 | Servizio    | Tecnologia                  | Porta | Database (porta in sviluppo) | `GET /prova` richiede |
 |-------------|-----------------------------|-------|------------------------------|-----------------------|
+| frontend    | React 19 + Vite 7, nginx 1.30 | 80 (nginx: 8080) | –                | –                     |
 | gateway     | Spring Cloud Gateway        | 8080  | –                            | –                     |
 | edizioni    | Spring Boot 3.5 / Java 21   | 8081  | `edizioni-db` (5441)         | SOCIO                 |
 | ricette     | Spring Boot 3.5 / Java 21   | 8082  | `ricette-db` (5442)          | DISTILLATORE          |
@@ -58,7 +67,7 @@ ginvault/
 ├── gateway/                      # Spring Cloud Gateway: login, sessione, JWT
 ├── notifiche/                    # NestJS
 ├── k8s/                          # manifest Kubernetes (Minikube): vedi k8s/README.md
-├── frontend/                     # (vuoto per ora)
+├── frontend/                     # React + Vite, servito da nginx: vedi frontend/README.md
 └── docs/piano.md
 ```
 
@@ -78,20 +87,21 @@ ginvault/
    Il file `.env` non viene committato (è nel `.gitignore`).
 2. **Google**: [Cloud Console](https://console.cloud.google.com) → *API e servizi* →
    *Credenziali* → *Crea credenziali* → *ID client OAuth* → tipo *Applicazione web*.
-   - URI di reindirizzamento autorizzati: `http://localhost:8080/login/oauth2/code/google`
-     (Compose) e `http://localhost/login/oauth2/code/google` (Kubernetes)
+   - URI di reindirizzamento autorizzati: `http://localhost/login/oauth2/code/google`
+     (front-end con Compose e Ingress di Kubernetes) e
+     `http://localhost:8080/login/oauth2/code/google` (dev server di Vite e login
+     diretto sul gateway)
    - Se la schermata di consenso è in modalità *Testing*, aggiungi gli account
      del gruppo tra gli *utenti di test*.
    - Copia ID client e secret in `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`.
 3. **GitHub**: *Settings* → *Developer settings* → *OAuth Apps* → *New OAuth App*.
-   - Homepage URL: `http://localhost:8080`
-   - Authorization callback URL: `http://localhost:8080/login/oauth2/code/github`
+   - Homepage URL: `http://localhost`
+   - Authorization callback URL: `http://localhost/login/oauth2/code/github`
    - Copia Client ID e un nuovo Client secret in `GITHUB_CLIENT_ID` e `GITHUB_CLIENT_SECRET`.
    - Un'OAuth App ha **un solo** callback URL. Per gli indirizzi di loopback
      GitHub accetta un `redirect_uri` con una porta diversa da quella del
-     callback (documentato per `127.0.0.1`). Con il callback
-     `http://localhost/login/oauth2/code/github` il login su Kubernetes è
-     verificato; quello di Compose (porta 8080) va riverificato.
+     callback (documentato per `127.0.0.1`): con il callback sulla porta 80
+     funziona anche il dev server di Vite, che passa dalla 8080.
 4. **Ruoli**: negli elenchi `RUOLI_*` scrivi le identità separate da virgola,
    nella forma `google:<email>` o `github:<login>`. Esempio:
    ```
@@ -114,6 +124,14 @@ docker compose -f docker-compose.yml up -d --build --wait
 
 Il primo avvio richiede qualche minuto, perché scarica le immagini e le
 dipendenze Maven/npm. I successivi sono molto più rapidi grazie alla cache.
+
+Poi si apre **http://localhost**: è il front-end (nginx), che inoltra al gateway
+API, login e logout. Il front-end parte per ultimo, quando il gateway è pronto,
+quindi `--wait` termina quando tutto il sistema risponde.
+
+> **Porta 80.** È la stessa di `minikube tunnel` (Kubernetes): non tenere aperti
+> Compose e il tunnel insieme. Se la porta 80 è occupata, `docker compose up` si
+> ferma con `bind: address already in use` (o `ports are not available`).
 
 ### Su Kubernetes (Minikube)
 
@@ -164,17 +182,23 @@ del Club.
 
 ### Provare il login (nel browser)
 
-1. `http://localhost:8080/login` → scegli Google o GitHub.
-2. Dopo il login arrivi su `http://localhost:8080/auth/me`: identità e ruoli in sessione.
-3. `http://localhost:8080/api/edizioni/me`: cosa legge il servizio dal JWT.
-4. `http://localhost:8080/api/edizioni/prova`: 200 se sei SOCIO, altrimenti 403.
+1. `http://localhost` → **Accedi con Google** o **Accedi con GitHub**.
+2. Dopo il login torni alla home del front-end, con il tuo nome e il menu dei tuoi
+   ruoli (Formulazioni ed Edizioni per DISTILLATORE, Area soci per SOCIO).
+3. `http://localhost/auth/me`: identità e ruoli in sessione.
+4. `http://localhost/api/edizioni/me`: cosa legge il servizio dal JWT.
+5. `http://localhost/api/edizioni/prova`: 200 se sei SOCIO, altrimenti 403.
    Stessa cosa per `/api/<servizio>/prova` con i ruoli della tabella in alto.
-5. `http://localhost:8080/gateway/routes`: route del gateway (solo ADMIN).
-6. `http://localhost:8080/logout` → conferma → sessione chiusa.
+6. `http://localhost:8080/gateway/routes`: route del gateway (solo ADMIN). Questo
+   path il front-end non lo inoltra: si apre direttamente sul gateway, e la
+   sessione vale anche lì, perché i browser non distinguono i cookie per porta.
+7. **Esci** nel menu: `POST /logout` con il token CSRF, poi di nuovo la home.
 
 ### Verifiche senza login
 
 ```bash
+curl -I http://localhost/                             # front-end: 200, Content-Security-Policy...
+curl -i http://localhost/auth/me                      # 401, passando da nginx al gateway
 curl http://localhost:8080/health                     # {"status":"UP"} (niente dettagli)
 curl http://localhost:8080/api/edizioni/health        # {"status":"UP"}
 curl -i http://localhost:8080/api/edizioni/me         # 401
@@ -345,6 +369,8 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loca
 ```bash
 # Un servizio non vede il DB di un altro
 docker compose exec ricette sh -c "nc -z -w 2 edizioni-db 5432"     # → nc: bad address 'edizioni-db'
+# nginx (front-end) vede solo il gateway: i servizi non sono sulla sua rete
+docker compose exec frontend sh -c "nc -z -w 2 edizioni 8081"       # → nc: bad address 'edizioni'
 # Un servizio chiamato senza passare dal gateway (quindi senza JWT) rifiuta la richiesta
 docker compose exec gateway sh -c "wget -S -qO /dev/null http://edizioni:8081/me"   # → 401
 ```
@@ -367,9 +393,6 @@ avviato in IntelliJ.
   bisogna rifare il login. Con più repliche del gateway, la sessione andrà su
   Redis e tutte le repliche dovranno firmare con la stessa chiave, letta da un
   segreto condiviso.
-- **CSRF con cookie `XSRF-TOKEN` e header `X-XSRF-TOKEN`**: pronto per la SPA.
-  Il front-end deve leggere il cookie e rimandarlo nell'header; Angular lo fa da
-  solo.
 - **WebSocket di notifiche.** Il gateway inoltra il JWT anche sull'handshake
   WebSocket. Resta da far verificare il token alla connessione, con
   `VerificaJwtService`, e da controllare l'header `Origin`.

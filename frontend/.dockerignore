@@ -1,0 +1,5 @@
+# Fuori dal contesto di build: le dipendenze le installa "npm ci" dentro il
+# container, e dist/ la produce la build
+node_modules
+dist
+*.log
