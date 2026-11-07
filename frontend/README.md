@@ -132,6 +132,35 @@ Pagine per il ruolo DISTILLATORE, con le API vere di Ricette ed Edizioni.
   le bottiglie tolte si svuotano una dopo l'altra e accanto al canale compare lo scarto
   (−60); con «riduci movimento» attivo nel sistema si vede subito il risultato.
 
+## Area soci (storia di Giulia)
+
+Pagine per il ruolo SOCIO. Le prenotazioni non esistono ancora nei servizi: per ora
+i dati sono finti, in un modulo a parte, già nella forma delle risposte vere.
+
+| Pagina | Cosa si vede |
+|---|---|
+| `/soci` | gli avvisi del club («La tiratura è scesa da 600 a 540, la tua prenotazione è confermata»), le prenotazioni con lo stato e i numeri delle bottiglie, le regole della prelazione |
+| `/soci/edizioni/{id}` | l'edizione vista dal socio: l'avviso, le bottiglie n. 112 e 113 con il cartellino, il ritiro alla masterclass d'agosto, la tracciabilità (formulazione → lavanda → controllo qualità), le quote da 600 a 540 |
+
+- **Dati finti.** [`src/mock/soci.ts`](src/mock/soci.ts) racconta l'edizione d'estate
+  2026 (la cronologia è in testa al file): 12 kg di lavanda annunciati, 10,8 arrivati,
+  tiratura da 600 a 540, cala solo la vendita online. Le risposte arrivano dopo 250 ms,
+  come dalla rete, e un'edizione che non c'è risponde 404, come farà il servizio. I test
+  ([`src/mock/soci.test.ts`](src/mock/soci.test.ts)) controllano che i dati rispettino
+  le regole del dominio: tiratura, quote, al massimo 2 bottiglie per socio, numeri
+  dentro la tiratura, tracciabilità in ordine.
+- **Come sostituirli.** Le pagine importano solo [`src/api/soci.ts`](src/api/soci.ts):
+  i tipi (`Prenotazione`, `EdizioneSoci`, `Notifica`, `Tappa`…) e l'oggetto `soci`, con
+  `area()` ed `edizione(id)`. Quando Edizioni esporrà le prenotazioni si sostituisce
+  `datiFinti` con le chiamate `api('GET', …)` in quel file e si cancella `src/mock/`:
+  pagine e tipi restano uguali.
+- **Avvisi.** Oggi arrivano con `area()`. Poi li manderà il servizio Notifiche
+  (NestJS), via WebSocket, quando Edizioni pubblicherà `TiraturaRidotta`: la forma di
+  `Notifica` (evento, titolo, testo, edizione) è già quella. Nella pagina dell'edizione
+  l'avviso si ricava dai dati: tiratura sotto quella annunciata e prenotazione confermata.
+- **Movimento.** Le quote partono da quelle annunciate e calano quando arrivano sullo
+  schermo; con «riduci movimento» si vede subito il risultato.
+
 ## Stile
 
 Un gin di montagna, luminoso: «classico moderno», con il paesaggio al posto di
@@ -217,14 +246,16 @@ verticale sul telefono.
 | Comando | Cosa fa |
 |---|---|
 | `npm run dev` | Dev server su http://localhost:5173, con il proxy verso il gateway |
-| `npm test` | Test con Vitest: CSRF ed errori di `api`, menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, numeri all'italiana |
+| `npm test` | Test con Vitest: CSRF ed errori di `api`, menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, numeri e date all'italiana, dati finti dell'area soci |
 | `npm run build` | Controllo dei tipi (`tsc -b`) e build di produzione in `dist/` |
 
 ## Struttura
 
 ```
 src/
-  api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, errori.ts
+  api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, errori.ts,
+                        soci.ts (tipi e dati dell'area soci)
+  mock/                 soci.ts: i dati finti dell'area soci, finché non ci sono le prenotazioni
   sessione/             utente da /auth/me, login, logout, pagina da riaprire dopo il login
   navigazione.ts        pagine e ruoli: un solo posto per menu e route protette
   componenti/           intestazione, layout, avvisi, route protetta, errori, editor delle dosi,
@@ -235,13 +266,16 @@ src/
                         montagne (geometria.ts li calcola)
   assets/               logo, logo chiaro e bottiglia
   assets/foto/          le fotografie in WebP e foto.ts (srcset e testi alternativi)
-  pagine/               home, accesso, profilo, area soci (passo 3)
+  pagine/               home, accesso, profilo, pagina non trovata
+  pagine/soci/          area soci ed edizione vista dal socio
   pagine/distilleria/   formulazioni ed edizioni (back-office del distillatore)
   utilita/              numeri all'italiana, regole per le anteprime, useCaricamento
   stile.css             palette, tipografia, intestazione, montagne, home, accesso, piè di
                         pagina (si parte dal telefono)
   stile-distilleria.css fascia avorio, indicatori, schede, ricette, moduli e bottiglie del
                         back-office
+  stile-soci.css        area soci: prenotazioni, regole, bottiglie numerate, foglio del
+                        ritiro, tappe della tracciabilità
 ```
 
 ## Versioni

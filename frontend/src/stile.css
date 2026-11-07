@@ -647,8 +647,10 @@ strong {
 /* ------------------------------------------------------------------ montagne tra le sezioni */
 
 /* Il crinale davanti copre di un pixel la sezione che segue: nessuna fessura.
-   Sotto i 56rem il disegno resta largo 56rem e si vede il centro: le cime non si
-   schiacciano sul telefono. */
+   Il fondo cambia colore all'82%, sotto il punto più basso del crinale lontano
+   (0,3 dell'altezza): al 70% il bordo si vedeva come una riga dove il crinale
+   tocca il minimo. Sotto i 56rem il disegno resta largo 56rem e si vede il
+   centro: le cime non si schiacciano sul telefono. */
 .divisore {
   --da-colore: var(--neve);
   --a-colore: var(--neve);
@@ -657,13 +659,17 @@ strong {
   z-index: 1;
   margin-bottom: -1px;
   overflow: hidden;
-  background: linear-gradient(var(--da-colore) 70%, var(--a-colore) 70%);
+  background: linear-gradient(var(--da-colore) 82%, var(--a-colore) 82%);
 }
 
+/* Il disegno sporge di 2px sotto il divisore, che lo taglia: alla base i tre
+   crinali finiscono insieme e, su una riga di pixel a metà, si mescolerebbero
+   in un filo chiaro */
 .divisore svg {
   display: block;
   width: max(100%, 56rem);
   height: clamp(4.5rem, 9vw, 8.5rem);
+  margin-bottom: -2px;
   margin-left: 50%;
   translate: -50% 0;
 }
@@ -1472,13 +1478,6 @@ strong {
 
 .paesaggio__testo .attacco {
   color: var(--inchiostro);
-}
-
-.in-arrivo {
-  color: var(--testo-2);
-  font-family: var(--font-titoli);
-  font-size: 1.35rem;
-  line-height: 1.45;
 }
 
 /* ------------------------------------------------------------------ profilo */

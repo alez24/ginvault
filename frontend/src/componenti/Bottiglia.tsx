@@ -13,9 +13,11 @@ interface Props {
   sizes: string;
   /** Nell'apertura della home è la prima immagine: si carica subito. */
   subito?: boolean;
+  /** Una seconda bottiglia uguale accanto alla prima: gli screen reader la saltano. */
+  decorativa?: boolean;
 }
 
-export function Bottiglia({ className = '', sizes, subito = false }: Props) {
+export function Bottiglia({ className = '', sizes, subito = false, decorativa = false }: Props) {
   return (
     <picture className="bottiglia-cornice">
       <source type="image/webp" srcSet={`${bottiglia262} 262w, ${bottiglia524} 524w`} sizes={sizes} />
@@ -24,7 +26,11 @@ export function Bottiglia({ className = '', sizes, subito = false }: Props) {
         src={bottigliaPng}
         width={524}
         height={1322}
-        alt="La bottiglia di GinVault: vetro trasparente, tappo di legno ed etichetta crema con il bicchiere e le bacche di ginepro"
+        alt={
+          decorativa
+            ? ''
+            : 'La bottiglia di GinVault: vetro trasparente, tappo di legno ed etichetta crema con il bicchiere e le bacche di ginepro'
+        }
         fetchPriority={subito ? 'high' : undefined}
         loading={subito ? undefined : 'lazy'}
         decoding="async"

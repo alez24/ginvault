@@ -1,0 +1,642 @@
+/* =============================================================================
+   Area soci (storia di Giulia): lo stesso paesaggio e le stesse montagne della
+   home. Fondo neve con sezioni avorio, schede bianche solo per i dati (le
+   prenotazioni, le tappe della tracciabilità, le quote), lavanda solo per
+   l'edizione d'estate.
+   ============================================================================= */
+
+.fondo-avorio {
+  background: var(--avorio);
+}
+
+/* Se la pagina finisce su una sezione avorio, le montagne del piede partono dall'avorio */
+.contenuto:has(> :last-child > .fondo-avorio:last-child) + .piede {
+  --sopra: var(--avorio);
+}
+
+/* ------------------------------------------------------------------ area soci: avvisi e prenotazioni */
+
+.soci__corpo {
+  padding-block: clamp(0.5rem, 2vw, 1.5rem) clamp(2.5rem, 6vw, 4.5rem);
+}
+
+.soci__avvisi {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 46rem;
+  margin-bottom: clamp(2.5rem, 6vw, 3.5rem);
+}
+
+.avviso__piede {
+  margin-top: 0.6rem;
+  color: var(--testo-2);
+  font-size: 0.92rem;
+}
+
+.soci__sezione h2 {
+  margin-bottom: 1.25rem;
+}
+
+.prenotazioni {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 30rem), 1fr));
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* La bottiglia a sinistra, il testo a destra; tutta la scheda porta all'edizione */
+.prenotazione {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: 1.35rem;
+  align-items: start;
+}
+
+.prenotazione__figura {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  justify-content: center;
+  height: 8.75rem;
+}
+
+.prenotazione__figura::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: -1;
+  width: 9rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--salvia) 40%, transparent) 0%, transparent 66%);
+  transform: translate(-50%, -50%);
+  content: '';
+}
+
+.prenotazione--estate .prenotazione__figura::before {
+  background: radial-gradient(circle, color-mix(in srgb, var(--lavanda) 50%, transparent) 0%, transparent 66%);
+}
+
+.prenotazione__figura .bottiglia-foto {
+  filter: drop-shadow(0 10px 8px rgb(36 51 42 / 16%));
+}
+
+.prenotazione .stato {
+  margin-bottom: 0.55rem;
+}
+
+.prenotazione .carta__titolo {
+  margin-right: 0;
+}
+
+.prenotazione__numeri {
+  margin-bottom: 0.9rem;
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.25rem;
+  font-style: italic;
+}
+
+.prenotazione__dati {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--filetto);
+  font-size: 0.95rem;
+}
+
+.prenotazione__dati div {
+  display: grid;
+  grid-template-columns: 5.25rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.prenotazione__dati dt {
+  color: var(--testo-2);
+  font-size: 0.88rem;
+}
+
+.prenotazione__dati dd {
+  margin: 0;
+}
+
+/* Sul telefono la colonna del testo è stretta: l'etichetta va sopra il valore */
+@media (max-width: 30rem) {
+  .prenotazione__dati div {
+    display: block;
+  }
+}
+
+/* Nessuna parola sola sull'ultima riga («alle / 18») */
+.prenotazione__dati dd,
+.ritiro__dati dd,
+.tappa__dati dd {
+  text-wrap: pretty;
+}
+
+/* Gli stati di una prenotazione, come quelli delle prove: un pallino e una parola */
+.stato--in_attesa_pagamento::before {
+  border-color: var(--ottone);
+}
+
+.stato--confermata::before {
+  border-color: var(--salvia-scura);
+  background: var(--salvia-scura);
+}
+
+.stato--numerata {
+  color: var(--abete);
+}
+
+.stato--numerata::before {
+  border-color: var(--abete);
+  background: var(--abete);
+}
+
+.stato--ritirata::before {
+  border-color: var(--testo-2);
+  background: var(--testo-2);
+}
+
+/* ------------------------------------------------------------------ area soci: le regole del club */
+
+.regole {
+  padding-block: clamp(1.25rem, 3vw, 2.5rem) clamp(3.5rem, 8vw, 6rem);
+}
+
+.regole__elenco {
+  display: grid;
+  gap: 2rem;
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Un filo d'ottone sopra ogni regola, come sotto le note delle schede */
+.regole__elenco h3::before {
+  display: block;
+  width: 2rem;
+  margin-bottom: 0.9rem;
+  border-top: 1.5px solid var(--ottone);
+  content: '';
+}
+
+.regole__elenco h3 {
+  font-size: 1.6rem;
+}
+
+.regole__elenco p {
+  max-width: 22rem;
+  margin: 0;
+  color: var(--testo-2);
+}
+
+@media (min-width: 48rem) {
+  .regole__elenco {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(2rem, 4vw, 3.5rem);
+  }
+}
+
+/* ------------------------------------------------------------------ edizione: la vetrina in cima */
+
+.soci-mancante {
+  padding-block: clamp(2rem, 5vw, 3.5rem) clamp(3rem, 7vw, 5rem);
+}
+
+.soci-mancante .ritorno {
+  margin-bottom: 1.25rem;
+}
+
+/* Sul telefono l'alone resta dentro lo schermo; in basso le bottiglie scendono
+   davanti alle montagne che seguono */
+.vetrina {
+  position: relative;
+  z-index: 2;
+  padding-top: clamp(1.5rem, 4vw, 2.75rem);
+  overflow-x: clip;
+  background: var(--avorio);
+}
+
+.vetrina__griglia {
+  display: grid;
+  gap: 2rem;
+}
+
+.vetrina__testo .ritorno {
+  margin-bottom: 1.25rem;
+}
+
+.vetrina__testo > .avviso {
+  max-width: 40rem;
+  margin-bottom: 1.75rem;
+}
+
+.vetrina h1 {
+  margin-bottom: 0.3em;
+}
+
+.vetrina .attacco {
+  margin-bottom: 0;
+}
+
+.vetrina__dati {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2.75rem;
+  margin: 1.75rem 0 0;
+}
+
+.vetrina__dati dt {
+  color: var(--testo-2);
+  font-size: 0.88rem;
+}
+
+.vetrina__dati dd {
+  margin: 0;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.45rem;
+  line-height: 1.3;
+}
+
+.vetrina__figura {
+  justify-self: center;
+  margin-bottom: calc(-1 * clamp(2.5rem, 5vw, 4.25rem));
+}
+
+/* Le due bottiglie numerate: la seconda appena dietro la prima */
+.coppia {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: flex-end;
+  height: clamp(15rem, 44vw, 22rem);
+  margin: 0;
+}
+
+.coppia__alone {
+  position: absolute;
+  top: 46%;
+  left: 50%;
+  z-index: -1;
+  width: 190%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--salvia) 50%, transparent) 0%,
+    color-mix(in srgb, var(--salvia) 16%, transparent) 40%,
+    transparent 66%
+  );
+  transform: translate(-50%, -50%);
+}
+
+.pagina--estate .coppia__alone {
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--lavanda) 58%, transparent) 0%,
+    color-mix(in srgb, var(--lavanda) 22%, transparent) 40%,
+    transparent 66%
+  );
+}
+
+.coppia__bottiglia {
+  position: relative;
+  height: 100%;
+}
+
+.coppia__bottiglia + .coppia__bottiglia {
+  z-index: -1;
+  height: 94%;
+  margin-left: -0.9rem;
+}
+
+.coppia .bottiglia-foto {
+  position: relative;
+}
+
+.coppia .cartellino {
+  top: 15%;
+}
+
+/* Il cartellino della seconda bottiglia pende a destra, con il filo dall'altra parte */
+.cartellino--destra {
+  right: auto;
+  left: calc(50% + 1.9rem);
+  transform: rotate(5deg);
+  transform-origin: left center;
+}
+
+.cartellino--destra::after {
+  right: 100%;
+  left: auto;
+  transform: rotate(14deg);
+  transform-origin: right center;
+}
+
+@media (min-width: 48rem) {
+  .vetrina__griglia {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    gap: clamp(2rem, 5vw, 4rem);
+    align-items: end;
+  }
+
+  .vetrina__testo {
+    padding-bottom: clamp(3rem, 6vw, 5rem);
+  }
+}
+
+/* ------------------------------------------------------------------ edizione: il ritiro */
+
+.ritiro {
+  padding-block: clamp(1.25rem, 3vw, 2.5rem) clamp(2rem, 5vw, 3.5rem);
+}
+
+.ritiro__griglia {
+  display: grid;
+  gap: 2rem;
+  align-items: start;
+}
+
+.ritiro__testo {
+  max-width: 40rem;
+}
+
+.ritiro__testo h2 {
+  margin-bottom: 0.2em;
+}
+
+.ritiro__tema {
+  margin-bottom: 1rem;
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.4rem;
+  font-style: italic;
+}
+
+.ritiro__dati {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--filetto);
+}
+
+/* Il foglio del calendario, con la rilegatura d'ottone in cima */
+.foglio {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  width: 9.5rem;
+  margin: 0.75rem 0 0;
+  padding: 1.4rem 1rem 1rem;
+  border-top: 4px solid var(--ottone);
+  border-radius: 3px 3px var(--raggio-scheda) var(--raggio-scheda);
+  background: var(--bianco);
+  box-shadow: var(--ombra);
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  line-height: 1.1;
+  text-align: center;
+  transform: rotate(-2deg);
+}
+
+.foglio::before,
+.foglio::after {
+  position: absolute;
+  top: -0.8rem;
+  width: 0.5rem;
+  height: 1.25rem;
+  border: 2px solid var(--ottone);
+  border-radius: 999px;
+  background: var(--neve);
+  content: '';
+}
+
+.foglio::before {
+  left: 30%;
+}
+
+.foglio::after {
+  right: 30%;
+}
+
+.foglio__settimana {
+  color: var(--ottone-scuro);
+  font-size: 1.15rem;
+  font-style: italic;
+}
+
+.foglio__giorno {
+  font-size: 4.75rem;
+  line-height: 0.95;
+  font-variant-numeric: lining-nums;
+}
+
+.foglio__mese {
+  font-size: 1.35rem;
+}
+
+.foglio__ora {
+  width: 100%;
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px dotted var(--linea);
+  color: var(--testo-2);
+  font-family: var(--font-testo);
+  font-size: 0.9rem;
+}
+
+@media (min-width: 48rem) {
+  .ritiro__griglia {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: clamp(2.5rem, 6vw, 5rem);
+  }
+
+  .foglio {
+    width: 11rem;
+    margin-top: 0.5rem;
+  }
+
+  .foglio__giorno {
+    font-size: 5.75rem;
+  }
+}
+
+/* ------------------------------------------------------------------ edizione: la tracciabilità */
+
+.tracciabilita {
+  padding-block: clamp(1.25rem, 3vw, 2.5rem) clamp(2.5rem, 6vw, 4.5rem);
+  background: var(--avorio);
+}
+
+.tracciabilita__testa {
+  max-width: 40rem;
+  margin-bottom: clamp(2rem, 5vw, 3rem);
+}
+
+.tracciabilita__testa .attacco {
+  margin-bottom: 0;
+}
+
+/* Sul telefono le tappe scendono lungo un sentiero tratteggiato, come in home */
+.tappe {
+  position: relative;
+  display: grid;
+  gap: 2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tappe::before {
+  position: absolute;
+  top: 0.75rem;
+  bottom: 2rem;
+  left: 0.45rem;
+  border-left: 1.5px dashed var(--ottone);
+  content: '';
+}
+
+.tappa {
+  position: relative;
+  padding-left: 2.25rem;
+}
+
+/* Il segno della tappa sul sentiero */
+.tappa::before {
+  position: absolute;
+  top: 0.4rem;
+  left: 0;
+  width: 0.95rem;
+  height: 0.95rem;
+  border: 1.5px solid var(--ottone);
+  border-radius: 50%;
+  background: var(--avorio);
+  box-shadow: 0 0 0 4px var(--avorio);
+  content: '';
+}
+
+.tappa:last-child::before {
+  background: var(--ottone);
+}
+
+.tappa__corpo {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tappa__quando {
+  margin-bottom: 0.75rem;
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.2rem;
+  font-style: italic;
+}
+
+.tappa__scheda {
+  flex: 1;
+}
+
+.tappa__scheda h3 {
+  font-size: 1.6rem;
+}
+
+.tappa__scheda > p {
+  margin-bottom: 0;
+}
+
+.tappa__sottotitolo {
+  margin: 1.1rem 0 0.2rem;
+  color: var(--testo-2);
+  font-size: 0.88rem;
+}
+
+.tappa__scheda .ricetta__nome,
+.tappa__scheda .ricetta__valore {
+  font-size: 1.1rem;
+}
+
+.tappa__dati {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1.1rem 0 0;
+  padding-top: 0.9rem;
+  border-top: 1px solid var(--filetto);
+  font-size: 0.95rem;
+}
+
+.tappa__dati div {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.tappa__dati dt {
+  color: var(--testo-2);
+  font-size: 0.88rem;
+}
+
+.tappa__dati dd {
+  margin: 0;
+}
+
+/* Sul computer il sentiero corre in orizzontale sopra le tre tappe */
+@media (min-width: 62rem) {
+  .tappe {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(1.5rem, 2.5vw, 2.25rem);
+  }
+
+  .tappe::before {
+    top: 0.85rem;
+    right: 0;
+    bottom: auto;
+    left: 0.45rem;
+    border-top: 1.5px dashed var(--ottone);
+    border-left: 0;
+  }
+
+  .tappa {
+    padding-top: 2.25rem;
+    padding-left: 0;
+  }
+
+  .tappa::before {
+    top: 0.4rem;
+  }
+}
+
+/* ------------------------------------------------------------------ edizione: la tiratura */
+
+.tiratura-soci {
+  padding-block: clamp(1.25rem, 3vw, 2.5rem) clamp(3rem, 7vw, 5.5rem);
+}
+
+.tiratura-soci__griglia {
+  display: grid;
+  gap: 2rem;
+}
+
+.tiratura-soci__testo p:last-child {
+  margin-bottom: 0;
+}
+
+.tiratura-soci__quote .quote {
+  margin-top: 0;
+}
+
+.tiratura-soci__quote .nota {
+  margin: 1.25rem 0 0;
+}
+
+@media (min-width: 62rem) {
+  .tiratura-soci__griglia {
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: clamp(3rem, 6vw, 5rem);
+    align-items: center;
+  }
+}

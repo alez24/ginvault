@@ -70,6 +70,40 @@ export function edizioneDellaStagione(iso: string): string {
   return `Edizione ${STAGIONI[mese - 1]} ${anno}`;
 }
 
+// Gli appuntamenti del club sono in distilleria: le ore sono quelle di Roma
+const FUSO = 'Europe/Rome';
+const FORMATO_GIORNO = new Intl.DateTimeFormat('it-IT', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+  timeZone: FUSO,
+});
+const FORMATO_ORA = new Intl.DateTimeFormat('it-IT', { hour: 'numeric', minute: '2-digit', timeZone: FUSO });
+
+/** "sabato 22 agosto 2026". */
+export function giornoConNome(iso: string): string {
+  return FORMATO_GIORNO.format(new Date(iso));
+}
+
+/** Le parti della data, per mostrarle separate: { settimana: "sabato", giorno: "22", mese: "agosto", anno: "2026" }. */
+export function partiDelGiorno(iso: string): { settimana: string; giorno: string; mese: string; anno: string } {
+  const parti = FORMATO_GIORNO.formatToParts(new Date(iso));
+  const parte = (tipo: Intl.DateTimeFormatPartTypes) => parti.find((p) => p.type === tipo)?.value ?? '';
+  return { settimana: parte('weekday'), giorno: parte('day'), mese: parte('month'), anno: parte('year') };
+}
+
+/** "18" per le ore piene, "18:30" altrimenti. */
+export function ora(iso: string): string {
+  const testo = FORMATO_ORA.format(new Date(iso));
+  return testo.endsWith(':00') ? testo.slice(0, -3) : testo;
+}
+
+/** "dalle 18 alle 20". */
+export function orario(inizio: string, fine: string): string {
+  return `dalle ${ora(inizio)} alle ${ora(fine)}`;
+}
+
 /** "lavanda" -> "Lavanda". */
 export function maiuscola(testo: string): string {
   return testo ? testo.charAt(0).toLocaleUpperCase('it-IT') + testo.slice(1) : testo;

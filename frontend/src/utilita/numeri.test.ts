@@ -5,10 +5,14 @@ import {
   cifre,
   differenza,
   edizioneDellaStagione,
+  giornoConNome,
   ilGiorno,
   leggiNumero,
   maiuscola,
   numero,
+  ora,
+  orario,
+  partiDelGiorno,
   perCampo,
 } from './numeri';
 
@@ -79,3 +83,23 @@ describe('numeri mostrati', () => {
     expect(maiuscola('')).toBe('');
   });
 });
+
+describe('appuntamenti del club, con l’ora di Roma', () => {
+  const inizio = '2026-08-22T18:00:00+02:00';
+
+  it('il giorno con il nome', () => {
+    expect(giornoConNome(inizio)).toBe('sabato 22 agosto 2026');
+    expect(partiDelGiorno(inizio)).toEqual({ settimana: 'sabato', giorno: '22', mese: 'agosto', anno: '2026' });
+  });
+
+  it('l’ora senza i minuti quando è piena', () => {
+    expect(ora(inizio)).toBe('18');
+    expect(ora('2026-08-22T18:30:00+02:00')).toBe('18:30');
+    expect(orario(inizio, '2026-08-22T20:00:00+02:00')).toBe('dalle 18 alle 20');
+  });
+
+  it('un orario in UTC diventa l’ora italiana', () => {
+    expect(ora('2026-08-22T16:00:00Z')).toBe('18');
+  });
+});
+

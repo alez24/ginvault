@@ -13,6 +13,7 @@ import '@fontsource/inter-tight/500.css';
 import '@fontsource/inter-tight/600.css';
 import './stile.css';
 import './stile-distilleria.css';
+import './stile-soci.css';
 
 import { App } from './App';
 import { SessioneProvider } from './sessione/Sessione';
