@@ -64,6 +64,14 @@ Prerequisiti:
    il port-forward del punto 1. Le sessioni sono in memoria nel gateway e si
    perdono: rifai il login.
 
+   **Quando hai finito con Vite, togli l'override**
+   (`kubectl set env deployment/gateway -n ginvault FRONTEND_URL-`): il
+   front-end del cluster, su `http://localhost` con `minikube tunnel`, vuole
+   `FRONTEND_URL` = `/`, altrimenti dopo il login il browser finisce su
+   `localhost:5173`. Anche `kubectl apply -k k8s/` non lo toglie: la variabile
+   aggiunta con `set env` non è nel file, e l'apply lascia stare quello che il
+   file non nomina.
+
 3. **Terminale 2: il dev server.**
 
    ```powershell
@@ -140,6 +148,30 @@ poi si apre **http://localhost**. Il container `frontend` pubblica la porta 80
 con il gateway: da nginx i servizi e i database non si raggiungono.
 
 Per costruire solo l'immagine: `docker build -t ginvault/frontend:prova frontend`.
+
+Il Dockerfile cambia anche `worker_processes auto` in `worker_processes 2`: con
+`auto` nginx avvia un processo per ogni CPU che vede, e in Docker Desktop e
+Minikube sono 32. Per dei file statici ne bastano 2.
+
+### Su Kubernetes
+
+La stessa immagine, costruita nel nodo con
+`minikube image build -t ginvault/frontend:0.1 .\frontend`, gira su Minikube
+([`k8s/frontend.yaml`](../k8s/frontend.yaml)):
+
+- **Deployment a 2 repliche**: il front-end non ha stato, se un pod cade
+  risponde l'altro; gli aggiornamenti tolgono un pod vecchio solo quando il nuovo
+  è Ready. Il filesystem del container è in sola lettura (nginx scrive solo in
+  `/tmp`, un volume `emptyDir`), senza privilegi né capability;
+- **Service `frontend`** (porta 80 → 8080 dei pod);
+- l'**Ingress** manda `/api`, `/auth`, `/oauth2`, `/login` e `/logout` al
+  gateway e tutto il resto al front-end: è lui a fare lo smistamento che con
+  Compose fa nginx, quindi il proxy di nginx su Kubernetes non riceve traffico;
+- una **NetworkPolicy** fa entrare nei pod del front-end solo il controller
+  dell'Ingress.
+
+Avvio, verifica e la storia di Marco dal front-end, passo per passo, sono nella
+"Demo completa" di [`k8s/README.md`](../k8s/README.md#demo-completa).
 
 ## Back-office del distillatore (storia di Marco)
 

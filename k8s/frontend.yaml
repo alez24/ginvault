@@ -1,0 +1,139 @@
+# =============================================================================
+# frontend: l'app React servita da nginx (frontend/Dockerfile).
+#
+# Due oggetti:
+#   1) Deployment  -> 2 pod con ginvault/frontend:0.1
+#   2) Service     -> nome DNS stabile "frontend": lo usa l'Ingress per "/"
+#
+# Niente ConfigMap né Secret: l'immagine contiene solo file statici e la
+# configurazione di nginx. Le API non passano da qui: l'Ingress manda /api,
+# /auth, /oauth2, /login e /logout direttamente al gateway (k8s/ingress.yaml).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1) Deployment.
+#    DUE repliche, a differenza del gateway: il front-end non ha stato (niente
+#    sessioni, niente dati), ogni pod serve gli stessi file e il Service divide
+#    le richieste tra i due. Se un pod cade, l'altro continua a rispondere.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: ginvault
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  # Aggiornamento (nuova immagine): un pod nuovo in più alla volta (maxSurge),
+  # e nessun pod vecchio tolto prima che il nuovo sia Ready (maxUnavailable 0).
+  # Così durante l'aggiornamento ci sono sempre almeno 2 pod che rispondono.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: frontend
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: ginvault
+    spec:
+      enableServiceLinks: false   # vedi edizioni-db.yaml
+
+      # Sicurezza del pod: il kubelet rifiuta di avviare il container se
+      # l'immagine gira come root (l'immagine nginx "unprivileged" usa l'uid
+      # 101). seccomp RuntimeDefault: il kernel blocca le chiamate di sistema
+      # che a un server web non servono.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: frontend
+          # Immagine costruita DENTRO Minikube (minikube image build):
+          # imagePullPolicy Never = non cercarla su Docker Hub
+          image: ginvault/frontend:0.1
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080   # nginx non è root: niente porta 80
+
+          # Sicurezza del container:
+          #  - readOnlyRootFilesystem: nessuno può modificare i file dell'immagine
+          #    (né la configurazione di nginx né l'app), nemmeno nginx stesso;
+          #  - allowPrivilegeEscalation false: nessun programma può diventare root;
+          #  - capabilities drop ALL: nessun privilegio speciale del kernel.
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+          # nginx scrive solo in /tmp (pid e file temporanei, vedi nginx.conf
+          # dell'immagine): con il filesystem in sola lettura gli serve una
+          # cartella scrivibile, il volume "tmp" qui sotto.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+          # Probe HTTP sulla home: nginx parte in un attimo, niente startupProbe.
+          # readinessProbe: se non risponde, il pod esce dal Service (l'Ingress
+          # manda le richieste solo all'altro). livenessProbe: se resta bloccato,
+          # il kubelet riavvia il container.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # nginx con 2 worker e file statici: pochi MB di memoria
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+
+      volumes:
+        # emptyDir: una cartella vuota creata con il pod e cancellata con lui.
+        # Il limite evita che un errore riempia il disco del nodo.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+
+---
+# -----------------------------------------------------------------------------
+# 2) Service. ClusterIP: dall'esterno il front-end si raggiunge solo attraverso
+#    l'Ingress. La porta 80 del Service porta alla 8080 dei pod (targetPort per
+#    nome: "http" del container).
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: ginvault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

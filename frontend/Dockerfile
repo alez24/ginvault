@@ -33,6 +33,13 @@ FROM nginxinc/nginx-unprivileged:1.30-alpine
 COPY nginx/default.conf /etc/nginx/conf.d/default.conf
 COPY nginx/intestazioni.conf /etc/nginx/ginvault/intestazioni.conf
 
+# "worker_processes auto" avvia un processo per ogni CPU che nginx vede: sul nodo
+# di Minikube (e in Docker Desktop) sono 32, anche se il container ne può usare
+# una frazione. Per servire file statici ne bastano 2. Il grep ferma la build se
+# la riga dell'immagine base cambia e la sostituzione non avviene.
+RUN sed -i -E 's/^worker_processes[[:space:]]+auto;/worker_processes 2;/' /etc/nginx/nginx.conf \
+ && grep -q '^worker_processes 2;' /etc/nginx/nginx.conf
+
 # Dallo stage "build" solo il risultato della build
 COPY --from=build /app/dist /usr/share/nginx/html
 
