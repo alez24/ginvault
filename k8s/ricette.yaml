@@ -3,7 +3,7 @@
 #
 # Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
 #   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
-#   2) Deployment  -> il pod con il container ginvault/ricette:0.1
+#   2) Deployment  -> il pod con il container ginvault/ricette:0.2
 #   3) Service     -> nome DNS stabile "ricette": lo usano il gateway
 #                     (/api/ricette/**) ed Edizioni (validazione REST)
 # =============================================================================
@@ -49,8 +49,8 @@ spec:
       enableServiceLinks: false
       containers:
         - name: ricette
-          # Costruita dentro Minikube: minikube image build -t ginvault/ricette:0.1 ricette
-          image: ginvault/ricette:0.1
+          # Costruita dentro Minikube: minikube image build -t ginvault/ricette:0.2 ricette
+          image: ginvault/ricette:0.2
           imagePullPolicy: Never
           ports:
             - name: http

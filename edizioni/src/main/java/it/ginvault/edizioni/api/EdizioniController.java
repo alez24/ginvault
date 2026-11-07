@@ -1,6 +1,7 @@
 package it.ginvault.edizioni.api;
 
 import java.net.URI;
+import java.util.List;
 import java.util.UUID;
 
 import it.ginvault.edizioni.applicazione.EdizioneVista;
@@ -65,5 +66,12 @@ public class EdizioniController {
     @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
     public EdizioneVista trova(@PathVariable UUID id) {
         return servizio.trova(id);
+    }
+
+    /** Elenco delle edizioni, dalla più recente. */
+    @GetMapping
+    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
+    public List<EdizioneVista> elenco() {
+        return servizio.elenco();
     }
 }

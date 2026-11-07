@@ -76,9 +76,9 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.2 .\edizioni
-minikube image build -t ginvault/ricette:0.1  .\ricette
-minikube image build -t ginvault/gateway:0.2  .\gateway
+minikube image build -t ginvault/edizioni:0.3 .\edizioni
+minikube image build -t ginvault/ricette:0.2  .\ricette
+minikube image build -t ginvault/gateway:0.3  .\gateway
 
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
@@ -366,8 +366,8 @@ kubectl scale deployment/edizioni -n ginvault --replicas=1
 **Rolling update** con una nuova versione dell'immagine:
 
 ```powershell
-minikube image build -t ginvault/edizioni:0.3 .\edizioni
-# cambiare il tag in k8s/edizioni.yaml (0.2 -> 0.3), poi:
+minikube image build -t ginvault/edizioni:0.4 .\edizioni
+# cambiare il tag in k8s/edizioni.yaml (0.3 -> 0.4), poi:
 kubectl apply -k k8s/
 kubectl rollout status deployment/edizioni -n ginvault   # il nuovo pod parte prima che il vecchio si spenga
 kubectl rollout history deployment/edizioni -n ginvault

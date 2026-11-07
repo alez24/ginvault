@@ -124,6 +124,11 @@ ginvault:
     distillatore: ${RUOLI_DISTILLATORE:}
     resp-acquisti: ${RUOLI_RESP_ACQUISTI:}
     admin: ${RUOLI_ADMIN:}
+  frontend:
+    # Home del front-end: qui torna il browser dopo login, login negato e logout.
+    # "/" = stessa origine del gateway (Ingress di Kubernetes, Compose).
+    # Con il dev server di Vite: FRONTEND_URL=http://localhost:5173 (frontend/README.md).
+    url: ${FRONTEND_URL:/}
 
 server:
   port: 8080

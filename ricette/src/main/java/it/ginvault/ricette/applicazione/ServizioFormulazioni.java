@@ -1,11 +1,14 @@
 package it.ginvault.ricette.applicazione;
 
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
 import it.ginvault.ricette.dominio.Dose;
 import it.ginvault.ricette.dominio.Formulazione;
 import it.ginvault.ricette.dominio.FormulazioneRepository;
+import it.ginvault.ricette.dominio.StatoFormulazione;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,6 +57,26 @@ public class ServizioFormulazioni {
     @Transactional(readOnly = true)
     public FormulazioneVista trova(UUID id) {
         return FormulazioneVista.di(carica(id));
+    }
+
+    /**
+     * Elenco per il back-office, dalla formulazione con la prova più recente.
+     * Con uno stato (es. SCELTA) solo quelle in quello stato; con null tutte.
+     */
+    @Transactional(readOnly = true)
+    public List<FormulazioneVista> elenco(StatoFormulazione stato) {
+        List<Formulazione> formulazioni = stato == null ? repository.findAll() : repository.findAllByStato(stato);
+        return formulazioni.stream()
+                .map(FormulazioneVista::di)
+                .sorted(Comparator.comparing(ServizioFormulazioni::ultimaProva).reversed())
+                .toList();
+    }
+
+    private static Instant ultimaProva(FormulazioneVista formulazione) {
+        return formulazione.prove().stream()
+                .map(FormulazioneVista.Prova::registrataIl)
+                .max(Comparator.naturalOrder())
+                .orElse(Instant.EPOCH);
     }
 
     private Formulazione carica(UUID id) {

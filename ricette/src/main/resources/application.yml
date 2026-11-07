@@ -26,6 +26,11 @@ spring:
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+    properties:
+      # Elenco delle formulazioni: prove e dosi si caricano a blocchi di 50
+      # (una query "... where id in (...)") invece che una query per ogni
+      # formulazione e per ogni prova (il problema "N+1").
+      hibernate.default_batch_fetch_size: 50
 
   security:
     oauth2:

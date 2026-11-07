@@ -329,6 +329,9 @@ services:
       RUOLI_DISTILLATORE: ${RUOLI_DISTILLATORE:-}
       RUOLI_RESP_ACQUISTI: ${RUOLI_RESP_ACQUISTI:-}
       RUOLI_ADMIN: ${RUOLI_ADMIN:-}
+      # Dove torna il browser dopo login e logout. "/" = front-end sulla stessa
+      # origine; con il dev server di Vite: FRONTEND_URL=http://localhost:5173
+      FRONTEND_URL: ${FRONTEND_URL:-/}
     # Il gateway parte per ultimo: quando è "healthy" tutto il sistema è pronto
     depends_on:
       edizioni:
