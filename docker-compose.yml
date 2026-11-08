@@ -317,11 +317,15 @@ services:
       DB_USER: magazzino
       DB_PASSWORD: magazzino
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Pubblica ConsegnaRegistrata su magazzino.eventi, dalla tabella outbox
+      KAFKA_BOOTSTRAP: kafka:9092
     depends_on:
       magazzino-db:
         condition: service_healthy
       # Usa Kafka: parte quando i topic esistono (e "up --wait" non tratta
-      # come un errore l'uscita di kafka-topic, perché è una dipendenza)
+      # come un errore l'uscita di kafka-topic, perché è una dipendenza).
+      # Se poi Kafka si ferma, magazzino resta su: le consegne si registrano
+      # e gli eventi aspettano nell'outbox.
       kafka-topic:
         condition: service_completed_successfully
     healthcheck:

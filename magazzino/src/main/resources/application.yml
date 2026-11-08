@@ -1,11 +1,12 @@
-# Configurazione del microservizio Magazzino.
+# Configurazione del microservizio Magazzino (subdomain Approvvigionamento:
+# fornitori, ordini di acquisto, consegne, lotti di botaniche).
 #
 # Sintassi ${VARIABILE:default}: Spring usa la variabile d'ambiente se esiste,
 # altrimenti il valore dopo i due punti.
 #   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
 #     su localhost:5444, gateway su localhost:8080)
 #   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
-#     container (magazzino-db:5432, gateway:8080)
+#     container (magazzino-db:5432, gateway:8080, kafka:9092)
 
 spring:
   application:
@@ -20,12 +21,46 @@ spring:
 
   jpa:
     hibernate:
-      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity.
-      # Comodo in sviluppo; quando ci saranno le entità valuteremo Flyway.
+      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity (anche "outbox").
       ddl-auto: update
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+    properties:
+      # Elenchi (ordini, fornitori con lo storico): le collezioni si caricano a
+      # blocchi di 50 invece che con una query per riga (il problema "N+1")
+      hibernate.default_batch_fetch_size: 50
+
+  # Kafka: solo per PUBBLICARE. Gli eventi non partono dalla richiesta HTTP ma
+  # dall'outbox (vedi PubblicatoreOutbox): se Kafka è giù, la consegna si
+  # registra lo stesso e l'evento aspetta nella tabella.
+  kafka:
+    # In Compose e su Kubernetes: kafka:9092 (rete kafka-net / NetworkPolicy)
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      client-id: magazzino
+      # Chiave e valore come testo: il valore è il JSON della busta, scritto
+      # dall'outbox. Così nessun header __TypeId__ con nomi di classi Java
+      # (il contratto è il JSON, docs/eventi.md).
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Il broker conferma solo dopo aver scritto il messaggio (con più broker:
+      # su tutte le repliche in sincronia)
+      acks: all
+      properties:
+        # Niente doppioni causati dai tentativi interni del producer
+        enable.idempotence: true
+        # Con Kafka giù il publisher non deve restare bloccato a lungo: dopo
+        # pochi secondi rinuncia, e l'evento riprova al giro successivo
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 4000
+        # Quando il pod kafka-0 riparte ha un IP nuovo: il producer prova
+        # prima il vecchio, che non risponde. Con i valori di default
+        # aspetterebbe fino a 30 secondi prima di cercare il nuovo indirizzo;
+        # così rinuncia dopo 1 s, poi 2, 4, fino a 5 s al massimo.
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
 
   security:
     oauth2:
@@ -47,6 +82,29 @@ spring:
 server:
   # Porta fissa per servizio (8084 = magazzino), uguale in locale e in Docker
   port: 8084
+  # Il gateway toglie /api/magazzino dal path e lo dice con X-Forwarded-Prefix:
+  # i Location dei 201 puntano all'indirizzo pubblico (vedi edizioni).
+  forward-headers-strategy: framework
+
+magazzino:
+  outbox:
+    # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
+    # (fixedDelay: il conteggio riparte quando il giro precedente è finito)
+    intervallo-ms: 1000
+    # Quanti eventi al massimo per giro
+    lotto: 50
+    # Quanto aspettare la conferma di Kafka per un evento, oltre -> nuovo tentativo
+    attesa-conferma: 5s
+  # Fornitori e lotto dei campi della storia di Elena (DatiIniziali): creati
+  # all'avvio se mancano. Con false il magazzino parte vuoto.
+  dati-iniziali: true
+
+logging:
+  level:
+    # Spring Kafka scriverebbe un ERROR, con il messaggio intero, a ogni invio
+    # fallito: con Kafka spento uno ogni pochi secondi. PubblicatoreOutbox
+    # scrive già un WARN al primo tentativo fallito e poi uno ogni 30.
+    org.springframework.kafka.support.LoggingProducerListener: off
 
 management:
   endpoints:

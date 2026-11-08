@@ -60,12 +60,8 @@ per tutti gli eventi e il contenuto specifico in `payload`:
   "eventId": "6f1c2e8a-3b0d-4c55-9a7e-2d4f1b9c0e17",
   "tipo": "ConsegnaRegistrata",
   "versione": 1,
-  "occorsoIl": "2026-07-18T08:30:00Z",
-  "payload": {
-    "botanica": "lavanda",
-    "kgOrdinati": 12,
-    "kgArrivati": 10.8
-  }
+  "occorsoIl": "2026-08-06T08:30:00Z",
+  "payload": { "...": "i dati dell'evento, diversi per ogni tipo" }
 }
 ```
 
@@ -75,7 +71,7 @@ per tutti gli eventi e il contenuto specifico in `payload`:
 | `tipo` | Il nome dell'evento di dominio, al passato: `ConsegnaRegistrata`. Il consumer sceglie cosa fare in base a questo campo. |
 | `versione` | La versione del formato di `payload` per quel `tipo`, da 1. |
 | `occorsoIl` | Quando il fatto è successo nel dominio, in UTC (ISO-8601 con `Z`). Non è l'ora di pubblicazione: con l'outbox un evento può partire più tardi, per esempio quando Kafka torna disponibile. |
-| `payload` | I dati dell'evento. Importi in kg come numeri decimali, id come stringhe. |
+| `payload` | I dati dell'evento. Pesi in kg come numeri decimali con 3 cifre dopo la virgola (il grammo), id come stringhe, date come `AAAA-MM-GG`. |
 
 Regole:
 
@@ -104,6 +100,73 @@ qui c'è cosa deve dire.
 
 La catena: `ConsegnaRegistrata` → Produzione → `ResaRicalcolata` → Edizioni →
 `TiraturaRidotta`, senza nessuna azione manuale dopo la registrazione della consegna.
+
+### `ConsegnaRegistrata` v1 (magazzino.eventi)
+
+Chiave: la botanica (`lavanda`). Lo pubblica Magazzino quando Elena registra
+una consegna, anche ridotta. Ogni ordine ha una sola consegna, quindi un solo
+evento per `ordineId`.
+
+```json
+{
+  "eventId": "20eefcec-a6e1-4a92-a120-bcd2cd1fbfe8",
+  "tipo": "ConsegnaRegistrata",
+  "versione": 1,
+  "occorsoIl": "2026-08-06T08:30:00Z",
+  "payload": {
+    "ordineId": "0b6e1f9a-2c4d-4e8f-9a1b-3c5d7e9f1a2b",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "lottoId": "5d2c8e4f-6a1b-4c3d-8e9f-0a1b2c3d4e5f",
+    "fornitoreId": "f0000000-0000-4000-8000-000000000001",
+    "botanica": "lavanda",
+    "origine": "Alta Val Varaita (Alpi Cozie)",
+    "kgOrdinati": 12.000,
+    "kgArrivati": 10.800,
+    "esitoQualita": "CONFORME",
+    "consegnataIl": "2026-08-06"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `ordineId` | l'ordine di acquisto, ora CONSEGNATO |
+| `edizioneId` | l'edizione per cui era stato fatto l'ordine. Magazzino non la controlla: la collega al piano di produzione chi legge l'evento |
+| `lottoId` | il lotto di botanica nato dalla consegna |
+| `fornitoreId` | il fornitore |
+| `botanica` | nome normalizzato: minuscolo, spazi singoli (`pino mugo`) |
+| `origine` | l'origine del fornitore, che diventa quella del lotto |
+| `kgOrdinati`, `kgArrivati` | consegna ridotta se `kgArrivati < kgOrdinati`; mai `kgArrivati > kgOrdinati` |
+| `esitoQualita` | `CONFORME` o `NON_CONFORME`. Un lotto non conforme resta tracciato ma non si usa per produrre |
+| `consegnataIl` | il giorno di arrivo (fuso di Roma) |
+
+## Transactional outbox
+
+Un evento non parte dalla richiesta HTTP: il servizio lo scrive nella sua
+tabella `outbox`, **nella stessa transazione** del cambiamento che racconta.
+Un publisher la svuota verso Kafka. Così:
+
+- se Kafka è spento, la richiesta va a buon fine lo stesso e l'evento parte
+  quando Kafka torna;
+- se la transazione fallisce, non resta un evento "orfano" di un cambiamento
+  mai salvato;
+- l'`eventId` nasce con la riga di outbox: un nuovo tentativo manda lo stesso id.
+
+| Colonna | Significato |
+|---|---|
+| `numero` | ordine di scrittura: gli eventi partono in questo ordine |
+| `event_id` | l'`eventId` della busta (UNIQUE) |
+| `topic`, `chiave`, `tipo` | dove va il messaggio, con quale chiave, che evento è |
+| `messaggio` | la busta JSON, già pronta: è il valore del messaggio Kafka |
+| `creato_il` | quando è stato scritto |
+| `pubblicato_il` | quando Kafka ha confermato; `null` = ancora da mandare |
+| `tentativi`, `ultimo_errore` | quante volte si è provato, e perché l'ultimo tentativo è fallito |
+
+Il publisher gira ogni secondo e manda gli eventi uno alla volta, aspettando la
+conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
+gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
+volta**: i consumer devono scartare gli `eventId` già visti. Ce l'ha Magazzino
+dal passo 2; Edizioni la avrà dal passo 3, per `EdizioneCreata`.
 
 ## Vedere i messaggi
 

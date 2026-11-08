@@ -305,14 +305,98 @@ nuova, quote nuove):
 
 Con la storia di Elena passerà su **Kafka** verso **Notifiche**, che avviserà
 chi aveva prenotato. Per non perdere eventi se Kafka è giù, si potrà usare una
-*transactional outbox*.
+*transactional outbox* (Magazzino la usa già, vedi sotto).
+
+## Magazzino: approvvigionamento e transactional outbox
+
+Il subdomain **Approvvigionamento**: Elena (RESP_ACQUISTI) ordina le botaniche
+ai fornitori e registra le consegne. Dal gateway: `/api/magazzino/...`.
+
+| Endpoint | Ruolo | Cosa fa |
+|---|---|---|
+| `POST /ordini` | RESP_ACQUISTI | ordine APERTO: fornitore, botanica, kg, consegna attesa, edizione |
+| `POST /ordini/{id}/consegne` | RESP_ACQUISTI | registra la consegna, anche ridotta: chiude l'ordine, crea il lotto, aggiorna lo storico del fornitore. 201 + `Location` del lotto |
+| `GET /ordini`, `GET /ordini/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | ordini, con la consegna (`ridotta`, `kgMancanti`, `inRitardo`, `giorniDiRitardo`) |
+| `GET /lotti?botanica=lavanda`, `GET /lotti/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | lotti con origine, scadenza, esito qualità, `utilizzabile` |
+| `GET /fornitori`, `GET /fornitori/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | scheda del fornitore: riepilogo (puntuali, in ritardo, ridotte) e storico, dalla consegna più recente |
+
+Regole della consegna (aggregato `OrdineDiAcquisto`):
+- **una consegna per ordine**: quella che arriva chiude l'ordine, anche se
+  ridotta. Una seconda consegna → 409;
+- kg arrivati maggiori di zero e **non più di quelli ordinati** (422);
+- data di consegna non nel futuro, scadenza dopo la consegna (422);
+- *ridotta* = arrivati meno kg degli ordinati; *in ritardo* = consegnata dopo
+  la data attesa. La consegna di Elena è tutte e due: 10,8 kg su 12, sei
+  giorni dopo il 31 luglio;
+- l'**origine** del lotto è quella del fornitore: non si scrive a mano, quindi
+  non ha errori di battitura. È il dato che Produzione confronterà con
+  l'origine richiesta dall'edizione;
+- la `nota` della consegna (es. "pioggia durante la fioritura") finisce nello
+  storico del fornitore.
+
+All'avvio `DatiIniziali` crea, se mancano, i due fornitori della storia
+(Raccoglitori dell'Alta Val Varaita e Campi GinVault) e il **lotto dei campi**:
+2 kg di lavanda di origine diversa, quello che Elena proporrà e Marco rifiuterà.
+Id fissi, in `DatiIniziali.java`.
+
+**Transactional outbox.** Registrare la consegna e pubblicare
+`ConsegnaRegistrata` su Kafka sono due scritture su due sistemi diversi. Se
+fossero separate, un crash o Kafka spento in mezzo lascerebbe una consegna
+senza evento (l'edizione non scende mai a 540) o un evento senza consegna.
+Per questo:
+
+1. nella **stessa transazione** della consegna, `ScritturaOutbox`
+   (`@TransactionalEventListener(phase = BEFORE_COMMIT)`) scrive l'evento,
+   già in JSON, nella tabella `outbox` del database di magazzino. Commit di
+   tutto o di niente: se la riga non si può scrivere, salta anche la consegna;
+2. `PubblicatoreOutbox`, ogni secondo, prende le righe non pubblicate in ordine
+   di `numero`, le manda su Kafka e aspetta la conferma (`acks=all`). Poi
+   segna `pubblicato_il`;
+3. se Kafka non risponde, la riga resta lì con `tentativi` e `ultimo_errore`,
+   e il giro si ferma per non cambiare l'ordine degli eventi. Al giro dopo si
+   riprova, finché Kafka torna. La richiesta HTTP di Elena non aspetta mai Kafka;
+4. garanzia **almeno una volta**: se la conferma si perde, lo stesso evento
+   (stesso `eventId`) può partire due volte. Il consumer di Produzione scarta
+   gli `eventId` già elaborati (passo 3).
+
+Un blocco *advisory* di PostgreSQL (`pg_try_advisory_xact_lock`) fa lavorare
+un solo publisher alla volta anche con più repliche di magazzino.
+
+```bash
+# La tabella outbox: cosa è partito, cosa aspetta e perché
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select numero, tipo, chiave, tentativi, pubblicato_il, ultimo_errore from outbox order by numero"
+# Il contenuto di un evento (la busta JSON di docs/eventi.md)
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select jsonb_pretty(messaggio::jsonb) from outbox order by numero desc limit 1"
+```
+
+Prova senza front-end, dalla console del browser dopo il login con un utente in
+`RUOLI_RESP_ACQUISTI` (la funzione `api` è in
+[docs/demo-storia-marco.md](docs/demo-storia-marco.md#1-login-e-console-del-browser)):
+
+```js
+const fornitore = 'f0000000-0000-4000-8000-000000000001';   // Alta Val Varaita
+const ordine = await api('POST', '/api/magazzino/ordini', {
+  fornitoreId: fornitore, botanica: 'lavanda', kgOrdinati: 12,
+  consegnaAttesa: '2026-07-31', edizioneId: crypto.randomUUID() });
+await api('POST', `/api/magazzino/ordini/${ordine.id}/consegne`, {
+  kgArrivati: 10.8, consegnataIl: '2026-08-06', scadenza: '2027-08-31',
+  esitoQualita: 'CONFORME', nota: 'pioggia durante la fioritura' });
+await api('GET', `/api/magazzino/fornitori/${fornitore}`);
+await api('GET', '/api/magazzino/lotti?botanica=lavanda');
+```
+
+Per vedere l'outbox al lavoro: `docker compose stop kafka`, registra un'altra
+consegna (risponde 201 lo stesso), guarda la riga in attesa con `tentativi`
+che sale, poi `docker compose start kafka`: dopo qualche secondo la riga ha
+`pubblicato_il` e il messaggio è nel topic. Su Kubernetes la stessa prova è in
+[k8s/README.md](k8s/README.md#transactional-outbox-con-kafka-spento).
 
 ## Test
 
 Ogni servizio Spring ha test di sicurezza (401/403/200, token scaduto, firma
 falsa, issuer sbagliato). Il gateway ha test sul flusso BFF: JWT inoltrato,
 header falsi rimossi, pagina di login, JWKS, ruoli.
-Ricette ed Edizioni hanno anche:
+Ricette, Edizioni e Magazzino hanno anche:
 - test di dominio;
 - test web (`@WebMvcTest`);
 - test di integrazione con un PostgreSQL vero, avviato da
@@ -320,6 +404,15 @@ Ricette ed Edizioni hanno anche:
 
 In Edizioni la parte di Ricette la fa [WireMock](https://wiremock.org/): un
 server HTTP vero, con cui si provano 404, 409, timeout e il JWT inoltrato.
+
+Magazzino usa anche un **Kafka vero** (`apache/kafka:4.3.0`, come in Compose).
+Il test di integrazione legge il topic con un consumer e verifica chiave, busta
+JSON e partizione. Poi prova l'outbox:
+- con il container di Kafka **in pausa** la consegna risponde 201, e la riga
+  resta in attesa con i tentativi falliti;
+- quando Kafka riprende, l'evento parte da solo;
+- se la riga di outbox non si può scrivere (un trigger di prova la rifiuta),
+  non si salva nemmeno la consegna.
 
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
@@ -416,6 +509,12 @@ avviato in IntelliJ.
   `VerificaJwtService`, e da controllare l'header `Origin`.
 - **Aumento di tiratura tutto su ONLINE:** scelta provvisoria, da discutere (vedi
   [Edizione: tiratura, quote e ricalcolo](#edizione-tiratura-quote-e-ricalcolo)).
+- **Outbox di magazzino:**
+  - le righe pubblicate restano nella tabella. Andranno cancellate dopo
+    qualche giorno, con un job periodico;
+  - un evento che non può partire mai (per esempio un topic che non esiste)
+    blocca quelli dopo di lui, per non cambiarne l'ordine. Si vede da
+    `tentativi` e `ultimo_errore` nella tabella `outbox`.
 - **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
   [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
   Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.

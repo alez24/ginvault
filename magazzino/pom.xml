@@ -36,6 +36,12 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- Bean Validation (@NotNull, @Positive...) sui corpi delle richieste REST -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
         <!-- Endpoint di monitoraggio: da qui arriva GET /health -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -64,6 +70,15 @@
             <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
         </dependency>
 
+        <!--
+            Spring for Apache Kafka: il KafkaTemplate con cui il publisher dell'outbox
+            manda gli eventi su magazzino.eventi. Versione gestita dal parent.
+        -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
         <!-- Test: JUnit 5, AssertJ, MockMvc... -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -73,6 +88,40 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Testcontainers: nei test di integrazione avvia un PostgreSQL e un Kafka
+            VERI in container Docker usa-e-getta (serve Docker in esecuzione).
+            @ServiceConnection collega da soli datasource e Kafka ai container.
+            Versioni gestite dal parent di Spring Boot.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Awaitility: "aspetta finché l'evento è su Kafka" senza sleep fissi -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

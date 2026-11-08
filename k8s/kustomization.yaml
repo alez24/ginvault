@@ -23,6 +23,8 @@ resources:
   - edizioni.yaml
   - ricette-db.yaml
   - ricette.yaml
+  - magazzino-db.yaml
+  - magazzino.yaml
   - networkpolicy-db.yaml
   - networkpolicy-frontend-gateway.yaml
   - networkpolicy-kafka.yaml
