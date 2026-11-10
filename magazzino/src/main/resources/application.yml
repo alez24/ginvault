@@ -80,13 +80,21 @@ spring:
           authority-prefix: ROLE_
 
 server:
-  # Porta fissa per servizio (8084 = magazzino), uguale in locale e in Docker
+  # Porta fissa per servizio (8084 = magazzino), uguale in locale e in Docker.
+  # La 9084 è quella del server gRPC (magazzino.grpc.porta).
   port: 8084
   # Il gateway toglie /api/magazzino dal path e lo dice con X-Forwarded-Prefix:
   # i Location dei 201 puntano all'indirizzo pubblico (vedi edizioni).
   forward-headers-strategy: framework
 
 magazzino:
+  # Il server gRPC Giacenze (giacenze-api/src/main/proto/giacenze.proto), per
+  # Produzione: Disponibilita e RiservaLotto. Sulla rete interna, mai esposto
+  # dal gateway; su Kubernetes la NetworkPolicy fa entrare solo produzione.
+  grpc:
+    porta: ${GRPC_PORT:9084}
+    # Allo spegnimento: quanto aspettare che finiscano le chiamate in corso
+    attesa-spegnimento: 5s
   outbox:
     # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
     # (fixedDelay: il conteggio riparte quando il giro precedente è finito)

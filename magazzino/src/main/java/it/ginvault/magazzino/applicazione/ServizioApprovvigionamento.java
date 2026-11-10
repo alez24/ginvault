@@ -11,13 +11,17 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import it.ginvault.magazzino.applicazione.Viste.DisponibilitaVista;
 import it.ginvault.magazzino.applicazione.Viste.EsitoConsegna;
 import it.ginvault.magazzino.applicazione.Viste.FornitoreVista;
+import it.ginvault.magazzino.applicazione.Viste.LottoDisponibileVista;
 import it.ginvault.magazzino.applicazione.Viste.LottoVista;
 import it.ginvault.magazzino.applicazione.Viste.OrdineVista;
 import it.ginvault.magazzino.applicazione.Viste.RiferimentoFornitore;
+import it.ginvault.magazzino.applicazione.Viste.RiservaVista;
 import it.ginvault.magazzino.dominio.Botaniche;
 import it.ginvault.magazzino.dominio.DatiConsegna;
+import it.ginvault.magazzino.dominio.EsitoRiserva;
 import it.ginvault.magazzino.dominio.Fornitore;
 import it.ginvault.magazzino.dominio.FornitoreRepository;
 import it.ginvault.magazzino.dominio.LottoDiBotanica;
@@ -121,6 +125,50 @@ public class ServizioApprovvigionamento {
         Map<UUID, RiferimentoFornitore> nomi = riferimenti(elenco.stream().map(LottoDiBotanica::fornitoreId).toList());
         LocalDate oggi = oggi();
         return elenco.stream().map(lotto -> LottoVista.di(lotto, nomi.get(lotto.fornitoreId()), oggi)).toList();
+    }
+
+    /**
+     * Giacenze.Disponibilita: i lotti utilizzabili (conformi e non scaduti) di
+     * una botanica, dal più recente, con i kg liberi. Anche quelli già tutti
+     * riservati, con 0 kg liberi (vedi giacenze.proto).
+     *
+     * @throws OrdineNonValido botanica mancante
+     */
+    @Transactional(readOnly = true)
+    public DisponibilitaVista disponibilita(String botanica) {
+        String nome = Botaniche.normalizza(botanica);
+        LocalDate oggi = oggi();
+        List<LottoDiBotanica> utilizzabili = lotti.findByBotanicaOrderByRicevutoIlDesc(nome).stream()
+                .filter(lotto -> lotto.utilizzabile(oggi))
+                .toList();
+        Map<UUID, RiferimentoFornitore> nomi =
+                riferimenti(utilizzabili.stream().map(LottoDiBotanica::fornitoreId).toList());
+        List<LottoDisponibileVista> elenco = utilizzabili.stream()
+                .map(lotto -> LottoDisponibileVista.di(lotto, nomi.get(lotto.fornitoreId())))
+                .toList();
+        BigDecimal totale = elenco.stream().map(LottoDisponibileVista::kgDisponibili)
+                .reduce(BigDecimal.ZERO.setScale(3), BigDecimal::add);
+        return new DisponibilitaVista(nome, elenco, totale);
+    }
+
+    /**
+     * Giacenze.RiservaLotto: mette da parte dei kg di un lotto per un piano di
+     * produzione. Idempotente su (lotto, piano): le regole sono in LottoDiBotanica.
+     *
+     * Due riserve sullo stesso lotto nello stesso istante: la @Version del lotto
+     * fa fallire il commit della seconda (ObjectOptimisticLockingFailureException),
+     * che ServizioGiacenze traduce in ABORTED: si può ripetere.
+     *
+     * @param chi il "sub" del JWT di chi la chiede
+     * @throws LottoNonTrovato  il lotto non esiste
+     * @throws it.ginvault.magazzino.dominio.RiservaRifiutata regole del lotto
+     */
+    @Transactional
+    public RiservaVista riservaLotto(UUID lottoId, UUID pianoId, BigDecimal kg, String chi) {
+        LottoDiBotanica lotto = lotti.findById(lottoId).orElseThrow(() -> new LottoNonTrovato(lottoId));
+        EsitoRiserva esito = lotto.riserva(pianoId, kg, oggi(), chi, orologio.instant());
+        lotti.save(lotto);
+        return RiservaVista.di(lotto, pianoId, esito);
     }
 
     @Transactional(readOnly = true)

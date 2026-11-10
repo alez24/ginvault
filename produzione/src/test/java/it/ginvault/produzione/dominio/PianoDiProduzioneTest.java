@@ -249,7 +249,145 @@ class PianoDiProduzioneTest {
         assertThat(Origini.stessa(ORIGINE, null)).isFalse();
     }
 
+    // ---------------------------------------------------------------- integrazione di un lotto
+
+    @Test
+    void ilLottoDeiCampiVieneRifiutatoPerchéLEdizioneDeveRestareFedeleAllaSuaOrigine() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+
+        assertThatThrownBy(() -> piano.verificaProposta(lotto(CAMPI), new BigDecimal("1.2")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto -> {
+                    assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.ORIGINE_DIVERSA);
+                    assertThat(rifiuto.getMessage())
+                            .startsWith("origine diversa: l'edizione deve restare fedele alla sua origine")
+                            .contains(ORIGINE, CAMPI);
+                    assertThat(rifiuto.dettagli()).containsEntry("origineRichiesta", ORIGINE)
+                            .containsEntry("origineLotto", CAMPI);
+                });
+        // Anche se lo si integrasse saltando la verifica, il piano lo rifiuta lo stesso
+        assertThatThrownBy(() -> piano.integraLotto(lotto(CAMPI), new BigDecimal("1.2"), ADESSO))
+                .isInstanceOf(IntegrazioneRifiutata.class).hasMessageStartingWith("origine diversa");
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("10.8");
+        assertThat(piano.integrazioni()).isEmpty();
+        assertThat(piano.eventi()).isEmpty();
+    }
+
+    @Test
+    void lOrigineContaPrimaDeiKg() {
+        // 2 kg dai campi quando ne mancano 1,2: il motivo è l'origine, non i kg
+        assertThatThrownBy(() -> dopoLaConsegnaDiElena().verificaProposta(lotto(CAMPI), new BigDecimal("2")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                        assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.ORIGINE_DIVERSA));
+    }
+
+    @Test
+    void unLottoDellOrigineRichiestaRiportaIlPianoA12KgE600Bottiglie() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+        LottoProposto lotto = lotto(" alta val varaita (ALPI cozie) ");
+
+        BigDecimal daRiservare = piano.verificaProposta(lotto, new BigDecimal("1.2"));
+        EsitoIntegrazione esito = piano.integraLotto(lotto, daRiservare, ADESSO);
+
+        assertThat(daRiservare).isEqualByComparingTo("1.2").hasScaleOf(3);
+        assertThat(esito).isEqualTo(EsitoIntegrazione.RESA_RICALCOLATA);
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("12");
+        assertThat(piano.kgMancanti()).isEqualByComparingTo("0");
+        assertThat(piano.bottiglieProducibili()).isEqualTo(600);
+        assertThat(piano.integrazioni()).singleElement().satisfies(integrata -> {
+            assertThat(integrata.lottoId()).isEqualTo(lotto.lottoId());
+            assertThat(integrata.kg()).isEqualByComparingTo("1.2");
+            assertThat(integrata.motivo()).startsWith("integrazione: 1,2 kg dal lotto");
+        });
+        assertThat(piano.eventi()).singleElement().isInstanceOfSatisfying(ResaRicalcolata.class, evento -> {
+            assertThat(evento.kgDisponibiliPrima()).isEqualByComparingTo("10.8");
+            assertThat(evento.kgDisponibili()).isEqualByComparingTo("12");
+            assertThat(evento.lottoId()).isEqualTo(lotto.lottoId());
+            assertThat(evento.ordineId()).isNull();
+        });
+    }
+
+    @Test
+    void unLottoSiIntegraUnaVoltaSola() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+        LottoProposto lotto = lotto(ORIGINE);
+        piano.integraLotto(lotto, new BigDecimal("0.5"), ADESSO);
+        piano.eventiPubblicati();
+
+        // Richiesta ripetuta dopo la riserva: niente di nuovo, niente evento
+        assertThat(piano.integraLotto(lotto, new BigDecimal("0.5"), ADESSO)).isEqualTo(EsitoIntegrazione.GIA_INTEGRATO);
+        assertThat(piano.integrazioni()).hasSize(1);
+        assertThat(piano.eventi()).isEmpty();
+        // Una proposta nuova dello stesso lotto invece si rifiuta, prima di riservare
+        assertThatThrownBy(() -> piano.verificaProposta(lotto, new BigDecimal("0.7")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                        assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.LOTTO_GIA_INTEGRATO));
+    }
+
+    @Test
+    void nonSiIntegraPiùDiQuelloCheManca() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+
+        assertThatThrownBy(() -> piano.verificaProposta(lotto(ORIGINE), new BigDecimal("2")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto -> {
+                    assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.KG_ECCESSIVI);
+                    assertThat(rifiuto.getMessage()).isEqualTo("Mancano 1,2 kg: non se ne possono integrare 2");
+                });
+    }
+
+    @Test
+    void unPianoCompletoNonHaBisognoDiIntegrazioni() {
+        assertThatThrownBy(() -> estate().verificaProposta(lotto(ORIGINE), new BigDecimal("1")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                        assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.PIANO_COMPLETO));
+    }
+
+    @Test
+    void lottiDiAltreBotanicheOKgNonValidiSiRifiutano() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+        LottoProposto genziana = new LottoProposto(UUID.randomUUID(), "genziana", ORIGINE, new BigDecimal("5"),
+                new BigDecimal("5"), LocalDate.of(2027, 7, 31), "Raccoglitori dell'Alta Val Varaita");
+
+        assertThatThrownBy(() -> piano.verificaProposta(genziana, BigDecimal.ONE))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                        assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.ALTRA_BOTANICA));
+        for (String kg : new String[] {"0", "-1", "0.0001"}) {
+            assertThatThrownBy(() -> piano.verificaProposta(lotto(ORIGINE), new BigDecimal(kg)))
+                    .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                            assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.KG_NON_VALIDI));
+        }
+    }
+
+    @Test
+    void unaConsegnaArrivataDopoLIntegrazioneNonSuperaIKgPrevisti() {
+        PianoDiProduzione piano = dopoLaConsegnaDiElena();
+        piano.integraLotto(lotto(ORIGINE), new BigDecimal("1.2"), ADESSO);
+        piano.eventiPubblicati();
+
+        // Un riordino da 1,2 kg arriva comunque: 10,8 + 1,2 + 1,2 = 13,2 -> al massimo 12
+        EsitoConsegna esito = piano.registraConsegna(consegna(UUID.randomUUID(), "lavanda", ORIGINE, "1.2", "1.2",
+                "CONFORME"), ADESSO);
+
+        assertThat(esito).isEqualTo(EsitoConsegna.RESA_INVARIATA);
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("12");
+        assertThat(piano.eventi()).isEmpty();
+    }
+
     // ---------------------------------------------------------------- aiuti
+
+    /** L'edizione d'estate dopo i 10,8 kg arrivati su 12: mancano 1,2 kg. */
+    private static PianoDiProduzione dopoLaConsegnaDiElena() {
+        PianoDiProduzione piano = estate();
+        piano.registraConsegna(consegna(UUID.randomUUID(), "lavanda", ORIGINE, "12", "10.8", "CONFORME"), ADESSO);
+        piano.eventiPubblicati();
+        assertThat(piano.kgMancanti()).isEqualByComparingTo("1.2");
+        return piano;
+    }
+
+    /** Un lotto di lavanda con 2 kg liberi, dell'origine indicata. */
+    private static LottoProposto lotto(String origine) {
+        return new LottoProposto(UUID.randomUUID(), "lavanda", origine, new BigDecimal("2.000"),
+                new BigDecimal("2.000"), LocalDate.of(2027, 7, 31), "Campi GinVault");
+    }
 
     /** L'edizione d'estate: 12 kg di lavanda dell'Alta Val Varaita, 20 g per bottiglia, 600 bottiglie. */
     private static PianoDiProduzione estate() {

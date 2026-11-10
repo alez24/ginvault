@@ -4,7 +4,7 @@
 #
 # Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
 #   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
-#   2) Deployment  -> il pod con il container ginvault/produzione:0.1
+#   2) Deployment  -> il pod con il container ginvault/produzione:0.2
 #   3) Service     -> nome DNS stabile "produzione": lo usa il gateway
 #                     (/api/produzione/**, PRODUZIONE_URI in gateway.yaml)
 #
@@ -12,6 +12,10 @@
 # (ConsegnaRegistrata -> resa ricalcolata) nel consumer group "produzione";
 # pubblica ResaRicalcolata su produzione.eventi con la transactional outbox e
 # i messaggi che non riesce a elaborare su produzione.dlt (docs/eventi.md).
+#
+# Chiama il servizio gRPC Giacenze di magazzino (magazzino:9084, deadline 2 s)
+# quando Marco integra un lotto: è l'unico pod che la NetworkPolicy
+# networkpolicy-magazzino.yaml lascia entrare sulla 9084 (docs/grpc.md).
 # =============================================================================
 
 apiVersion: v1
@@ -29,6 +33,8 @@ data:
   JWKS_URI: http://gateway:8080/.well-known/jwks.json
   # Il Service headless di Kafka (kafka.yaml)
   KAFKA_BOOTSTRAP: kafka:9092
+  # Il servizio gRPC Giacenze: porta "grpc" del Service magazzino
+  MAGAZZINO_GRPC: magazzino:9084
   MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
   # Senza database Produzione non può rispondere: la readiness include "db".
   # Kafka invece NO: con Kafka giù i piani si leggono lo stesso, i consumer
@@ -63,8 +69,11 @@ spec:
       enableServiceLinks: false
       containers:
         - name: produzione
-          # Costruita dentro Minikube: minikube image build -t ginvault/produzione:0.1 produzione
-          image: ginvault/produzione:0.1
+          # Costruita con Docker Desktop e caricata nel nodo (serve il secondo
+          # build context giacenze-api, vedi k8s/README.md):
+          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.2 produzione
+          #   minikube image load ginvault/produzione:0.2
+          image: ginvault/produzione:0.2
           imagePullPolicy: Never
           ports:
             - name: http

@@ -107,6 +107,14 @@ server:
   forward-headers-strategy: framework
 
 produzione:
+  # Il servizio gRPC Giacenze del magazzino (giacenze-api): Disponibilita e
+  # RiservaLotto, per integrare un lotto nel piano (POST /piani/{id}/integrazioni).
+  magazzino:
+    # host:porta; in Compose e su Kubernetes magazzino:9084 (rete interna)
+    indirizzo: ${MAGAZZINO_GRPC:localhost:9084}
+    # Ogni chiamata aspetta al massimo 2 secondi: poi gRPC la interrompe e
+    # Marco riceve un 503 ("riprova fra poco") invece di una pagina appesa
+    deadline: 2s
   outbox:
     # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
     intervallo-ms: 1000

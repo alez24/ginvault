@@ -30,6 +30,7 @@ resources:
   - networkpolicy-db.yaml
   - networkpolicy-frontend-gateway.yaml
   - networkpolicy-kafka.yaml
+  - networkpolicy-magazzino.yaml
   - kafka.yaml
   - gateway.yaml
   - frontend.yaml

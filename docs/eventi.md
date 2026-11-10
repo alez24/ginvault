@@ -139,9 +139,10 @@ nella stessa transazione dell'edizione. Produzione ne fa un piano di produzione.
 
 ### `ResaRicalcolata` v1 (produzione.eventi)
 
-Chiave: l'id dell'edizione. Lo pubblica Produzione quando una consegna cambia
-i kg di botanica di stagione su cui il piano può contare. Edizioni lo
-userà per ricalcolare la tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
+Chiave: l'id dell'edizione. Lo pubblica Produzione quando una consegna, o un
+lotto integrato da Marco ([docs/grpc.md](grpc.md)), cambia i kg di botanica di
+stagione su cui il piano può contare. Edizioni lo userà per ricalcolare la
+tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
 
 ```json
 {
@@ -157,6 +158,7 @@ userà per ricalcolare la tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
     "kgDisponibiliPrima": 12.000,
     "kgDisponibili": 10.800,
     "ordineId": "0b6e1f9a-2c4d-4e8f-9a1b-3c5d7e9f1a2b",
+    "lottoId": null,
     "motivo": "consegna ridotta: 10,8 su 12 kg"
   }
 }
@@ -165,9 +167,14 @@ userà per ricalcolare la tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
 | Campo | Significato |
 |---|---|
 | `kgDisponibili` | i kg su cui contare adesso: è il dato che serve a Edizioni |
-| `kgDisponibiliPrima`, `kgPrevisti` | per i log e per chi legge il topic: da quanto si scende, rispetto a cosa era previsto |
-| `ordineId` | la consegna che ha cambiato la resa |
-| `motivo` | in italiano: `consegna ridotta: 10,8 su 12 kg`, `origine diversa (...)`, `lotto non conforme ...` |
+| `kgDisponibiliPrima`, `kgPrevisti` | per i log e per chi legge il topic: da quanto si scende (o si risale), rispetto a cosa era previsto |
+| `ordineId` | la consegna che ha cambiato la resa; `null` per un'integrazione |
+| `lottoId` | il lotto integrato da Marco che ha cambiato la resa; `null` per una consegna |
+| `motivo` | in italiano: `consegna ridotta: 10,8 su 12 kg`, `origine diversa (...)`, `lotto non conforme ...`, `integrazione: 1,2 kg dal lotto ...` |
+
+`lottoId` è arrivato con il passo 4 (gRPC). È un campo facoltativo in più, quindi
+l'evento resta alla versione 1: chi legge solo `ordineId` continua a funzionare.
+Uno dei due è sempre `null`.
 
 Come Produzione calcola i kg disponibili, consegna dopo consegna:
 
@@ -188,8 +195,15 @@ in Σ ordinati.
 | La consegna di Elena: 10,8 su 12 kg | `max(0, 12 − 12) + 10,8` | 10,8 |
 | Due ordini da 6 kg, uno consegnato completo | `max(0, 12 − 6) + 6` | 12 |
 | 2 kg dai campi (altra origine) prima dell'ordine da 12 | `max(0, 12 − 0) + 0` | 12 |
+| Dopo Elena, Marco integra 1,2 kg dell'Alta Val Varaita | `max(0, 12 − 12) + 10,8 + 1,2` | 12 |
 
-`ResaRicalcolata` parte solo se il valore cambia.
+I kg di un lotto integrato (riservati in magazzino con `RiservaLotto`) sono
+utilizzabili ma non sono un ordine: entrano in Σ utilizzabili, non in Σ
+ordinati. Un lotto di un'altra origine non si integra mai: il piano lo rifiuta
+prima di riservarlo.
+
+`ResaRicalcolata` parte solo se il valore cambia. Con un'integrazione il valore
+può anche **salire** (10,8 → 12): Edizioni ne terrà conto nel passo 5.
 
 ### `ConsegnaRegistrata` v1 (magazzino.eventi)
 

@@ -41,7 +41,7 @@ public class ScritturaOutbox {
     public void resaRicalcolata(ResaRicalcolata evento) {
         ResaRicalcolataV1 payload = new ResaRicalcolataV1(evento.edizioneId(), evento.pianoId(), evento.botanica(),
                 evento.kgPrevisti(), evento.kgDisponibiliPrima(), evento.kgDisponibili(), evento.ordineId(),
-                evento.motivo());
+                evento.lottoId(), evento.motivo());
         scrivi("ResaRicalcolata", 1, evento.edizioneId(), evento.occorsoIl(), payload);
     }
 
@@ -64,9 +64,11 @@ public class ScritturaOutbox {
     /**
      * Il payload di ResaRicalcolata, versione 1: il CONTRATTO con Edizioni,
      * che ricalcola la tiratura da kgDisponibili (passo 5).
+     * Il campo lottoId (un lotto integrato da Marco) si è aggiunto dopo: è
+     * facoltativo, quindi resta la versione 1. Uno tra ordineId e lottoId è null.
      */
     record ResaRicalcolataV1(UUID edizioneId, UUID pianoId, String botanica, BigDecimal kgPrevisti,
                              BigDecimal kgDisponibiliPrima, BigDecimal kgDisponibili, UUID ordineId,
-                             String motivo) {
+                             UUID lottoId, String motivo) {
     }
 }

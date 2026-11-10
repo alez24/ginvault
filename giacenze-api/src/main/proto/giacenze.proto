@@ -1,0 +1,98 @@
+// =============================================================================
+// Giacenze: il servizio gRPC che Magazzino offre a Produzione.
+//
+// Relazione "partnership" (docs/grpc.md): i due contesti si mettono d'accordo
+// su questo contratto e lo cambiano insieme. Si usa una chiamata SINCRONA solo
+// dove serve una risposta subito: Marco prova a integrare un lotto nel piano e
+// deve sapere adesso se il lotto c'è e se i kg sono suoi. Tutto il resto
+// (consegne, rese, tirature) viaggia con gli eventi Kafka.
+//
+// Regole del contratto:
+//  - i kg sono stringhe decimali con il punto, al grammo: "1.200", "10.8";
+//    niente float o double, che non sanno scrivere 10,8 esatto;
+//  - gli id sono UUID in forma testuale, le date "yyyy-MM-dd";
+//  - ogni chiamata porta il JWT dell'utente nel metadata "authorization"
+//    ("Bearer <jwt>"), come le chiamate REST: Magazzino controlla firma e ruoli;
+//  - chi chiama mette una deadline (Produzione: 2 secondi);
+//  - i numeri dei campi non si riusano mai: un campo tolto diventa "reserved".
+// =============================================================================
+
+syntax = "proto3";
+
+package ginvault.giacenze.v1;
+
+option java_multiple_files = true;
+option java_package = "it.ginvault.giacenze.v1";
+option java_outer_classname = "GiacenzeProto";
+
+service Giacenze {
+
+  // I lotti utilizzabili di una botanica (controllo qualità superato e non
+  // scaduti), con i kg ancora liberi da riserve. Anche quelli già tutti
+  // riservati (kg_disponibili "0.000"): così chi ripete una riserva andata a
+  // buon fine trova ancora il lotto.
+  // Ruoli: DISTILLATORE, RESP_ACQUISTI, ADMIN.
+  //
+  // Errori: INVALID_ARGUMENT botanica mancante.
+  rpc Disponibilita(DisponibilitaRequest) returns (DisponibilitaResponse);
+
+  // Riserva dei kg di un lotto per un piano di produzione. IDEMPOTENTE sulla
+  // coppia (lotto_id, piano_id): la stessa richiesta ripetuta (es. dopo una
+  // deadline scaduta) restituisce la riserva che c'è già, con gia_riservato.
+  // Ruoli: DISTILLATORE, ADMIN.
+  //
+  // Errori:
+  //   INVALID_ARGUMENT     id o kg non validi
+  //   NOT_FOUND            il lotto non esiste
+  //   FAILED_PRECONDITION  lotto non utilizzabile (non conforme, scaduto) o kg insufficienti
+  //   ALREADY_EXISTS       il piano ha già una riserva su questo lotto, con altri kg
+  //   ABORTED              un'altra riserva sullo stesso lotto nello stesso istante: si può ripetere
+  rpc RiservaLotto(RiservaLottoRequest) returns (RiservaLottoResponse);
+}
+
+message DisponibilitaRequest {
+  // Come la scrive l'edizione: "Lavanda" = "lavanda"
+  string botanica = 1;
+}
+
+message DisponibilitaResponse {
+  // Normalizzata: minuscolo, spazi singoli
+  string botanica = 1;
+  // Dal lotto ricevuto più di recente
+  repeated LottoDisponibile lotti = 2;
+  // Somma dei kg_disponibili dei lotti
+  string kg_disponibili_totali = 3;
+}
+
+message LottoDisponibile {
+  string lotto_id = 1;
+  string botanica = 2;
+  // Es. "Campi GinVault (Saluzzo, 400 m)": la confronta Produzione con
+  // l'origine richiesta dall'edizione
+  string origine = 3;
+  // I kg del lotto e quelli non ancora riservati
+  string kg = 4;
+  string kg_disponibili = 5;
+  string scadenza = 6;
+  string fornitore_id = 7;
+  string fornitore = 8;
+}
+
+message RiservaLottoRequest {
+  string lotto_id = 1;
+  // Il piano di produzione per cui si riserva
+  string piano_id = 2;
+  string kg = 3;
+}
+
+message RiservaLottoResponse {
+  string lotto_id = 1;
+  string piano_id = 2;
+  string botanica = 3;
+  string origine = 4;
+  string kg_riservati = 5;
+  // I kg del lotto rimasti liberi dopo questa riserva
+  string kg_disponibili = 6;
+  // true: la riserva c'era già (richiesta ripetuta), niente di nuovo riservato
+  bool gia_riservato = 7;
+}

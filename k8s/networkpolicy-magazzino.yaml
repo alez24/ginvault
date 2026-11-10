@@ -1,0 +1,49 @@
+# =============================================================================
+# NetworkPolicy: la porta gRPC di magazzino (9084) si apre SOLO a produzione.
+#
+# Il servizio gRPC Giacenze (giacenze-api) serve a una relazione sola, la
+# partnership Produzione -> Magazzino: Disponibilita e RiservaLotto. Nessun
+# altro pod deve poterlo chiamare, nemmeno il gateway (che non lo espone).
+#
+# Attenzione: una NetworkPolicy che seleziona un pod blocca TUTTO il traffico
+# in ingresso che non elenca. Per questo la seconda regola lascia la porta
+# HTTP 8084 aperta come prima della policy: la usano il gateway
+# (/api/magazzino/**) e il kubelet per le probe.
+#
+# Il JWT dell'utente resta controllato anche sulla 9084 (AutenticazioneGrpc):
+# la policy dice CHI può collegarsi, il JWT dice CON CHE RUOLO.
+#
+# Verifica (k8s/README.md, "gRPC tra produzione e magazzino"):
+#   da un pod qualsiasi  nc -z -w 2 magazzino 9084  -> BLOCCATO
+#   da produzione        nc -z -w 2 magazzino 9084  -> APERTO
+#   da un pod qualsiasi  nc -z -w 2 magazzino 8084  -> APERTO (come prima)
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: magazzino-grpc-solo-da-produzione
+  labels:
+    app.kubernetes.io/name: magazzino
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+spec:
+  # I pod a cui si applica: quelli di magazzino
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: magazzino
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1) gRPC Giacenze: solo dai pod di produzione (stesso namespace)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: produzione
+      ports:
+        - protocol: TCP
+          port: 9084
+    # 2) HTTP: senza "from" vale per tutti, come senza policy
+    - ports:
+        - protocol: TCP
+          port: 8084

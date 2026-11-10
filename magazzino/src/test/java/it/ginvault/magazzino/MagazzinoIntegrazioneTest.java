@@ -70,7 +70,7 @@ import org.testcontainers.kafka.KafkaContainer;
  *
  * Il fuso e la data sono fissati: "oggi" è il 6 agosto 2026, giorno della consegna.
  */
-@SpringBootTest(properties = "magazzino.outbox.intervallo-ms=200")
+@SpringBootTest(properties = {"magazzino.outbox.intervallo-ms=200", "magazzino.grpc.porta=0"})
 @AutoConfigureMockMvc
 class MagazzinoIntegrazioneTest {
 

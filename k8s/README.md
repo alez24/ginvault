@@ -62,12 +62,13 @@ proxy di Vite.
 | `ricette-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `ricette.yaml` | ConfigMap, Deployment, Service |
 | `magazzino-db.yaml` | PersistentVolumeClaim, Deployment, Service |
-| `magazzino.yaml` | ConfigMap, Deployment, Service |
+| `magazzino.yaml` | ConfigMap, Deployment, Service (porte `http` 8084 e `grpc` 9084) |
 | `produzione-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `produzione.yaml` | ConfigMap, Deployment, Service |
 | `networkpolicy-db.yaml` | Quattro NetworkPolicy: ogni database accetta solo il suo servizio |
 | `networkpolicy-frontend-gateway.yaml` | Due NetworkPolicy: il front-end accetta solo l'Ingress Controller, il gateway l'Ingress Controller e i microservizi |
 | `networkpolicy-kafka.yaml` | NetworkPolicy: Kafka accetta solo i pod con la label `ginvault/usa-kafka: "true"` |
+| `networkpolicy-magazzino.yaml` | NetworkPolicy: la porta gRPC di magazzino (9084) accetta solo produzione; la 8084 resta aperta |
 | `kafka.yaml` | Service headless, StatefulSet (con il suo PVC), Job che crea i topic |
 | `gateway.yaml` | ConfigMap, Deployment, Service |
 | `frontend.yaml` | Deployment (2 repliche), Service |
@@ -112,8 +113,14 @@ Da PowerShell, nella cartella del progetto:
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
 minikube image build -t ginvault/edizioni:0.4 .\edizioni
 minikube image build -t ginvault/ricette:0.2  .\ricette
-minikube image build -t ginvault/magazzino:0.1 .\magazzino
-minikube image build -t ginvault/produzione:0.1 .\produzione
+#    magazzino e produzione hanno bisogno anche del modulo giacenze-api, che sta
+#    fuori dalla loro cartella: un secondo build context con nome, che
+#    minikube image build non sa passare. Si costruiscono con Docker Desktop
+#    e si caricano nel nodo.
+docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.2 magazzino
+docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.2 produzione
+minikube image load ginvault/magazzino:0.2
+minikube image load ginvault/produzione:0.2
 minikube image build -t ginvault/gateway:0.3  .\gateway
 minikube image build -t ginvault/frontend:0.2 .\frontend   # npm ci, test e build di Vite dentro l'immagine
 
@@ -264,8 +271,8 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 | requests / limits memoria | 128 Mi / 512 Mi | 384 Mi / 768 Mi | 384 Mi / 768 Mi | 16 Mi / 64 Mi (ne usa ~3) |
 
 ricette e ricette-db sono come edizioni ed edizioni-db (`ginvault/ricette:0.2`),
-e così magazzino e magazzino-db (`ginvault/magazzino:0.1`), produzione e
-produzione-db (`ginvault/produzione:0.1`). La readiness di edizioni, magazzino e
+e così magazzino e magazzino-db (`ginvault/magazzino:0.2`), produzione e
+produzione-db (`ginvault/produzione:0.2`). La readiness di edizioni, magazzino e
 produzione include il database ma **non Kafka**: con Kafka giù i servizi
 lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer di
 produzione si ricollegano da soli.
@@ -325,6 +332,10 @@ solo dall'Ingress.
 Il Service `frontend` espone la porta 80 e la porta ai pod sulla 8080
 (`targetPort: http`, il nome della porta del container); divide le richieste tra
 i due pod, e la sua EndpointSlice ha due IP.
+
+Il Service `magazzino` ha **due porte con nome**: `http` (8084, per il gateway)
+e `grpc` (9084, per produzione, con `appProtocol: kubernetes.io/h2c`, cioè
+HTTP/2 in chiaro). Lo stesso nome DNS, due protocolli.
 
 ```powershell
 kubectl get svc,endpointslice -n ginvault
@@ -473,6 +484,49 @@ dall'ultimo offset salvato.
 
 Dashboard: **Workloads → Deployments → produzione** (i log con le partizioni
 assegnate) e **Config and Storage → Config Maps → produzione-config**.
+
+### gRPC tra produzione e magazzino
+
+Quando Marco integra un lotto nel piano, produzione chiama il servizio gRPC
+`Giacenze` di magazzino su `magazzino:9084` (`MAGAZZINO_GRPC` nella ConfigMap),
+con una deadline di 2 secondi e il JWT di Marco nel metadata
+([docs/grpc.md](../docs/grpc.md)). Il server gRPC gira nello stesso pod di
+magazzino, accanto a Tomcat, e parte e si ferma con Spring.
+
+La NetworkPolicy `magazzino-grpc-solo-da-produzione` apre la 9084 solo ai pod
+di produzione. Una policy che seleziona un pod chiude tutto ciò che non elenca,
+quindi ha una seconda regola che lascia la 8084 aperta come prima, per il
+gateway e le probe.
+
+```powershell
+# Le due porte del Service e dell'EndpointSlice
+kubectl get svc magazzino -n ginvault -o custom-columns='PORTE:.spec.ports[*].name,NUMERI:.spec.ports[*].port'
+kubectl get endpointslices -n ginvault -l kubernetes.io/service-name=magazzino
+# Il server gRPC partito: "Server gRPC Giacenze in ascolto sulla porta 9084"
+kubectl logs -n ginvault deploy/magazzino | Select-String 'gRPC Giacenze'
+# La policy
+kubectl describe networkpolicy magazzino-grpc-solo-da-produzione -n ginvault
+
+# Da un pod qualsiasi: 9084 BLOCCATO, 8084 APERTO
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in magazzino:9084 magazzino:8084; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+# Da produzione: 9084 APERTO
+kubectl exec -n ginvault deploy/produzione -- sh -c 'nc -z -w 3 magazzino 9084 && echo magazzino:9084 APERTO || echo magazzino:9084 BLOCCATO'
+# Da edizioni e dal gateway: 9084 BLOCCATO
+kubectl exec -n ginvault deploy/edizioni -- sh -c 'nc -z -w 3 magazzino 9084 && echo APERTO || echo BLOCCATO'
+kubectl exec -n ginvault deploy/gateway -- sh -c 'nc -z -w 3 magazzino 9084 && echo APERTO || echo BLOCCATO'
+
+# Il server risponde in gRPC (il port-forward passa dal kubelet: la policy non si applica).
+# Senza JWT: "Code: Unauthenticated", "Serve il JWT dell'utente nel metadata authorization"
+kubectl port-forward -n ginvault svc/magazzino 19084:9084      # in un'altra finestra
+docker run --rm -v "${PWD}\giacenze-api\src\main\proto:/proto" fullstorydev/grpcurl:v1.9.3 -plaintext -import-path /proto -proto giacenze.proto -d '{\"botanica\": \"lavanda\"}' host.docker.internal:19084 ginvault.giacenze.v1.Giacenze/Disponibilita
+
+# Le riserve in magazzino e le integrazioni nei piani
+kubectl exec -n ginvault deploy/magazzino-db -- psql -U magazzino -d magazzino -c 'select lotto_id, piano_id, kg, riservata_da from lotto_riserva'
+kubectl exec -n ginvault deploy/produzione-db -- psql -U produzione -d produzione -c 'select piano_id, lotto_id, origine, kg, motivo from piano_integrazione'
+```
+
+Dashboard: **Service → Services → magazzino** (le due porte) e **Service →
+Network Policies → magazzino-grpc-solo-da-produzione**.
 ### Ingress, IngressClass, Ingress Controller
 
 L'**Ingress** `ginvault` è solo un insieme di *regole* per l'host `localhost`.
@@ -516,7 +570,7 @@ Pods** per il controller e i suoi log.
 
 Di default ogni pod del cluster può collegarsi a qualsiasi altro. In Compose
 l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
-`magazzino-db-net`, `produzione-db-net`, `frontend-net`, `kafka-net`); qui lo danno sette **NetworkPolicy**:
+`magazzino-db-net`, `produzione-db-net`, `frontend-net`, `kafka-net`); qui lo danno otto **NetworkPolicy**:
 
 | NetworkPolicy | Pod protetti | Sorgenti ammesse | Porta |
 |---|---|---|---|
@@ -527,6 +581,7 @@ l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
 | `frontend-solo-da-ingress` | frontend | il controller ingress-nginx | 8080 |
 | `gateway-da-ingress-e-servizi` | gateway | il controller ingress-nginx; i pod con `app.kubernetes.io/component: microservizio` (scaricano la JWKS) | 8080 |
 | `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni, magazzino, produzione); Kafka stesso sulla 9093 del controller | 9092, 9093 |
+| `magazzino-grpc-solo-da-produzione` | magazzino | i pod di produzione sulla 9084 (gRPC); tutti sulla 8084 (HTTP, come prima) | 9084, 8084 |
 
 Come sono fatte:
 
@@ -558,7 +613,8 @@ kubectl describe networkpolicy gateway-da-ingress-e-servizi -n ginvault
 
 # Un pod qualsiasi NON raggiunge database, front-end, gateway e Kafka (timeout dopo 3 s)...
 # (virgolette semplici: con le doppie PowerShell sostituirebbe $s prima di passarlo)
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 frontend:80 gateway:8080 kafka:9092; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+# (magazzino:9084 BLOCCATO anche lui; magazzino:8084 invece APERTO, è un servizio)
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 frontend:80 gateway:8080 kafka:9092 magazzino:9084 magazzino:8084; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
 # ...con la label di chi usa Kafka, Kafka risponde
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
 # Da edizioni (ha la label) sì, da ricette (non usa Kafka) no
@@ -607,10 +663,11 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.4, ricette:0.2, magazzino:0.1, produzione:0.1
+minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.4, ricette:0.2, magazzino:0.2, produzione:0.2
 ```
 
-Per un'immagine che manca, il suo `minikube image build` di
+Per un'immagine che manca, il suo `minikube image build` (per magazzino e
+produzione `docker build` + `minikube image load`) di
 [Avvio da cluster vuoto](#avvio-da-cluster-vuoto). Su un cluster nuovo anche
 `.\k8s\crea-secret.ps1`.
 

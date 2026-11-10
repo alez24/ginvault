@@ -42,6 +42,9 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
  rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione e magazzino
    topic edizioni.eventi, magazzino.eventi, produzione.eventi (docs/eventi.md)
+
+ gRPC produzione ──▶ magazzino :9084  servizio Giacenze (Disponibilita, RiservaLotto),
+   deadline 2 s, JWT dell'utente nel metadata (docs/grpc.md)
 ```
 
 | Servizio    | Tecnologia                  | Porta | Database (porta in sviluppo) | `GET /prova` richiede |
@@ -51,7 +54,7 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 | edizioni    | Spring Boot 3.5 / Java 21   | 8081  | `edizioni-db` (5441)         | SOCIO                 |
 | ricette     | Spring Boot 3.5 / Java 21   | 8082  | `ricette-db` (5442)          | DISTILLATORE          |
 | produzione  | Spring Boot 3.5 / Java 21   | 8083  | `produzione-db` (5443)       | DISTILLATORE          |
-| magazzino   | Spring Boot 3.5 / Java 21   | 8084  | `magazzino-db` (5444)        | RESP_ACQUISTI         |
+| magazzino   | Spring Boot 3.5 / Java 21   | 8084 (gRPC 9084) | `magazzino-db` (5444) | RESP_ACQUISTI      |
 | pagamenti   | Spring Boot 3.5 / Java 21   | 8085  | `pagamenti-db` (5445)        | CLIENTE               |
 | notifiche   | NestJS 12 / Node 24         | 8086  | –                            | ADMIN                 |
 | kafka       | Apache Kafka 4.3 (KRaft)    | 9092  | –                            | –                     |
@@ -68,11 +71,12 @@ ginvault/
 │   ├── Dockerfile
 │   └── src/{main,test}/...
 ├── ricette/  produzione/  magazzino/  pagamenti/   # stessa struttura
+├── giacenze-api/                 # modulo Maven condiviso: il contratto gRPC (giacenze.proto)
 ├── gateway/                      # Spring Cloud Gateway: login, sessione, JWT
 ├── notifiche/                    # NestJS
 ├── k8s/                          # manifest Kubernetes (Minikube): vedi k8s/README.md
 ├── frontend/                     # React + Vite, servito da nginx: vedi frontend/README.md
-└── docs/                         # piano.md, eventi.md (topic e formato degli eventi), demo
+└── docs/                         # piano.md, eventi.md (topic ed eventi), grpc.md, stato-lavori.md, demo
 ```
 
 ## Prerequisiti
@@ -404,7 +408,8 @@ che sale, poi `docker compose start kafka`: dopo qualche secondo la riga ha
 ## Produzione: piani, consumer idempotenti e dead letter
 
 Produzione non ha moduli da compilare: i suoi **piani di produzione** nascono
-e cambiano con gli eventi. Dal gateway: `/api/produzione/...`.
+e cambiano con gli eventi. L'unica azione a mano è di Marco: integrare un
+lotto del magazzino, via gRPC. Dal gateway: `/api/produzione/...`.
 
 ```
 edizioni.eventi   EdizioneCreata      ──▶ nuovo piano: 12 kg di lavanda, Alta Val Varaita, 20 g, 600 bottiglie
@@ -415,7 +420,9 @@ magazzino.eventi  ConsegnaRegistrata  ──▶ piano a 10,8 kg (540 bottiglie)
 | Endpoint | Ruolo | Cosa fa |
 |---|---|---|
 | `GET /piani`, `GET /piani?edizione={id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i piani, dal più recente (o quello di un'edizione) |
-| `GET /piani/{id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | un piano: kg previsti e disponibili, `bottiglieProducibili`, le consegne con i kg utilizzabili e il motivo |
+| `GET /piani/{id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | un piano: kg previsti, disponibili e mancanti, `bottiglieProducibili`, le consegne con i kg utilizzabili e il motivo, i lotti integrati |
+| `GET /piani/{id}/lotti` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i lotti della botanica in magazzino (gRPC `Disponibilita`), con `stessaOrigine` |
+| `POST /piani/{id}/integrazioni` | DISTILLATORE, ADMIN | `{"lottoId", "kg"}`: integra un lotto proposto da Elena. 201, oppure 409 con il motivo (`ORIGINE_DIVERSA`: "origine diversa: l'edizione deve restare fedele alla sua origine"), 503 se il magazzino non risponde in 2 secondi |
 
 Regole del piano (aggregato `PianoDiProduzione`):
 - conta solo la **botanica di stagione** dell'edizione: le altre consegne si ignorano;
@@ -428,7 +435,30 @@ Regole del piano (aggregato `PianoDiProduzione`):
   - due ordini da 6 kg, uno consegnato: `6 + 6 = 12`;
   - 2 kg dai campi (altra origine) non tolgono niente;
   - un riordino dall'Alta Val Varaita riporta a 12;
-- ogni ordine conta una volta; `ResaRicalcolata` parte solo se il valore cambia.
+- ogni ordine conta una volta; `ResaRicalcolata` parte solo se il valore cambia;
+- un **lotto integrato** deve avere l'origine richiesta e non superare i kg
+  mancanti. I suoi kg, riservati in magazzino con `RiservaLotto`, si sommano
+  agli utilizzabili: `10,8 + 1,2 = 12`.
+
+### gRPC con il Magazzino
+
+La partnership Produzione → Magazzino è l'unica chiamata sincrona tra i due
+(dettagli in [docs/grpc.md](docs/grpc.md)):
+
+- il contratto è il modulo condiviso [`giacenze-api`](giacenze-api), con
+  `giacenze.proto`;
+- Magazzino espone il servizio `Giacenze` sulla porta 9084;
+- Produzione lo chiama con una deadline di 2 secondi e inoltra il JWT di Marco
+  nel metadata;
+- la regola dell'origine si applica **prima** della riserva: il lotto dei
+  campi è rifiutato senza toccare il magazzino;
+- su Kubernetes solo produzione può aprire la 9084 (NetworkPolicy).
+
+```bash
+# Le riserve in magazzino e le integrazioni nei piani
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select lotto_id, piano_id, kg, riservata_da, riservata_il from lotto_riserva"
+docker compose exec produzione-db psql -U produzione -d produzione -c "select piano_id, lotto_id, origine, kg, motivo from piano_integrazione"
+```
 
 I consumer (dettagli in [docs/eventi.md](docs/eventi.md#consumer-idempotenza-retry-e-dead-letter)):
 - **idempotenti**: in una transazione sola si controlla la tabella
@@ -487,6 +517,13 @@ topic, e verifica:
   esiste ci va dopo i tentativi, nella stessa partizione, con gli header
   `kafka_dlt-*`.
 
+Il gRPC tra Produzione e Magazzino si prova da tutte e due le parti:
+- `GiacenzeGrpcTest` (magazzino) avvia il server vero su una porta libera e
+  lo chiama con un client come quello di Produzione;
+- `IntegrazioneLottiTest` (produzione) usa un magazzino finto con lo stesso
+  contratto, su una porta vera. Prova il rifiuto per origine diversa, la
+  deadline di 2 secondi, il magazzino lento o spento (503) e il JWT inoltrato.
+
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
 avviato: il container di Maven usa il Docker del portatile per avviare i
@@ -495,6 +532,9 @@ container di Testcontainers.
 ```bash
 # PowerShell, dalla cartella ginvault (sostituire "edizioni" con il servizio voluto)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+
+# Magazzino e produzione dipendono da giacenze-api: si monta tutto il repository e lo si installa prima
+docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /repo maven:3.9-eclipse-temurin-21 sh -c 'mvn -B -q -f giacenze-api/pom.xml install && mvn -B -f magazzino/pom.xml test && mvn -B -f produzione/pom.xml test'
 ```
 
 Il volume `ginvault-m2` conserva le dipendenze Maven tra un'esecuzione e l'altra.
@@ -567,7 +607,9 @@ docker compose exec gateway sh -c "wget -S -qO /dev/null http://edizioni:8081/me
 ## Sviluppo in IntelliJ
 
 Ogni servizio è un progetto Maven a sé. Per aprirlo: tasto destro su
-`<servizio>/pom.xml` → *Add as Maven Project*.
+`<servizio>/pom.xml` → *Add as Maven Project*. Per magazzino e produzione va
+aggiunto anche `giacenze-api/pom.xml`, e installato una volta (*Maven* →
+`giacenze-api` → *Lifecycle* → `install`) prima di compilarli.
 
 Un servizio avviato da IntelliJ usa i default di `application.yml`:
 - il suo DB su `localhost:544x`, esposto da `docker-compose.override.yml`;
@@ -594,6 +636,12 @@ avviato in IntelliJ.
   - un evento che non può partire mai (per esempio un topic che non esiste)
     blocca quelli dopo di lui, per non cambiarne l'ordine. Si vede da
     `tentativi` e `ultimo_errore` nella tabella `outbox`.
+- **gRPC Produzione → Magazzino** (vedi [docs/grpc.md](docs/grpc.md#limiti-noti)):
+  - se il commit del piano fallisce dopo la riserva, i kg restano riservati
+    finché Marco non ripete la richiesta (idempotente). Manca un
+    `AnnullaRiserva` di compensazione;
+  - il bilanciamento è per connessione, e va bene con una replica;
+  - in Compose la porta 9084 non è filtrata: la protegge solo il JWT.
 - **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
   [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
   Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.

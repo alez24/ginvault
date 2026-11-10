@@ -27,6 +27,8 @@
     <properties>
         <!-- Letta dal parent per configurare il compilatore (release 21) -->
         <java.version>21</java.version>
+        <!-- La stessa di giacenze-api: tutte le librerie io.grpc alla stessa versione -->
+        <grpc.version>1.85.1</grpc.version>
     </properties>
 
     <dependencies>
@@ -77,6 +79,27 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!--
+            gRPC: il contratto Giacenze del magazzino (messaggi e stub client)
+            generato dal modulo condiviso giacenze-api, da installare prima con
+            mvn -f ../giacenze-api/pom.xml install (il Dockerfile lo fa da solo).
+        -->
+        <dependency>
+            <groupId>it.ginvault</groupId>
+            <artifactId>giacenze-api</artifactId>
+            <version>0.1.0</version>
+        </dependency>
+        <!--
+            Il trasporto HTTP/2 del canale gRPC. "shaded": Netty è dentro il jar
+            con un altro package, quindi non si scontra con niente. Compile e non
+            runtime: i test avviano un magazzino finto con lo stesso trasporto.
+        -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+            <version>${grpc.version}</version>
         </dependency>
 
         <!-- Test: JUnit 5, AssertJ, MockMvc... -->

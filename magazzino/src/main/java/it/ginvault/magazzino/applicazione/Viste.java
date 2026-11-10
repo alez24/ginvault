@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import it.ginvault.magazzino.dominio.Consegna;
 import it.ginvault.magazzino.dominio.EsitoQualita;
+import it.ginvault.magazzino.dominio.EsitoRiserva;
 import it.ginvault.magazzino.dominio.Fornitore;
 import it.ginvault.magazzino.dominio.LottoDiBotanica;
 import it.ginvault.magazzino.dominio.OrdineDiAcquisto;
@@ -64,13 +65,42 @@ public final class Viste {
     }
 
     /** Un lotto di botanica, con la tracciabilità. ordineId è null per i lotti senza ordine. */
-    public record LottoVista(UUID id, String botanica, String origine, BigDecimal kg, LocalDate scadenza,
-                             EsitoQualita esitoQualita, boolean utilizzabile, RiferimentoFornitore fornitore,
-                             UUID ordineId, LocalDate ricevutoIl) {
+    public record LottoVista(UUID id, String botanica, String origine, BigDecimal kg, BigDecimal kgDisponibili,
+                             LocalDate scadenza, EsitoQualita esitoQualita, boolean utilizzabile,
+                             RiferimentoFornitore fornitore, UUID ordineId, LocalDate ricevutoIl) {
 
         static LottoVista di(LottoDiBotanica lotto, RiferimentoFornitore fornitore, LocalDate oggi) {
-            return new LottoVista(lotto.id(), lotto.botanica(), lotto.origine(), lotto.kg(), lotto.scadenza(),
-                    lotto.esitoQualita(), lotto.utilizzabile(oggi), fornitore, lotto.ordineId(), lotto.ricevutoIl());
+            return new LottoVista(lotto.id(), lotto.botanica(), lotto.origine(), lotto.kg(), lotto.kgDisponibili(),
+                    lotto.scadenza(), lotto.esitoQualita(), lotto.utilizzabile(oggi), fornitore, lotto.ordineId(),
+                    lotto.ricevutoIl());
+        }
+    }
+
+    /**
+     * Risposta di Giacenze.Disponibilita (gRPC): i lotti utilizzabili di una
+     * botanica, con i kg liberi da riserve.
+     */
+    public record DisponibilitaVista(String botanica, List<LottoDisponibileVista> lotti,
+                                     BigDecimal kgDisponibiliTotali) {
+    }
+
+    public record LottoDisponibileVista(UUID id, String botanica, String origine, BigDecimal kg,
+                                        BigDecimal kgDisponibili, LocalDate scadenza,
+                                        RiferimentoFornitore fornitore) {
+
+        static LottoDisponibileVista di(LottoDiBotanica lotto, RiferimentoFornitore fornitore) {
+            return new LottoDisponibileVista(lotto.id(), lotto.botanica(), lotto.origine(), lotto.kg(),
+                    lotto.kgDisponibili(), lotto.scadenza(), fornitore);
+        }
+    }
+
+    /** Risposta di Giacenze.RiservaLotto (gRPC). */
+    public record RiservaVista(UUID lottoId, UUID pianoId, String botanica, String origine, BigDecimal kgRiservati,
+                               BigDecimal kgDisponibili, boolean giaRiservato) {
+
+        static RiservaVista di(LottoDiBotanica lotto, UUID pianoId, EsitoRiserva esito) {
+            return new RiservaVista(lotto.id(), pianoId, lotto.botanica(), lotto.origine(), esito.kgRiservati(),
+                    esito.kgDisponibili(), esito.giaRiservato());
         }
     }
 

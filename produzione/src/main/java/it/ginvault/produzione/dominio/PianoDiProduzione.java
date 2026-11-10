@@ -5,7 +5,11 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+
+import it.ginvault.produzione.dominio.IntegrazioneRifiutata.Motivo;
 
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
@@ -45,6 +49,17 @@ import org.springframework.data.domain.DomainEvents;
  *    2 kg dai campi (altra origine) arrivati:  max(0, 12 - 0) + 0     = 12 (non tolgono niente)
  *    Un riordino di 1,2 kg dall'Alta Val Varaita, dopo Elena:  0 + 10,8 + 1,2 = 12
  *  - se i kg disponibili cambiano si registra l'evento ResaRicalcolata.
+ *
+ * Regole dell'integrazione (verificaProposta e integraLotto, da
+ * POST /piani/{id}/integrazioni): dopo una consegna scarsa Marco prova a
+ * coprire i kg mancanti con un lotto del magazzino proposto da Elena.
+ *  - il lotto deve essere della botanica di stagione e con l'ORIGINE
+ *    RICHIESTA: il lotto dei campi dell'azienda viene rifiutato, perché
+ *    l'edizione deve restare fedele alla sua origine;
+ *  - un lotto si integra una volta sola;
+ *  - solo se mancano kg, e non più di quelli che mancano;
+ *  - i kg integrati (riservati in magazzino) si sommano agli utilizzabili:
+ *        10,8 kg arrivati + 1,2 kg integrati = 12 kg, di nuovo 600 bottiglie.
  */
 @Entity
 @Table(name = "piano_di_produzione",
@@ -96,6 +111,14 @@ public class PianoDiProduzione {
                     columnNames = {"piano_id", "ordine_id"}))
     @OrderColumn(name = "posizione")
     private List<ConsegnaNelPiano> consegne = new ArrayList<>();
+
+    /** I lotti del magazzino integrati per coprire i kg mancanti, in ordine. */
+    @ElementCollection
+    @CollectionTable(name = "piano_integrazione", joinColumns = @JoinColumn(name = "piano_id"),
+            uniqueConstraints = @UniqueConstraint(name = "uk_piano_integrazione_lotto",
+                    columnNames = {"piano_id", "lotto_id"}))
+    @OrderColumn(name = "posizione")
+    private List<IntegrazioneNelPiano> integrazioni = new ArrayList<>();
 
     @Column(name = "creato_il", nullable = false, updatable = false)
     private Instant creatoIl;
@@ -201,15 +224,115 @@ public class PianoDiProduzione {
         }
         kgDisponibili = dopo;
         eventi.add(new ResaRicalcolata(id, edizioneId, botanica, kgPrevisti, prima, dopo, consegna.ordineId(),
-                motivo, adesso));
+                null, motivo, adesso));
         return EsitoConsegna.RESA_RICALCOLATA;
+    }
+
+    /**
+     * Marco valuta un lotto proposto da Elena, PRIMA che il magazzino lo
+     * riservi: un lotto rifiutato non si tocca nemmeno (vedi le regole in cima).
+     *
+     * @return i kg da riservare, al grammo
+     * @throws IntegrazioneRifiutata con il motivo: altra botanica, origine diversa,
+     *                               già integrato, kg non validi, piano completo, kg eccessivi
+     */
+    public BigDecimal verificaProposta(LottoProposto lotto, BigDecimal kgRichiesti) {
+        verificaLotto(lotto);
+        BigDecimal kg = kgDaIntegrare(kgRichiesti);
+        BigDecimal mancanti = kgMancanti();
+        if (mancanti.signum() == 0) {
+            throw new IntegrazioneRifiutata(Motivo.PIANO_COMPLETO, "Il piano ha già tutti i "
+                    + Chilogrammi.testo(kgPrevisti) + " kg previsti di " + botanica + ": non serve integrare");
+        }
+        if (kg.compareTo(mancanti) > 0) {
+            throw new IntegrazioneRifiutata(Motivo.KG_ECCESSIVI, "Mancano " + Chilogrammi.testo(mancanti)
+                    + " kg: non se ne possono integrare " + Chilogrammi.testo(kg),
+                    Map.of("kgMancanti", mancanti));
+        }
+        return kg;
+    }
+
+    /**
+     * Il lotto è riservato in magazzino: i suoi kg contano tra gli utilizzabili
+     * e la resa si ricalcola. Le regole del lotto (botanica, origine) valgono
+     * anche qui: il piano le protegge da solo, chiunque lo chiami.
+     *
+     * NON ricontrolla i kg mancanti: i kg sono già riservati, e se nel
+     * frattempo è arrivata un'altra consegna il conto resta comunque al
+     * massimo dei kg previsti.
+     *
+     * @return GIA_INTEGRATO se il lotto c'era già (richiesta ripetuta)
+     */
+    public EsitoIntegrazione integraLotto(LottoProposto lotto, BigDecimal kgRiservati, Instant adesso) {
+        try {
+            verificaLotto(lotto);
+        } catch (IntegrazioneRifiutata rifiuto) {
+            if (rifiuto.motivo() == Motivo.LOTTO_GIA_INTEGRATO) {
+                return EsitoIntegrazione.GIA_INTEGRATO;
+            }
+            throw rifiuto;
+        }
+        BigDecimal kg = kgDaIntegrare(kgRiservati);
+        String origine = Origini.pulisci(lotto.origine());
+        String motivo = "integrazione: " + Chilogrammi.testo(kg) + " kg dal lotto " + lotto.lottoId()
+                + " (" + origine + ")";
+        integrazioni.add(new IntegrazioneNelPiano(lotto.lottoId(), origine, kg, motivo, adesso));
+        aggiornatoIl = adesso;
+        BigDecimal prima = kgDisponibili;
+        BigDecimal dopo = ricalcolaDisponibili();
+        if (dopo.compareTo(prima) == 0) {
+            return EsitoIntegrazione.RESA_INVARIATA;
+        }
+        kgDisponibili = dopo;
+        eventi.add(new ResaRicalcolata(id, edizioneId, botanica, kgPrevisti, prima, dopo, null, lotto.lottoId(),
+                motivo, adesso));
+        return EsitoIntegrazione.RESA_RICALCOLATA;
+    }
+
+    /** I kg che mancano per tornare ai previsti (1,2 dopo la consegna di Elena). */
+    public BigDecimal kgMancanti() {
+        return kgPrevisti.subtract(kgDisponibili);
+    }
+
+    /** Botanica, origine e lotto non ancora integrato. L'origine prima di tutto: è la regola dell'edizione. */
+    private void verificaLotto(LottoProposto lotto) {
+        if (lotto == null || lotto.lottoId() == null) {
+            throw new IntegrazioneRifiutata(Motivo.LOTTO_NON_DISPONIBILE, "Serve il lotto da integrare");
+        }
+        if (lotto.botanica() == null || lotto.botanica().isBlank()
+                || !Origini.botanica(lotto.botanica()).equals(botanica)) {
+            throw new IntegrazioneRifiutata(Motivo.ALTRA_BOTANICA, "Il lotto è di " + lotto.botanica()
+                    + ", il piano usa " + botanica);
+        }
+        if (!Origini.stessa(lotto.origine(), origineRichiesta)) {
+            String origineLotto = lotto.origine() == null ? "" : Origini.pulisci(lotto.origine());
+            throw new IntegrazioneRifiutata(Motivo.ORIGINE_DIVERSA,
+                    "origine diversa: l'edizione deve restare fedele alla sua origine. Il piano chiede " + botanica
+                            + " da «" + origineRichiesta + "», il lotto viene da «" + origineLotto + "»",
+                    Map.of("origineRichiesta", origineRichiesta, "origineLotto", origineLotto));
+        }
+        for (IntegrazioneNelPiano gia : integrazioni) {
+            if (gia.lottoId().equals(lotto.lottoId())) {
+                throw new IntegrazioneRifiutata(Motivo.LOTTO_GIA_INTEGRATO, "Il lotto " + lotto.lottoId()
+                        + " è già integrato nel piano (" + Chilogrammi.testo(gia.kg()) + " kg)");
+            }
+        }
+    }
+
+    private static BigDecimal kgDaIntegrare(BigDecimal kg) {
+        try {
+            return Chilogrammi.verifica(kg, "I kg da integrare");
+        } catch (PianoNonValido nonValidi) {
+            throw new IntegrazioneRifiutata(Motivo.KG_NON_VALIDI, nonValidi.getMessage());
+        }
     }
 
     /**
      * min(previsti, max(0, previsti - Σ ordinati con l'origine richiesta) + Σ utilizzabili):
      * vedi la regola in cima. Un ordine di un'altra origine non copre i kg
      * previsti, quindi non entra in Σ ordinati: i kg dall'origine giusta si
-     * aspettano ancora.
+     * aspettano ancora. I lotti integrati sono utilizzabili ma non sono
+     * ordini: non entrano in Σ ordinati.
      */
     private BigDecimal ricalcolaDisponibili() {
         BigDecimal ordinati = Chilogrammi.ZERO;
@@ -219,6 +342,9 @@ public class PianoDiProduzione {
                 ordinati = ordinati.add(applicata.kgOrdinati());
             }
             utilizzabili = utilizzabili.add(applicata.kgUtilizzabili());
+        }
+        for (IntegrazioneNelPiano integrata : integrazioni) {
+            utilizzabili = utilizzabili.add(integrata.kg());
         }
         BigDecimal ancoraAttesi = kgPrevisti.subtract(ordinati).max(Chilogrammi.ZERO);
         return ancoraAttesi.add(utilizzabili).min(kgPrevisti);
@@ -333,6 +459,14 @@ public class PianoDiProduzione {
 
     public List<ConsegnaNelPiano> consegne() {
         return List.copyOf(consegne);
+    }
+
+    public List<IntegrazioneNelPiano> integrazioni() {
+        return List.copyOf(integrazioni);
+    }
+
+    public Optional<IntegrazioneNelPiano> integrazioneDel(UUID lottoId) {
+        return integrazioni.stream().filter(integrata -> integrata.lottoId().equals(lottoId)).findFirst();
     }
 
     public Instant creatoIl() {

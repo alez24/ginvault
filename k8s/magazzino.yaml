@@ -4,9 +4,12 @@
 #
 # Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
 #   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
-#   2) Deployment  -> il pod con il container ginvault/magazzino:0.1
-#   3) Service     -> nome DNS stabile "magazzino": lo usa il gateway
-#                     (/api/magazzino/**, MAGAZZINO_URI in gateway.yaml)
+#   2) Deployment  -> il pod con il container ginvault/magazzino:0.2
+#   3) Service     -> nome DNS stabile "magazzino", con DUE porte:
+#                     8084 http  per il gateway (/api/magazzino/**, MAGAZZINO_URI in gateway.yaml)
+#                     9084 grpc  per produzione (servizio Giacenze, MAGAZZINO_GRPC in produzione.yaml)
+#
+# La 9084 la può aprire solo produzione: networkpolicy-magazzino.yaml.
 #
 # Pubblica ConsegnaRegistrata su magazzino.eventi con la transactional outbox:
 # se Kafka è giù il pod resta Ready, le consegne si registrano e gli eventi
@@ -62,12 +65,18 @@ spec:
       enableServiceLinks: false
       containers:
         - name: magazzino
-          # Costruita dentro Minikube: minikube image build -t ginvault/magazzino:0.1 magazzino
-          image: ginvault/magazzino:0.1
+          # Costruita con Docker Desktop e caricata nel nodo (serve il secondo
+          # build context giacenze-api, vedi k8s/README.md):
+          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.2 magazzino
+          #   minikube image load ginvault/magazzino:0.2
+          image: ginvault/magazzino:0.2
           imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8084
+            # Il server gRPC Giacenze (magazzino.grpc.porta)
+            - name: grpc
+              containerPort: 9084
           envFrom:
             - configMapRef:
                 name: magazzino-config
@@ -126,3 +135,11 @@ spec:
     - name: http
       port: 8084
       targetPort: http
+    # gRPC = HTTP/2 in chiaro ("h2c"): appProtocol lo dichiara a chi legge il Service.
+    # Una connessione gRPC dura a lungo e resta sul pod scelto all'apertura:
+    # con più repliche servirebbe un bilanciamento per chiamata (Service
+    # headless + round_robin nel client). Qui c'è una replica sola.
+    - name: grpc
+      port: 9084
+      targetPort: grpc
+      appProtocol: kubernetes.io/h2c

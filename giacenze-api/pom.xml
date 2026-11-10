@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Modulo CONDIVISO tra Magazzino (server) e Produzione (client): il
+        contratto gRPC del servizio Giacenze.
+
+        Dentro c'è solo src/main/proto/giacenze.proto. A ogni build il
+        protobuf-maven-plugin lo compila con protoc e genera le classi Java
+        (messaggi + stub gRPC), che finiscono in questo jar. I due servizi
+        dipendono dal jar: nessuno dei due copia o scrive a mano il contratto,
+        e un campo cambiato si vede in compilazione da entrambe le parti.
+
+        Niente parent di Spring Boot: è una libreria, non un'applicazione.
+        Si installa nel repository Maven locale con
+            mvn -f giacenze-api/pom.xml install
+        prima di compilare magazzino e produzione (i Dockerfile lo fanno da soli).
+    -->
+    <groupId>it.ginvault</groupId>
+    <artifactId>giacenze-api</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+    <name>giacenze-api</name>
+    <description>GinVault - contratto gRPC Giacenze (Magazzino -> Produzione)</description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!--
+            Le versioni dell'esempio ufficiale di grpc-java 1.85.1: protoc
+            3.25.9 genera codice per protobuf-java 3.25.9, la versione da cui
+            dipende grpc-protobuf (stessa versione = nessun avviso di
+            compatibilità tra codice generato e runtime).
+        -->
+        <grpc.version>1.85.1</grpc.version>
+        <protobuf.version>3.25.9</protobuf.version>
+    </properties>
+
+    <dependencies>
+        <!-- Serializzazione protobuf dei messaggi (porta con sé protobuf-java) -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-protobuf</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+        <!-- Stub client (blocking) e classe base del server (GiacenzeImplBase) -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+            <version>${grpc.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <extensions>
+            <!-- Scopre sistema operativo e CPU (es. linux-x86_64): serve per scaricare il protoc giusto -->
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>1.7.1</version>
+            </extension>
+        </extensions>
+        <plugins>
+            <plugin>
+                <groupId>org.xolstice.maven.plugins</groupId>
+                <artifactId>protobuf-maven-plugin</artifactId>
+                <version>0.6.1</version>
+                <configuration>
+                    <!-- protoc e il plugin gRPC arrivano da Maven Central come eseguibili: niente da installare -->
+                    <protocArtifact>com.google.protobuf:protoc:${protobuf.version}:exe:${os.detected.classifier}</protocArtifact>
+                    <pluginId>grpc-java</pluginId>
+                    <pluginArtifact>io.grpc:protoc-gen-grpc-java:${grpc.version}:exe:${os.detected.classifier}</pluginArtifact>
+                    <!-- Senza @javax.annotation.Generated, che da Java 11 non è più nel JDK -->
+                    <pluginParameter>@generated=omit</pluginParameter>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <!-- compile = messaggi, compile-custom = stub gRPC -->
+                            <goal>compile</goal>
+                            <goal>compile-custom</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Versioni fissate dei plugin standard (le stesse del parent di Spring Boot 3.5) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.14.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.3</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-install-plugin</artifactId>
+                <version>3.1.4</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

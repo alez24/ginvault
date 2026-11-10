@@ -12,10 +12,11 @@ import java.util.UUID;
  * outbox e da lì va su produzione.eventi, con chiave l'id dell'edizione.
  * Edizioni lo leggerà per ricalcolare la tiratura (600 → 540).
  *
- * @param ordineId l'ordine la cui consegna ha cambiato la resa
+ * @param ordineId l'ordine la cui consegna ha cambiato la resa (null per un'integrazione)
+ * @param lottoId  il lotto integrato da Marco che ha cambiato la resa (null per una consegna)
  * @param motivo   in italiano, per i log e per chi legge il topic
  */
 public record ResaRicalcolata(UUID pianoId, UUID edizioneId, String botanica, BigDecimal kgPrevisti,
                               BigDecimal kgDisponibiliPrima, BigDecimal kgDisponibili, UUID ordineId,
-                              String motivo, Instant occorsoIl) {
+                              UUID lottoId, String motivo, Instant occorsoIl) {
 }

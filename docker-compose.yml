@@ -12,7 +12,10 @@
 #
 # Reti:
 #   - frontend-net       -> solo front-end e gateway: nginx non vede i servizi
-#   - backend            -> condivisa da gateway e microservizi
+#   - backend            -> condivisa da gateway e microservizi. Ci passa anche
+#     il gRPC tra produzione e magazzino (magazzino:9084): la porta non è
+#     pubblicata sull'host e ogni chiamata porta il JWT dell'utente; il filtro
+#     "solo produzione sulla 9084" lo fa la NetworkPolicy di Kubernetes
 #   - kafka-net          -> Kafka e SOLO i servizi che pubblicano o consumano
 #     eventi (edizioni, produzione, magazzino): gateway, front-end, ricette e
 #     i database non lo raggiungono
@@ -224,6 +227,8 @@ services:
   # MICROSERVIZI SPRING BOOT
   # ===========================================================================
   # build: ./cartella -> Compose costruisce l'immagine con il Dockerfile lì dentro.
+#   magazzino e produzione hanno anche additional_contexts: il modulo condiviso
+#   giacenze-api (il contratto gRPC) sta fuori dalla loro cartella.
   # environment: valorizza le ${VARIABILI} usate in application.yml.
   #   DB_PORT: 5432 -> dentro la rete Docker Postgres ascolta sulla porta standard
   #     (il default 544x di application.yml vale per l'avvio da IntelliJ).
@@ -287,7 +292,11 @@ services:
       - ricette-db-net
 
   produzione:
-    build: ./produzione
+    build:
+      context: ./produzione
+      # Il contratto gRPC Giacenze (giacenze-api): COPY --from=giacenze-api nel Dockerfile
+      additional_contexts:
+        giacenze-api: ./giacenze-api
     restart: unless-stopped
     environment:
       DB_HOST: produzione-db
@@ -299,6 +308,10 @@ services:
       # Legge edizioni.eventi e magazzino.eventi (consumer group "produzione"),
       # pubblica ResaRicalcolata su produzione.eventi e gli scarti su produzione.dlt
       KAFKA_BOOTSTRAP: kafka:9092
+      # Il servizio gRPC Giacenze di magazzino (rete "backend"), con deadline di
+      # 2 secondi. Niente depends_on: Produzione parte anche senza magazzino e
+      # risponde 503 solo quando Marco prova a integrare un lotto.
+      MAGAZZINO_GRPC: magazzino:9084
     depends_on:
       produzione-db:
         condition: service_healthy
@@ -315,7 +328,11 @@ services:
       - produzione-db-net
 
   magazzino:
-    build: ./magazzino
+    build:
+      context: ./magazzino
+      # Il contratto gRPC Giacenze (giacenze-api): COPY --from=giacenze-api nel Dockerfile
+      additional_contexts:
+        giacenze-api: ./giacenze-api
     restart: unless-stopped
     environment:
       DB_HOST: magazzino-db
@@ -326,6 +343,8 @@ services:
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
       # Pubblica ConsegnaRegistrata su magazzino.eventi, dalla tabella outbox
       KAFKA_BOOTSTRAP: kafka:9092
+      # Il server gRPC Giacenze ascolta sulla 9084 (default di application.yml),
+      # solo sulla rete interna: nessun "ports:", l'host non lo vede
     depends_on:
       magazzino-db:
         condition: service_healthy

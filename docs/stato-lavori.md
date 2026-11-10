@@ -6,15 +6,14 @@ e il punto esatto in cui siamo arrivati.
 ## In breve: dove siamo
 
 - **Branch:** `storia-elena` (creato da `main` aggiornato, `ed2c054`).
-- **Storia di Elena, passi 1–3 committati** su `storia-elena`, **senza push**.
-  Il passo 3 (Produzione) è nel commit "Produzione: piani, consumer idempotenti,
-  retry e dead letter", insieme a questo file.
-- **Passo 4 (gRPC Produzione ↔ Magazzino): in corso.**
-- La regola dei kg disponibili è approvata, con una correzione (vedi
-  [La regola dei kg disponibili](#la-regola-dei-kg-disponibili)).
-- Sul cluster gira ancora l'immagine `produzione:0.1` con la regola di prima:
-  si aggiorna con il passo 4. Dopo un riavvio del PC servono di nuovo Docker
-  Desktop e `minikube start`.
+- **Storia di Elena, passi 1–4 committati** su `storia-elena`, **senza push**.
+  Il passo 4 (gRPC) è nel commit "gRPC Produzione ↔ Magazzino: Giacenze,
+  integrazione di un lotto, NetworkPolicy", insieme a questo file; le 4 scelte
+  del passo 4 sono confermate.
+- **Prossimo:** `AnnullaRiserva` (compensazione), poi il passo 5.
+- Sul cluster girano già `magazzino:0.2` e `produzione:0.2` con il gRPC e la
+  nuova NetworkPolicy. Dopo un riavvio del PC servono di nuovo Docker Desktop
+  e `minikube start`.
 
 ## Cronologia dei commit
 
@@ -30,7 +29,8 @@ e il punto esatto in cui siamo arrivati.
 | `dfa6bb9` (PR #3) | 7 nov | Frontend su Kubernetes: 2 repliche, Ingress per path, NetworkPolicy per front-end e gateway |
 | `86fe672` | 7 nov | **Elena, passo 1: Kafka** (vedi sotto) |
 | `830a03f` | 8 nov | **Elena, passo 2: Magazzino** (vedi sotto) |
-| (il commit con questo file) | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
+| `0298ebb` | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
+| (il commit con questo file) | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
 
 Le PR #1, #2 e #3 sono unite in `main` con merge commit.
 
@@ -48,8 +48,8 @@ I sette passi:
 |---|---|---|
 | 1 | Kafka 4.x KRaft in Compose e su K8s, 3 topic | ✅ committato `86fe672` |
 | 2 | Servizio magazzino (8084): ordini, consegne, lotti, fornitori, outbox | ✅ committato `830a03f` |
-| 3 | Servizio produzione (8083): piani, consumer idempotenti, retry, DLT, `ResaRicalcolata` | ✅ committato |
-| 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ⏳ in corso |
+| 3 | Servizio produzione (8083): piani, consumer idempotenti, retry, DLT, `ResaRicalcolata` | ✅ committato `0298ebb` |
+| 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ✅ committato |
 | 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `RicalcoloRifiutato` | da fare |
 | 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | da fare |
 | 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | da fare |
@@ -102,7 +102,7 @@ I sette passi:
 - **Su K8s:** `magazzino.yaml`, `magazzino-db.yaml` e la sua NetworkPolicy.
   Provato anche l'outbox con Kafka spento, su un topic usa e getta.
 
-### Passo 3: Produzione (committato)
+### Passo 3: Produzione (`0298ebb`)
 
 **Edizioni**
 - **Origine della botanica:** creare un'edizione richiede `origineBotanica`
@@ -218,16 +218,62 @@ I sette passi:
 | Un ordine in più dai campi dopo Elena | non toglie niente | resta 10,8 |
 | Un riordino dall'Alta Val Varaita | | torna a 12 |
 
-### Prossimi passi (4–7)
+### Passo 4: gRPC Produzione ↔ Magazzino (committato)
 
-- **Passo 4, gRPC:**
-  - Magazzino espone il servizio `Giacenze` con `Disponibilita(botanica)` e
-    `RiservaLotto(lottoId, pianoId, kg)`, con i file `.proto` in un modulo condiviso;
-  - Produzione espone `POST /piani/{id}/integrazioni` (DISTILLATORE). Se il lotto
-    ha un'origine diversa risponde 409 ("origine diversa: l'edizione deve restare
-    fedele alla sua origine"); se è compatibile lo riserva e ricalcola la resa;
-  - deadline di 2 s: se magazzino non risponde, 503;
-  - NetworkPolicy: la porta gRPC di magazzino si apre solo a produzione.
+Tutto spiegato in [docs/grpc.md](grpc.md). Scelte confermate: la regola
+dell'origine prima della riserva, `GET /piani/{id}/lotti`, `lottoId` facoltativo
+in `ResaRicalcolata` v1, immagini con `docker build` + `minikube image load`.
+
+- **Modulo condiviso `giacenze-api`:**
+  - contiene `giacenze.proto`, servizio `Giacenze` con `Disponibilita` e
+    `RiservaLotto`;
+  - grpc-java 1.85.1 e protoc 3.25.9, le versioni dell'esempio ufficiale;
+  - kg come stringhe decimali;
+  - i Dockerfile lo ricevono come secondo build context con nome
+    (`--build-context giacenze-api=giacenze-api`, in Compose `additional_contexts`).
+- **Magazzino (server, porta 9084):**
+  - `ServerGiacenze` (SmartLifecycle accanto a Tomcat), `ServizioGiacenze`
+    (status gRPC), `AutenticazioneGrpc` (stesso JwtDecoder e ruoli delle REST);
+  - le riserve stanno nell'aggregato `LottoDiBotanica` (tabella `lotto_riserva`):
+    idempotenti su (lotto, piano), mai oltre i kg liberi, solo su lotti
+    utilizzabili, con `@Version` per le riserve contemporanee;
+  - `LottoVista` ha in più `kgDisponibili`.
+- **Produzione (client):**
+  - `POST /piani/{id}/integrazioni` (DISTILLATORE, ADMIN) e `GET /piani/{id}/lotti`;
+  - flusso: piano → `Disponibilita` → regola di dominio (origine prima di
+    tutto) → `RiservaLotto` → integrazione e `ResaRicalcolata` via outbox;
+  - deadline 2 s su ogni chiamata, JWT inoltrato nel metadata;
+  - 409 con `motivo` (`ORIGINE_DIVERSA`...), 503 + `Retry-After` se magazzino
+    è lento o spento, 502 per gli errori inattesi;
+  - lo stesso lotto rimandato con gli stessi kg risponde 200 `GIA_INTEGRATO`;
+  - `ResaRicalcolata` v1 ha in più il campo facoltativo `lottoId`.
+- **Compose:** `additional_contexts`, `MAGAZZINO_GRPC: magazzino:9084`; la 9084
+  non è pubblicata.
+- **K8s:**
+  - immagini `magazzino:0.2` e `produzione:0.2`, costruite con `docker build`
+    e caricate con `minikube image load`;
+  - Service magazzino con la porta `grpc`;
+  - NetworkPolicy `magazzino-grpc-solo-da-produzione`
+    (`networkpolicy-magazzino.yaml`).
+- **Test:**
+  - magazzino 61/61 (nuovi `GiacenzeGrpcTest`, `LottoDiBotanicaTest`);
+  - produzione 59/59 (nuovo `IntegrazioneLottiTest` con un magazzino gRPC
+    finto; più test di dominio e del controller).
+- **Verificato sul cluster (10 nov):**
+  - pod 0.2 Ready, "Server gRPC Giacenze in ascolto sulla porta 9084";
+  - busybox: 9084 BLOCCATO da un pod qualsiasi, da edizioni e dal gateway,
+    APERTO da produzione; 8084 sempre APERTO; DB, front-end, gateway e Kafka
+    BLOCCATI come prima;
+  - grpcurl via port-forward senza JWT → `Unauthenticated`;
+  - le tabelle `lotto_riserva` e `piano_integrazione` sono create.
+  Non è stata fatta un'integrazione vera sul cluster: serve il JWT di un
+  login OAuth (si farà nella demo del passo 7).
+- **Da decidere nel passo 5:** con un'integrazione la resa può risalire
+  (10,8 → 12). Edizioni dovrà decidere cosa fare di un `ResaRicalcolata` in
+  aumento.
+
+### Prossimi passi (5–7)
+
 - **Passo 5:** Edizioni consuma `ResaRicalcolata` e applica il ricalcolo
   (ONLINE → BAR, mai SOCI). Poi pubblica `TiraturaRidotta`, oppure
   `RicalcoloRifiutato` se non si può, sempre via outbox.
@@ -271,8 +317,10 @@ PowerShell, dalla cartella `ginvault`:
 git status
 git log --oneline -5
 
-# Test di un servizio (sostituire "produzione" con edizioni, magazzino, ...)
-docker run --rm -v "${PWD}/produzione:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+# Test di un servizio senza giacenze-api (edizioni, ricette)
+docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+# Magazzino e produzione: prima il modulo condiviso
+docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /repo maven:3.9-eclipse-temurin-21 sh -c 'mvn -B -q -f giacenze-api/pom.xml install && mvn -B -f magazzino/pom.xml test && mvn -B -f produzione/pom.xml test'
 
 # Cluster
 minikube start

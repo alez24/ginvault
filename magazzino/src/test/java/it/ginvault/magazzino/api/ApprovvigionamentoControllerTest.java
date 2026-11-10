@@ -266,6 +266,6 @@ class ApprovvigionamentoControllerTest {
 
     private static LottoVista lotto() {
         return new LottoVista(LOTTO, "lavanda", "Alta Val Varaita (Alpi Cozie)", new BigDecimal("10.800"),
-                LocalDate.of(2027, 8, 31), EsitoQualita.CONFORME, true, fornitore(), ORDINE, LocalDate.of(2026, 8, 6));
+                new BigDecimal("10.800"), LocalDate.of(2027, 8, 31), EsitoQualita.CONFORME, true, fornitore(), ORDINE, LocalDate.of(2026, 8, 6));
     }
 }
