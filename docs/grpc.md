@@ -83,8 +83,16 @@ Content-Type: application/problem+json
 
 Altri motivi del piano (sempre 409): `LOTTO_NON_DISPONIBILE` (non è tra i
 lotti utilizzabili della botanica), `ALTRA_BOTANICA`, `LOTTO_GIA_INTEGRATO`,
-`PIANO_COMPLETO` (non mancano kg), `KG_ECCESSIVI` (più di quelli che mancano),
-`KG_NON_VALIDI`.
+`LOTTO_DELLA_CONSEGNA`, `PIANO_COMPLETO` (non mancano kg), `KG_ECCESSIVI` (più
+di quelli che mancano), `KG_NON_VALIDI`.
+
+`LOTTO_DELLA_CONSEGNA` (con `ordineId`) riguarda il lotto arrivato con una
+consegna dello stesso piano. Il lotto da 10,8 kg di Elena è già tra i kg
+utilizzabili: integrarne 1,2 kg porterebbe il piano a 12 kg contando due volte
+la stessa lavanda. In magazzino quel lotto risulta libero, perché una consegna
+non riserva niente, quindi lo protegge il piano. Se l'evento della consegna
+arriva dopo che il suo lotto è stato integrato, nel conto dei kg il lotto vale
+una volta sola, con la consegna.
 
 ## La compensazione: `AnnullaRiserva`
 
@@ -122,8 +130,9 @@ aiuta: la regola dell'origine viene prima della riserva, quindi un lotto
 rifiutato non va mai annullato.
 
 C'è anche `GET /piani/{id}/lotti` (DISTILLATORE, RESP_ACQUISTI, ADMIN). Chiama
-`Disponibilita` e restituisce i lotti con `stessaOrigine`: la pagina del piano
-(passo 6) li mostra prima che Marco provi.
+`Disponibilita` e restituisce i lotti con `stessaOrigine`, senza quelli arrivati
+con le consegne del piano: la pagina del piano (passo 6) li mostra prima che
+Marco provi.
 
 ## Errori: dallo status gRPC alla risposta HTTP
 
@@ -244,6 +253,11 @@ docker run --rm -v "${PWD}\giacenze-api\src\main\proto:/proto" fullstorydev/grpc
 - **Commit perso.** Se il database salva il piano ma la risposta si perde, e
   poi il piano non si rilegge, la compensazione annulla una riserva che il
   piano usa. È un caso raro, e nessun test lo copre.
+- **Il lotto della consegna di un'altra edizione.** Un lotto conta per il piano
+  la cui consegna lo ha portato, ma in magazzino resta libero. Il piano di
+  un'altra edizione, con la stessa botanica e la stessa origine, potrebbe
+  quindi integrarlo, e quei kg conterebbero in due piani. Per evitarlo, la
+  consegna di un ordine dovrebbe riservare il lotto per l'edizione dell'ordine.
 - **Una replica.** Una connessione gRPC dura a lungo e resta sul pod scelto
   all'apertura. Con più repliche di magazzino servirebbe un bilanciamento per
   chiamata: Service headless e `round_robin` nel client.

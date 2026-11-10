@@ -372,6 +372,60 @@ class PianoDiProduzioneTest {
         assertThat(piano.eventi()).isEmpty();
     }
 
+    @Test
+    void ilLottoDellaConsegnaDiElenaNonSiIntegraNelloStessoPiano() {
+        // 1,2 kg dal lotto da 10,8 di Elena porterebbero il piano a 12 kg contando due volte la stessa lavanda
+        PianoDiProduzione piano = estate();
+        UUID ordine = UUID.randomUUID();
+        UUID lottoDiElena = UUID.randomUUID();
+        piano.registraConsegna(consegna(ordine, lottoDiElena, ORIGINE, "12", "10.8"), ADESSO);
+        piano.eventiPubblicati();
+        LottoProposto loStessoLotto = new LottoProposto(lottoDiElena, "lavanda", ORIGINE, new BigDecimal("10.8"),
+                new BigDecimal("10.8"), LocalDate.of(2027, 8, 31), "Raccoglitori dell'Alta Val Varaita");
+
+        assertThatThrownBy(() -> piano.verificaProposta(loStessoLotto, new BigDecimal("1.2")))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto -> {
+                    assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.LOTTO_DELLA_CONSEGNA);
+                    assertThat(rifiuto.getMessage()).contains("è arrivato con la consegna dell'ordine " + ordine)
+                            .endsWith("i suoi 10,8 kg sono già nel piano");
+                    assertThat(rifiuto.dettagli()).containsEntry("ordineId", ordine);
+                });
+        // Il piano si difende anche se si salta la verifica
+        assertThatThrownBy(() -> piano.integraLotto(loStessoLotto, new BigDecimal("1.2"), ADESSO))
+                .isInstanceOfSatisfying(IntegrazioneRifiutata.class, rifiuto ->
+                        assertThat(rifiuto.motivo()).isEqualTo(IntegrazioneRifiutata.Motivo.LOTTO_DELLA_CONSEGNA));
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("10.8");
+        assertThat(piano.integrazioni()).isEmpty();
+        assertThat(piano.eventi()).isEmpty();
+    }
+
+    @Test
+    void unLottoIntegratoCheArrivaPoiConUnaConsegnaContaUnaVoltaSola() {
+        // Due ordini da 6 kg. Il primo arriva con 5: mancano 1 kg.
+        PianoDiProduzione piano = estate();
+        piano.registraConsegna(consegna(UUID.randomUUID(), UUID.randomUUID(), ORIGINE, "6", "5"), ADESSO);
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("11");
+        // Il secondo arriva completo in magazzino (lotto L) e Marco ne integra subito 1 kg,
+        // prima che l'evento della consegna arrivi a Produzione: 12 kg
+        UUID lottoL = UUID.randomUUID();
+        LottoProposto lotto = new LottoProposto(lottoL, "lavanda", ORIGINE, new BigDecimal("6"), new BigDecimal("6"),
+                LocalDate.of(2027, 8, 31), "Raccoglitori dell'Alta Val Varaita");
+        piano.integraLotto(lotto, piano.verificaProposta(lotto, BigDecimal.ONE), ADESSO);
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("12");
+        piano.eventiPubblicati();
+
+        // Arriva la consegna del lotto L: la lavanda vera è 5 + 6 = 11 kg, non 12
+        EsitoConsegna esito = piano.registraConsegna(consegna(UUID.randomUUID(), lottoL, ORIGINE, "6", "6"), ADESSO);
+
+        assertThat(esito).isEqualTo(EsitoConsegna.RESA_RICALCOLATA);
+        assertThat(piano.kgDisponibili()).isEqualByComparingTo("11");
+        assertThat(piano.bottiglieProducibili()).isEqualTo(550);
+        assertThat(piano.eventi()).singleElement().isInstanceOfSatisfying(ResaRicalcolata.class, evento -> {
+            assertThat(evento.kgDisponibiliPrima()).isEqualByComparingTo("12");
+            assertThat(evento.kgDisponibili()).isEqualByComparingTo("11");
+        });
+    }
+
     // ---------------------------------------------------------------- aiuti
 
     /** L'edizione d'estate dopo i 10,8 kg arrivati su 12: mancano 1,2 kg. */
@@ -403,5 +457,12 @@ class PianoDiProduzioneTest {
                                              String arrivati, String esito) {
         return new ConsegnaArrivata(ordine, UUID.randomUUID(), botanica, origine, new BigDecimal(ordinati),
                 new BigDecimal(arrivati), esito, ARRIVO);
+    }
+
+    /** Una consegna conforme di lavanda con il lotto indicato. */
+    private static ConsegnaArrivata consegna(UUID ordine, UUID lotto, String origine, String ordinati,
+                                             String arrivati) {
+        return new ConsegnaArrivata(ordine, lotto, "lavanda", origine, new BigDecimal(ordinati),
+                new BigDecimal(arrivati), "CONFORME", ARRIVO);
     }
 }

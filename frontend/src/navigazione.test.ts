@@ -14,11 +14,12 @@ describe('menu per ruolo', () => {
     expect(etichette(null)).toEqual(['La distilleria']);
   });
 
-  it('il distillatore vede formulazioni ed edizioni, il socio l’area soci', () => {
+  it('il distillatore vede formulazioni, edizioni e produzione, il socio l’area soci', () => {
     expect(etichette(utente('DISTILLATORE'))).toEqual([
       'La distilleria',
       'Formulazioni',
       'Edizioni',
+      'Produzione',
       'Il mio profilo',
     ]);
     expect(etichette(utente('SOCIO'))).toEqual(['La distilleria', 'Area soci', 'Il mio profilo']);
@@ -29,9 +30,14 @@ describe('menu per ruolo', () => {
       'La distilleria',
       'Formulazioni',
       'Edizioni',
+      'Produzione',
       'Area soci',
       'Il mio profilo',
     ]);
+  });
+
+  it('la responsabile acquisti vede l’area acquisti', () => {
+    expect(etichette(utente('RESP_ACQUISTI'))).toEqual(['La distilleria', 'Acquisti', 'Il mio profilo']);
   });
 
   it('un cliente ha solo il profilo', () => {
@@ -48,6 +54,9 @@ describe('pagine protette', () => {
     expect(accessibile(utente('DISTILLATORE'), PAGINE.formulazioni)).toBe(true);
     expect(accessibile(utente('SOCIO'), PAGINE.edizioni)).toBe(false);
     expect(accessibile(utente('DISTILLATORE'), PAGINE.edizioni)).toBe(true);
+    expect(accessibile(utente('DISTILLATORE'), PAGINE.acquisti)).toBe(false);
+    expect(accessibile(utente('RESP_ACQUISTI'), PAGINE.acquisti)).toBe(true);
+    expect(accessibile(utente('RESP_ACQUISTI'), PAGINE.piani)).toBe(false);
   });
 
   it('spiega quale ruolo serve', () => {

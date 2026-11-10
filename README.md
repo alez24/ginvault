@@ -10,8 +10,9 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 > prova protetto da ruolo. Ricette ed Edizioni hanno la logica di dominio:
 > formulazioni con prove di assaggio, edizioni validate da Ricette via REST,
 > tiratura e ricalcolo.
-> Il front-end React ha il back-office di Marco e l'area soci di Giulia (con dati
-> finti finché non ci sono le prenotazioni); è servito da nginx su
+> Il front-end React ha il back-office di Marco (con il piano di produzione e
+> l'integrazione di un lotto), l'area acquisti di Elena e l'area soci di Giulia
+> (con dati finti finché non ci sono le prenotazioni); è servito da nginx su
 > `http://localhost` ([`frontend/README.md`](frontend/README.md)).
 > Su Minikube girano front-end, gateway, edizioni, ricette e i loro database
 > dietro un Ingress, con NetworkPolicy che isolano database, front-end e gateway
@@ -446,7 +447,7 @@ magazzino.eventi  ConsegnaRegistrata  ──▶ piano a 10,8 kg (540 bottiglie)
 |---|---|---|
 | `GET /piani`, `GET /piani?edizione={id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i piani, dal più recente (o quello di un'edizione) |
 | `GET /piani/{id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | un piano: kg previsti, disponibili e mancanti, `bottiglieProducibili`, le consegne con i kg utilizzabili e il motivo, i lotti integrati |
-| `GET /piani/{id}/lotti` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i lotti della botanica in magazzino (gRPC `Disponibilita`), con `stessaOrigine` |
+| `GET /piani/{id}/lotti` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i lotti della botanica in magazzino (gRPC `Disponibilita`), con `stessaOrigine`, senza quelli arrivati con le consegne del piano |
 | `POST /piani/{id}/integrazioni` | DISTILLATORE, ADMIN | `{"lottoId", "kg"}`: integra un lotto proposto da Elena. 201, oppure 409 con il motivo (`ORIGINE_DIVERSA`: "origine diversa: l'edizione deve restare fedele alla sua origine"), 503 se il magazzino non risponde in 2 secondi |
 
 Regole del piano (aggregato `PianoDiProduzione`):
@@ -463,7 +464,10 @@ Regole del piano (aggregato `PianoDiProduzione`):
 - ogni ordine conta una volta; `ResaRicalcolata` parte solo se il valore cambia;
 - un **lotto integrato** deve avere l'origine richiesta e non superare i kg
   mancanti. I suoi kg, riservati in magazzino con `RiservaLotto`, si sommano
-  agli utilizzabili: `10,8 + 1,2 = 12`.
+  agli utilizzabili: `10,8 + 1,2 = 12`;
+- il **lotto arrivato con una consegna del piano** non si integra
+  (`LOTTO_DELLA_CONSEGNA`): i suoi kg sono già contati. Se la consegna arriva
+  dopo l'integrazione del suo lotto, quel lotto conta una volta sola.
 
 ### gRPC con il Magazzino
 

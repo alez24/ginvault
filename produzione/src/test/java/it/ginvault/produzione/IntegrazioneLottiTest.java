@@ -236,6 +236,31 @@ class IntegrazioneLottiTest {
         assertThat(MAGAZZINO.autorizzazioni).containsExactly("Bearer " + JWT_DI_ELENA);
     }
 
+    @Test
+    void ilLottoDellaConsegnaDiElenaNonSiProponeENonSiIntegra() throws Exception {
+        UUID lottoDiElena = UUID.randomUUID();
+        UUID piano = pianoDopoLaConsegnaDiElena(lottoDiElena);
+        // In magazzino il lotto della consegna ha i suoi 10,8 kg liberi: nessuno li ha riservati
+        MAGAZZINO.aggiungi(lottoDiElena, ORIGINE, "10.800");
+        UUID altro = MAGAZZINO.aggiungi(ORIGINE, "3.000");
+
+        mvc.perform(get("/piani/{id}/lotti", piano).header(HttpHeaders.AUTHORIZATION, "Bearer " + JWT_DI_ELENA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lotti.length()").value(1))
+                .andExpect(jsonPath("$.lotti[0].lottoId").value(altro.toString()));
+
+        mvc.perform(integra(piano, lottoDiElena, "1.2", JWT_DI_MARCO))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Integrazione rifiutata"))
+                .andExpect(jsonPath("$.motivo").value("LOTTO_DELLA_CONSEGNA"))
+                .andExpect(jsonPath("$.ordineId").isNotEmpty());
+
+        // Rifiutato prima della riserva: il magazzino non ha riservato niente e il piano resta a 10,8
+        assertThat(MAGAZZINO.riserve).isEmpty();
+        assertThat(kgDisponibili(piano)).isEqualByComparingTo("10.8");
+        assertThat(righeResaRicalcolata(piano)).isEqualTo(1);
+    }
+
     // ------------------------------------------------------------- quando il magazzino non collabora
 
     @Test
@@ -379,10 +404,15 @@ class IntegrazioneLottiTest {
 
     /** L'edizione d'estate (12 kg, 600 bottiglie) dopo la consegna di Elena: 10,8 kg, 540 bottiglie. */
     private UUID pianoDopoLaConsegnaDiElena() {
+        return pianoDopoLaConsegnaDiElena(UUID.randomUUID());
+    }
+
+    /** Lo stesso, con il lotto della consegna di Elena indicato dal test. */
+    private UUID pianoDopoLaConsegnaDiElena(UUID lottoDellaConsegna) {
         UUID edizione = UUID.randomUUID();
         produzione.creaPiano(new NuovoPiano(edizione, UUID.randomUUID(), 2, "lavanda", new BigDecimal("20"),
                 ORIGINE, new BigDecimal("12"), 600));
-        produzione.registraConsegna(edizione, new ConsegnaArrivata(UUID.randomUUID(), UUID.randomUUID(), "lavanda",
+        produzione.registraConsegna(edizione, new ConsegnaArrivata(UUID.randomUUID(), lottoDellaConsegna, "lavanda",
                 ORIGINE, new BigDecimal("12"), new BigDecimal("10.8"), "CONFORME", LocalDate.of(2026, 8, 6)));
         return produzione.piani(edizione).getFirst().id();
     }
@@ -447,7 +477,10 @@ class IntegrazioneLottiTest {
         }
 
         UUID aggiungi(String origine, String kg) {
-            UUID id = UUID.randomUUID();
+            return aggiungi(UUID.randomUUID(), origine, kg);
+        }
+
+        UUID aggiungi(UUID id, String origine, String kg) {
             lotti.add(LottoDisponibile.newBuilder()
                     .setLottoId(id.toString())
                     .setBotanica("lavanda")

@@ -18,6 +18,8 @@ public class IntegrazioneRifiutata extends RuntimeException {
         ORIGINE_DIVERSA,
         /** Il lotto è già integrato nel piano */
         LOTTO_GIA_INTEGRATO,
+        /** Il lotto è arrivato con una consegna del piano: i suoi kg sono già contati */
+        LOTTO_DELLA_CONSEGNA,
         /** kg mancanti, a zero o non al grammo */
         KG_NON_VALIDI,
         /** Il piano ha già tutti i kg previsti */

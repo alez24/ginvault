@@ -1,13 +1,20 @@
-import { Outlet, Route, Routes } from 'react-router';
+import { Navigate, Outlet, Route, Routes } from 'react-router';
 
 import { Layout } from './componenti/Layout';
 import { Protetta } from './componenti/Protetta';
 import { PAGINE } from './navigazione';
 import { Accedi } from './pagine/Accedi';
+import { DettaglioOrdine } from './pagine/acquisti/DettaglioOrdine';
+import { ElencoOrdini } from './pagine/acquisti/ElencoOrdini';
+import { ElencoFornitori, SchedaFornitore } from './pagine/acquisti/Fornitori';
+import { DettaglioLotto, ElencoLotti } from './pagine/acquisti/Lotti';
+import { NuovoOrdine } from './pagine/acquisti/NuovoOrdine';
 import { DettaglioEdizione } from './pagine/distilleria/DettaglioEdizione';
 import { DettaglioFormulazione } from './pagine/distilleria/DettaglioFormulazione';
+import { DettaglioPiano } from './pagine/distilleria/DettaglioPiano';
 import { ElencoEdizioni } from './pagine/distilleria/ElencoEdizioni';
 import { ElencoFormulazioni } from './pagine/distilleria/ElencoFormulazioni';
+import { ElencoPiani } from './pagine/distilleria/ElencoPiani';
 import { NuovaFormulazione } from './pagine/distilleria/NuovaFormulazione';
 import { Home } from './pagine/Home';
 import { NonTrovata } from './pagine/NonTrovata';
@@ -31,7 +38,7 @@ export function App() {
           }
         />
 
-        {/* Back-office del distillatore (storia di Marco) */}
+        {/* Back-office del distillatore (storie di Marco ed Elena) */}
         <Route
           path={PAGINE.formulazioni.percorso}
           element={
@@ -54,6 +61,36 @@ export function App() {
         >
           <Route index element={<ElencoEdizioni />} />
           <Route path=":id" element={<DettaglioEdizione />} />
+        </Route>
+        <Route
+          path={PAGINE.piani.percorso}
+          element={
+            <Protetta pagina={PAGINE.piani}>
+              <Outlet />
+            </Protetta>
+          }
+        >
+          <Route index element={<ElencoPiani />} />
+          <Route path=":id" element={<DettaglioPiano />} />
+        </Route>
+
+        {/* Area acquisti (storia di Elena) */}
+        <Route
+          path={PAGINE.acquisti.percorso}
+          element={
+            <Protetta pagina={PAGINE.acquisti}>
+              <Outlet />
+            </Protetta>
+          }
+        >
+          <Route index element={<ElencoOrdini />} />
+          <Route path="ordini" element={<Navigate to={PAGINE.acquisti.percorso} replace />} />
+          <Route path="ordini/nuovo" element={<NuovoOrdine />} />
+          <Route path="ordini/:id" element={<DettaglioOrdine />} />
+          <Route path="lotti" element={<ElencoLotti />} />
+          <Route path="lotti/:id" element={<DettaglioLotto />} />
+          <Route path="fornitori" element={<ElencoFornitori />} />
+          <Route path="fornitori/:id" element={<SchedaFornitore />} />
         </Route>
 
         {/* Area soci (storia di Giulia) */}

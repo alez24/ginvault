@@ -3,8 +3,11 @@ import type { ReactNode } from 'react';
 interface Props {
   titolo: string;
   children?: ReactNode;
-  /** "informazione" per le notizie, "problema" per errori e operazioni rifiutate. */
-  tipo?: 'informazione' | 'problema';
+  /**
+   * "informazione" per le notizie, "attenzione" per le cose andate a buon fine
+   * ma da notare (una consegna ridotta), "problema" per errori e operazioni rifiutate.
+   */
+  tipo?: 'informazione' | 'attenzione' | 'problema';
   onChiudi?: () => void;
 }
 

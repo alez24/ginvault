@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { campiNonValidi, nomeCampo, rimedio } from './errori';
+import { campiNonValidi, nomeCampo, rifiutoIntegrazione, rimedio } from './errori';
 import { ErroreApi } from './http';
 
 describe('campi di un 400', () => {
@@ -39,5 +39,38 @@ describe('cosa suggerire', () => {
   it('niente per le regole di dominio: basta il messaggio del servizio', () => {
     expect(rimedio(new ErroreApi(409, 'Tiratura non riducibile'))).toBeUndefined();
     expect(rimedio(new ErroreApi(422, 'Formulazione non utilizzabile'))).toBeUndefined();
+  });
+});
+
+describe('rifiuto dell’integrazione di un lotto', () => {
+  it('l’origine diversa, con le due origini', () => {
+    const errore = new ErroreApi(409, 'Integrazione rifiutata', 'origine diversa: l’edizione deve restare fedele alla sua origine', {
+      title: 'Integrazione rifiutata',
+      motivo: 'ORIGINE_DIVERSA',
+      origineRichiesta: 'Alta Val Varaita (Alpi Cozie)',
+      origineLotto: 'Campi GinVault (Saluzzo, 400 m)',
+    });
+    expect(rifiutoIntegrazione(errore)).toEqual({
+      motivo: 'ORIGINE_DIVERSA',
+      origineRichiesta: 'Alta Val Varaita (Alpi Cozie)',
+      origineLotto: 'Campi GinVault (Saluzzo, 400 m)',
+    });
+  });
+
+  it('gli altri motivi, compreso il rifiuto del magazzino', () => {
+    const errore = new ErroreApi(409, 'Riserva rifiutata dal magazzino', 'kg non disponibili', { motivo: 'RISERVA_RIFIUTATA' });
+    expect(rifiutoIntegrazione(errore)).toEqual({ motivo: 'RISERVA_RIFIUTATA', origineRichiesta: undefined, origineLotto: undefined });
+  });
+
+  it('non è un rifiuto: il magazzino lento, una modifica concorrente, un motivo sconosciuto', () => {
+    expect(rifiutoIntegrazione(new ErroreApi(503, 'Magazzino non disponibile'))).toBeUndefined();
+    expect(rifiutoIntegrazione(new ErroreApi(409, 'Modifica concorrente'))).toBeUndefined();
+    expect(rifiutoIntegrazione(new ErroreApi(409, 'Integrazione rifiutata', undefined, { motivo: 'NUOVO' }))).toBeUndefined();
+  });
+
+  it('i campi di magazzino e produzione hanno un nome', () => {
+    expect(nomeCampo('kgArrivati')).toBe('Kg arrivati');
+    expect(nomeCampo('esitoQualita')).toBe('Controllo qualità');
+    expect(nomeCampo('kg')).toBe('Kg da integrare');
   });
 });

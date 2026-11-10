@@ -4,7 +4,9 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import it.ginvault.produzione.dominio.ConsegnaNelPiano;
 import it.ginvault.produzione.dominio.EsitoIntegrazione;
@@ -75,13 +77,19 @@ public final class Viste {
     /**
      * GET /piani/{id}/lotti: i lotti utilizzabili della botanica del piano in
      * magazzino. stessaOrigine dice in anticipo quali il piano può accettare.
+     * Mancano i lotti arrivati con le consegne del piano: sono già contati, e
+     * il piano li rifiuterebbe (LOTTO_DELLA_CONSEGNA).
      */
     public record LottiDelPianoVista(UUID pianoId, String botanica, String origineRichiesta, BigDecimal kgMancanti,
                                      List<LottoDelPianoVista> lotti) {
 
         static LottiDelPianoVista di(PianoVista piano, List<LottoProposto> lotti) {
+            Set<UUID> consegnati = piano.consegne().stream().map(ConsegnaVista::lottoId).collect(Collectors.toSet());
             return new LottiDelPianoVista(piano.id(), piano.botanica(), piano.origineRichiesta(), piano.kgMancanti(),
-                    lotti.stream().map(lotto -> LottoDelPianoVista.di(lotto, piano.origineRichiesta())).toList());
+                    lotti.stream()
+                            .filter(lotto -> !consegnati.contains(lotto.lottoId()))
+                            .map(lotto -> LottoDelPianoVista.di(lotto, piano.origineRichiesta()))
+                            .toList());
         }
     }
 

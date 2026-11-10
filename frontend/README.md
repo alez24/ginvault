@@ -42,7 +42,8 @@ Prerequisiti:
 
 - Node 20.19+ o 22.12+;
 - il cluster avviato come in [`k8s/README.md`](../k8s/README.md), con le
-  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2` e `ginvault/edizioni:0.5`.
+  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2`, `ginvault/edizioni:0.5`,
+  `ginvault/magazzino:0.3` e `ginvault/produzione:0.3`.
 
 1. **Terminale 1: il gateway del cluster su `localhost:8080`.** Lascialo aperto.
 
@@ -81,8 +82,8 @@ Prerequisiti:
    ```
 
 4. Apri **http://localhost:5173** e scegli **Accedi con GitHub** (l'account con
-   il ruolo DISTILLATORE). Dopo il login torni alla home, con il tuo nome in alto
-   e il menu del tuo ruolo.
+   il ruolo DISTILLATORE, o RESP_ACQUISTI per l'area acquisti). Dopo il login
+   torni alla home, con il tuo nome in alto e il menu del tuo ruolo.
 
 Cosa succede durante il login:
 
@@ -202,6 +203,50 @@ Pagine per il ruolo DISTILLATORE, con le API vere di Ricette ed Edizioni.
   le bottiglie tolte si svuotano una dopo l'altra e accanto al canale compare lo scarto
   (−60); con «riduci movimento» attivo nel sistema si vede subito il risultato.
 
+## Area acquisti e piano di produzione (storia di Elena)
+
+Pagine con le API vere di Magazzino e Produzione, dal gateway (`/api/magazzino/**`,
+`/api/produzione/**`).
+
+Per Elena (RESP_ACQUISTI) c'è la voce **Acquisti**, con tre schede: ordini, lotti, fornitori.
+
+| Pagina | Cosa si fa | Chiamate (dal gateway) |
+|---|---|---|
+| `/acquisti` | ordini da ricevere e consegnati, con la barra dei kg (pieni quelli arrivati, tratteggiati quelli che mancano) e le etichette: atteso da N giorni, ridotta, in ritardo | `GET /api/magazzino/ordini` |
+| `/acquisti/ordini/nuovo` | edizione (scelta tra i piani di produzione), fornitore, kg, consegna attesa; avvisa se il fornitore ha un'origine diversa da quella dell'edizione | `GET /api/produzione/piani`, `GET /api/magazzino/fornitori`, `POST /api/magazzino/ordini` |
+| `/acquisti/ordini/{id}` | registrazione della consegna: kg arrivati, giorno, scadenza del lotto, esito del controllo qualità, nota. Mentre si scrive compare l'avviso «Consegna ridotta: 10,8 su 12 kg», con i kg che non arriveranno e i giorni di ritardo | `GET …/ordini/{id}`, `POST …/ordini/{id}/consegne` |
+| `/acquisti/lotti`, `/acquisti/lotti/{id}` | lotti con origine, scadenza, esito qualità e kg riservati per la produzione; filtro per botanica (`?botanica=lavanda`) | `GET /api/magazzino/lotti`, `GET …/lotti/{id}` |
+| `/acquisti/fornitori`, `/acquisti/fornitori/{id}` | scheda del fornitore: consegne puntuali, in ritardo e ridotte, e lo storico dalla più recente | `GET /api/magazzino/fornitori`, `GET …/fornitori/{id}` |
+
+Per Marco (DISTILLATORE) c'è la voce **Produzione**:
+
+| Pagina | Cosa si fa | Chiamate (dal gateway) |
+|---|---|---|
+| `/distilleria/piani` | un piano per edizione, con la barra dei kg: dalle consegne, integrati, attesi, mancanti | `GET /api/produzione/piani` |
+| `/distilleria/piani/{id}` | kg previsti, disponibili e mancanti, bottiglie producibili, consegne, integrazioni e **Integra un lotto** | `GET …/piani/{id}`, `GET …/piani/{id}/lotti`, `POST …/piani/{id}/integrazioni` |
+
+- **Quale edizione.** Elena non può leggere le edizioni (`GET /api/edizioni/...` è per
+  DISTILLATORE e ADMIN). L'edizione di un ordine quindi si sceglie tra i piani di
+  produzione, che hanno botanica, origine e kg mancanti. Il nome («Edizione d'estate
+  2026») viene dalla stagione in cui è nato il piano.
+- **Il rifiuto spiegato.** Un lotto di un'altra origine si può scegliere: ha il bordo
+  tratteggiato e l'anteprima dice già che Produzione lo rifiuterà. Il 409 «Integrazione
+  rifiutata» porta il `motivo`. Con `ORIGINE_DIVERSA` la pagina mostra le due origini e
+  dice che nessun kg è stato riservato: Produzione controlla la regola prima di chiamare
+  il magazzino. Gli altri rifiuti (kg che non bastano, riserva rifiutata dal magazzino) e
+  il 503 si vedono come gli altri errori.
+- **Il lotto della consegna non si propone.** I lotti arrivati con le consegne del piano
+  sono già nei suoi kg: Produzione non li restituisce in `GET …/lotti` e li rifiuta con
+  `LOTTO_DELLA_CONSEGNA`.
+- **Anteprime.** Le regole di consegna e integrazione sono in
+  [`src/utilita/regole.ts`](src/utilita/regole.ts), come quelle del ricalcolo:
+  - kg più di zero e non più di quelli ordinati;
+  - la consegna non nel futuro (giorno di Roma) e la scadenza dopo la consegna;
+  - la nota al massimo di 500 caratteri;
+  - le origini confrontate senza maiuscole e spazi, come `Origini.stessa` di Produzione.
+- **Dopo la consegna** non serve altro: piano e tiratura cambiano con gli eventi. La
+  pagina dell'edizione porta al suo piano.
+
 ## Area soci (storia di Giulia)
 
 Pagine per il ruolo SOCIO. Le prenotazioni non esistono ancora nei servizi: per ora
@@ -317,7 +362,7 @@ verticale sul telefono.
 | Comando | Cosa fa |
 |---|---|
 | `npm run dev` | Dev server su http://localhost:5173, con il proxy verso il gateway |
-| `npm test` | Test con Vitest: CSRF ed errori di `api`, menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, numeri e date all'italiana, dati finti dell'area soci |
+| `npm test` | Test con Vitest: CSRF ed errori di `api` (con i motivi del rifiuto di un'integrazione), menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, regole di ordine, consegna e integrazione con i dati di Elena, numeri e date all'italiana, schede dell'area acquisti, dati finti dell'area soci |
 | `npm run build` | Controllo dei tipi (`tsc -b`) e build di produzione in `dist/` |
 
 ## Struttura
@@ -327,27 +372,29 @@ Dockerfile              build con Node e immagine finale con nginx
 nginx/                  default.conf (pagine, cache, proxy verso il gateway) e
                         intestazioni.conf (Content-Security-Policy e altre intestazioni)
 src/
-  api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, errori.ts,
-                        soci.ts (tipi e dati dell'area soci)
+  api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, magazzino.ts,
+                        produzione.ts, errori.ts, soci.ts (tipi e dati dell'area soci)
   mock/                 soci.ts: i dati finti dell'area soci, finché non ci sono le prenotazioni
   sessione/             utente da /auth/me, login, logout, pagina da riaprire dopo il login
   navigazione.ts        pagine e ruoli: un solo posto per menu e route protette
   componenti/           intestazione, layout, avvisi, route protetta, errori, editor delle dosi,
                         bottiglie delle quote, ricette con i puntini, Bottiglia (foto e
                         cartellino), Montagne (divisori e crinali), Movimento (dissolvenze e
-                        contatori), StrisciaBotaniche, TestataPagina (fascia e indicatori)
+                        contatori), StrisciaBotaniche, TestataPagina (fascia e indicatori),
+                        Acquisti (schede, etichette, barra dei kg, avviso di consegna ridotta)
   componenti/illustrazioni/  ginepro, lavanda, genziana e pino mugo al tratto, crinali delle
                         montagne (geometria.ts li calcola)
   assets/               logo, logo chiaro e bottiglia
   assets/foto/          le fotografie in WebP e foto.ts (srcset e testi alternativi)
   pagine/               home, accesso, profilo, pagina non trovata
   pagine/soci/          area soci ed edizione vista dal socio
-  pagine/distilleria/   formulazioni ed edizioni (back-office del distillatore)
+  pagine/distilleria/   formulazioni, edizioni e piani di produzione (back-office del distillatore)
+  pagine/acquisti/      ordini, consegne, lotti e fornitori (area acquisti)
   utilita/              numeri all'italiana, regole per le anteprime, useCaricamento
   stile.css             palette, tipografia, intestazione, montagne, home, accesso, piè di
                         pagina (si parte dal telefono)
   stile-distilleria.css fascia avorio, indicatori, schede, ricette, moduli e bottiglie del
-                        back-office
+                        back-office; barra dei kg, scelte e storico dell'area acquisti
   stile-soci.css        area soci: prenotazioni, regole, bottiglie numerate, foglio del
                         ritiro, tappe della tracciabilità
 ```

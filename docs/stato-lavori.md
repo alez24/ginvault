@@ -8,9 +8,14 @@ e il punto esatto in cui siamo arrivati.
 - **Branch:** `storia-elena` (creato da `main` aggiornato, `ed2c054`).
 - **Storia di Elena, passi 1–5 committati** su `storia-elena`, **senza push**.
   `AnnullaRiserva` (la compensazione di Produzione) e il passo 5 (Edizioni
-  consuma `ResaRicalcolata`) sono nel commit con questo file.
-- **Prossimo:** il passo 6, il frontend per Elena.
-- Sul cluster girano `edizioni:0.5`, `magazzino:0.3` e `produzione:0.3`.
+  consuma `ResaRicalcolata`) sono in `080310f`.
+- **Passo 6** (frontend per Elena) e la correzione di Produzione sul lotto
+  della consegna sono nel commit con questo file.
+- **Prossimo:** il passo 7, integrazione e demo.
+- Sul cluster girano `edizioni:0.5`, `magazzino:0.3` e `produzione:0.3`. Il
+  front-end del cluster è ancora `frontend:0.2`, senza le pagine del passo 6, e
+  `produzione:0.3` non ha ancora la correzione: le nuove immagini arrivano nel
+  passo 7.
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
@@ -29,7 +34,8 @@ e il punto esatto in cui siamo arrivati.
 | `830a03f` | 8 nov | **Elena, passo 2: Magazzino** (vedi sotto) |
 | `0298ebb` | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
 | `497fd93` | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
-| (il commit con questo file) | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
+| `080310f` | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
+| (il commit con questo file) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
 
 Le PR #1, #2 e #3 sono unite in `main` con merge commit.
 
@@ -49,9 +55,9 @@ I sette passi:
 | 2 | Servizio magazzino (8084): ordini, consegne, lotti, fornitori, outbox | ✅ committato `830a03f` |
 | 3 | Servizio produzione (8083): piani, consumer idempotenti, retry, DLT, `ResaRicalcolata` | ✅ committato `0298ebb` |
 | 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ✅ committato `497fd93` |
-| 4+ | `AnnullaRiserva`: compensazione se il piano non si salva dopo la riserva | ✅ committato |
-| 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `TiraturaAumentata` / `RicalcoloRifiutato` | ✅ committato |
-| 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | da fare |
+| 4+ | `AnnullaRiserva`: compensazione se il piano non si salva dopo la riserva | ✅ committato `080310f` |
+| 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `TiraturaAumentata` / `RicalcoloRifiutato` | ✅ committato `080310f` |
+| 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | ✅ committato |
 | 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | da fare |
 
 ### Passo 1: Kafka (`86fe672`)
@@ -271,7 +277,7 @@ in `ResaRicalcolata` v1, immagini con `docker build` + `minikube image load`.
 - **Deciso nel passo 5:** con un'integrazione la resa risale (10,8 → 12), e
   le bottiglie in più tornano a ONLINE (`TiraturaAumentata`).
 
-### `AnnullaRiserva`: la compensazione (committato)
+### `AnnullaRiserva`: la compensazione (`080310f`)
 
 Dettagli in [docs/grpc.md](grpc.md#la-compensazione-annullariserva).
 
@@ -306,7 +312,7 @@ Dettagli in [docs/grpc.md](grpc.md#la-compensazione-annullariserva).
       riserva orfana;
     - un test unitario per la rilettura (richiesta concorrente vincente).
 
-### Passo 5: Edizioni consuma `ResaRicalcolata` (committato)
+### Passo 5: Edizioni consuma `ResaRicalcolata` (`080310f`)
 
 Dettagli in [docs/eventi.md](eventi.md#il-consumer-di-edizioni).
 
@@ -367,16 +373,64 @@ Dettagli in [docs/eventi.md](eventi.md#il-consumer-di-edizioni).
   aveva già la label `ginvault/usa-kafka`), quindi niente test busybox. La
   catena 600 → 540 sul cluster si vedrà nella demo del passo 7.
 
-### Prossimi passi (6–7)
+### Passo 6: frontend per Elena (nel commit con questo file)
 
-- **Passo 6:** area acquisti nel frontend, cioè ordini, consegna con l'avviso
-  "consegna ridotta: 10,8 su 12 kg", lotti e scheda fornitore. Nella pagina del
-  piano, l'integrazione di un lotto con il rifiuto spiegato.
-- **Passo 7:**
-  - gateway, compose, K8s e README;
-  - `docs/demo-storia-elena.md`, con la catena 600 → 540 senza azioni manuali,
-    il rifiuto del lotto dei campi, i messaggi nei topic, la prova
-    dell'idempotenza e la prova dell'outbox con Kafka spento.
+Il frontend, la documentazione e una correzione di Produzione (in fondo). Le
+pagine usano le API vere di Magazzino e Produzione; le route del gateway
+c'erano già. Il dettaglio è in
+[`frontend/README.md`](../frontend/README.md#area-acquisti-e-piano-di-produzione-storia-di-elena).
+
+- **Area acquisti** (voce di menu «Acquisti», ruolo RESP_ACQUISTI), con tre schede:
+  - **Ordini** (`/acquisti`): da ricevere e consegnati, barra dei kg, etichette
+    (atteso da N giorni, ridotta, in ritardo).
+  - **Nuovo ordine**: l'edizione si sceglie tra i piani di produzione, perché
+    Elena non legge le edizioni. Se il fornitore ha un'altra origine, la pagina
+    lo avvisa.
+  - **Consegna** (`/acquisti/ordini/{id}`): kg, giorno, scadenza, esito del
+    controllo qualità e nota. Mentre si scrive compare l'avviso «Consegna
+    ridotta: 10,8 su 12 kg».
+  - **Lotti**, con il filtro per botanica.
+  - **Scheda del fornitore**, con lo storico.
+- **Piano di produzione** (voce «Produzione», ruolo DISTILLATORE): l'elenco dei
+  piani e la pagina del piano con **Integra un lotto**.
+  - L'anteprima avvisa già quando un lotto ha un'origine diversa.
+  - Il 409 `ORIGINE_DIVERSA` è spiegato con le due origini; nessun kg è
+    riservato.
+  - La pagina dell'edizione porta al suo piano.
+- **Regole delle anteprime** in `regole.ts`, come quelle del ricalcolo. Le
+  stesse dei servizi: consegna, nuovo ordine, confronto delle origini, kg
+  dell'integrazione.
+- **Test:** `npx tsc -b` pulito e `npm test` con 9 file e 93 test.
+  Nuovi: `regole-elena.test.ts`, `Acquisti.test.ts`; ampliati i test di numeri,
+  errori e navigazione.
+- **Verifica visiva:** 13 schermate, desktop e telefono, con un finto gateway e
+  Chrome headless nello scratchpad (non nel repository).
+- **Correzione di Produzione: il lotto della consegna.** Prima Produzione
+  proponeva e accettava il lotto arrivato con una consegna dello stesso piano.
+  Integrare 1,2 kg dal lotto da 10,8 di Elena portava il piano a 12 kg,
+  contando due volte la stessa lavanda. Adesso:
+  - `PianoDiProduzione` lo rifiuta con il nuovo motivo `LOTTO_DELLA_CONSEGNA`
+    (409, con `ordineId`), prima della riserva in magazzino;
+  - `GET /piani/{id}/lotti` non lo restituisce più;
+  - se l'evento della consegna arriva dopo che il suo lotto è stato integrato,
+    nel conto dei kg quel lotto vale una volta sola;
+  - test: due nuovi in `PianoDiProduzioneTest`, uno in `IntegrazioneLottiTest`.
+
+  Resta un limite, scritto in `docs/grpc.md`: il lotto della consegna di
+  un'altra edizione, con la stessa botanica e la stessa origine, si può ancora
+  integrare. Servirebbe che la consegna riservasse il lotto per l'edizione
+  dell'ordine.
+
+### Prossimo passo (7)
+
+- gateway, compose, K8s e README. Ci sono anche:
+  - le immagini `frontend:0.3`, con le pagine del passo 6, e `produzione:0.4`,
+    con la correzione;
+  - il riquadro «Stato» in cima al `README.md`, ancora fermo alla storia di
+    Marco.
+- `docs/demo-storia-elena.md`, con la catena 600 → 540 senza azioni manuali,
+  il rifiuto del lotto dei campi, i messaggi nei topic, la prova
+  dell'idempotenza e la prova dell'outbox con Kafka spento.
 
 ## Regole di lavoro concordate
 

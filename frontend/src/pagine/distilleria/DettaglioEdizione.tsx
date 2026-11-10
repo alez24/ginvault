@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router';
 
 import { CANALI, edizioni, NOMI_CANALI, type Edizione } from '../../api/edizioni';
 import { ErroreApi } from '../../api/http';
+import { produzione } from '../../api/produzione';
 import { ricette } from '../../api/ricette';
 import { Bottiglia, Cartellino } from '../../componenti/Bottiglia';
 import { BOTTIGLIE_PER_DISEGNO, QuoteInBottiglie } from '../../componenti/Bottiglie';
@@ -37,6 +38,7 @@ export function DettaglioEdizione() {
   const [confronto, setConfronto] = useState<Confronto | null>(null);
   const formulazioneId = risultato.stato === 'pronto' ? risultato.dati.formulazione.id : undefined;
   const nome = useNomeFormulazione(formulazioneId);
+  const pianoId = usePianoDellEdizione(risultato.stato === 'pronto' ? id : undefined);
 
   if (risultato.stato === 'caricamento') {
     return <p className="contenitore attesa">Carico l’edizione…</p>;
@@ -122,6 +124,12 @@ export function DettaglioEdizione() {
             La {edizione.botanicaDiStagione} deve venire da {edizione.origineBotanica}.
           </>
         )}
+        {pianoId && (
+          <>
+            {' '}
+            Da dove arrivano i kg lo dice il <Link to={`${PAGINE.piani.percorso}/${pianoId}`}>piano di produzione</Link>.
+          </>
+        )}
       </p>
 
       <div className="due-colonne">
@@ -143,6 +151,27 @@ export function DettaglioEdizione() {
       </div>
     </section>
   );
+}
+
+/** L'id del piano di produzione dell'edizione; undefined finché non arriva, se non c'è o se Produzione non risponde. */
+function usePianoDellEdizione(edizioneId: string | undefined): string | undefined {
+  const [piano, setPiano] = useState<{ edizioneId: string; id: string } | undefined>(undefined);
+  useEffect(() => {
+    if (!edizioneId) {
+      return;
+    }
+    let attivo = true;
+    produzione.pianiDellEdizione(edizioneId).then(
+      (piani) => {
+        if (attivo && piani.length > 0) setPiano({ edizioneId, id: piani[0].id });
+      },
+      () => undefined,
+    );
+    return () => {
+      attivo = false;
+    };
+  }, [edizioneId]);
+  return piano?.edizioneId === edizioneId ? piano?.id : undefined;
 }
 
 /** Il nome della formulazione da Ricette; undefined finché non arriva o se Ricette non risponde. */
@@ -359,8 +388,12 @@ function PrimaEDopo({ prima, dopo, onChiudi }: Confronto & { onChiudi: () => voi
           })),
         ]}
       />
-      {scesa && (
-        <p className="nota">Edizioni ha registrato l’evento TiraturaRidotta: servirà ad avvisare chi ha prenotato.</p>
+      {dopo.tiratura !== prima.tiratura && (
+        <p className="nota">
+          {scesa
+            ? 'Edizioni ha pubblicato l’evento TiraturaRidotta: servirà ad avvisare chi ha prenotato.'
+            : 'Edizioni ha pubblicato l’evento TiraturaAumentata: le bottiglie in più sono andate alla vendita online.'}
+        </p>
       )}
     </div>
   );

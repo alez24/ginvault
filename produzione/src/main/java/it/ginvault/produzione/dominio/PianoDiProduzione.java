@@ -4,9 +4,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import it.ginvault.produzione.dominio.IntegrazioneRifiutata.Motivo;
@@ -57,6 +59,11 @@ import org.springframework.data.domain.DomainEvents;
  *    RICHIESTA: il lotto dei campi dell'azienda viene rifiutato, perché
  *    l'edizione deve restare fedele alla sua origine;
  *  - un lotto si integra una volta sola;
+ *  - il lotto arrivato con una consegna del piano non si integra: i suoi kg
+ *    sono già tra gli utilizzabili (i 10,8 kg di Elena non diventano 12
+ *    integrandone 1,2 dallo stesso lotto). E se la consegna arriva DOPO che
+ *    il suo lotto è stato integrato (l'evento è in ritardo), quel lotto
+ *    conta una volta sola, con la consegna;
  *  - solo se mancano kg, e non più di quelli che mancano;
  *  - i kg integrati (riservati in magazzino) si sommano agli utilizzabili:
  *        10,8 kg arrivati + 1,2 kg integrati = 12 kg, di nuovo 600 bottiglie.
@@ -294,7 +301,10 @@ public class PianoDiProduzione {
         return kgPrevisti.subtract(kgDisponibili);
     }
 
-    /** Botanica, origine e lotto non ancora integrato. L'origine prima di tutto: è la regola dell'edizione. */
+    /**
+     * Botanica, origine, lotto non arrivato con una consegna del piano e non
+     * ancora integrato. L'origine prima di tutto: è la regola dell'edizione.
+     */
     private void verificaLotto(LottoProposto lotto) {
         if (lotto == null || lotto.lottoId() == null) {
             throw new IntegrazioneRifiutata(Motivo.LOTTO_NON_DISPONIBILE, "Serve il lotto da integrare");
@@ -310,6 +320,14 @@ public class PianoDiProduzione {
                     "origine diversa: l'edizione deve restare fedele alla sua origine. Il piano chiede " + botanica
                             + " da «" + origineRichiesta + "», il lotto viene da «" + origineLotto + "»",
                     Map.of("origineRichiesta", origineRichiesta, "origineLotto", origineLotto));
+        }
+        for (ConsegnaNelPiano consegnata : consegne) {
+            if (consegnata.lottoId().equals(lotto.lottoId())) {
+                throw new IntegrazioneRifiutata(Motivo.LOTTO_DELLA_CONSEGNA, "Il lotto " + lotto.lottoId()
+                        + " è arrivato con la consegna dell'ordine " + consegnata.ordineId() + ": i suoi "
+                        + Chilogrammi.testo(consegnata.kgUtilizzabili()) + " kg sono già nel piano",
+                        Map.of("ordineId", consegnata.ordineId()));
+            }
         }
         for (IntegrazioneNelPiano gia : integrazioni) {
             if (gia.lottoId().equals(lotto.lottoId())) {
@@ -332,19 +350,24 @@ public class PianoDiProduzione {
      * vedi la regola in cima. Un ordine di un'altra origine non copre i kg
      * previsti, quindi non entra in Σ ordinati: i kg dall'origine giusta si
      * aspettano ancora. I lotti integrati sono utilizzabili ma non sono
-     * ordini: non entrano in Σ ordinati.
+     * ordini: non entrano in Σ ordinati. Un lotto integrato che poi arriva
+     * anche con una consegna (evento in ritardo) conta solo con la consegna.
      */
     private BigDecimal ricalcolaDisponibili() {
         BigDecimal ordinati = Chilogrammi.ZERO;
         BigDecimal utilizzabili = Chilogrammi.ZERO;
+        Set<UUID> lottiConsegnati = new HashSet<>();
         for (ConsegnaNelPiano applicata : consegne) {
             if (Origini.stessa(applicata.origine(), origineRichiesta)) {
                 ordinati = ordinati.add(applicata.kgOrdinati());
             }
             utilizzabili = utilizzabili.add(applicata.kgUtilizzabili());
+            lottiConsegnati.add(applicata.lottoId());
         }
         for (IntegrazioneNelPiano integrata : integrazioni) {
-            utilizzabili = utilizzabili.add(integrata.kg());
+            if (!lottiConsegnati.contains(integrata.lottoId())) {
+                utilizzabili = utilizzabili.add(integrata.kg());
+            }
         }
         BigDecimal ancoraAttesi = kgPrevisti.subtract(ordinati).max(Chilogrammi.ZERO);
         return ancoraAttesi.add(utilizzabili).min(kgPrevisti);
