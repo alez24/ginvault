@@ -40,8 +40,12 @@ import org.springframework.transaction.support.TransactionTemplate;
  * La regola viene prima della riserva: un lotto con un'altra origine non
  * viene mai riservato, quindi non c'è niente da annullare.
  *
- * Se il passo 5 fallisce dopo la riserva (database giù), i kg restano
- * riservati in magazzino ma non nel piano: ripetendo la richiesta la riserva
+ * Se il passo 5 fallisce dopo la riserva (database giù, il piano cambiato nel
+ * frattempo...), COMPENSAZIONE: Giacenze.AnnullaRiserva libera i kg in
+ * magazzino, best effort e con un log. Prima però si rilegge il piano: se lo
+ * stesso lotto c'è già (Marco ha premuto due volte e l'altra richiesta ha
+ * vinto) la riserva è usata e non si tocca. Se anche l'annullamento fallisce
+ * resta una riserva orfana (log ERROR): ripetendo la richiesta, la riserva
  * idempotente restituisce quella che c'è e il piano si allinea.
  */
 @Service
@@ -104,15 +108,65 @@ public class ServizioIntegrazioni {
         Giacenze.Riserva riserva = giacenze.riservaLotto(lottoId, pianoId, daRiservare);
 
         LottoProposto riservato = lotto;
-        return scrittura.execute(stato -> {
-            PianoDiProduzione piano = trova(pianoId);
-            BigDecimal prima = piano.kgDisponibili();
-            EsitoIntegrazione esito = piano.integraLotto(riservato, riserva.kgRiservati(), orologio.instant());
-            piani.save(piano);
-            log.info("Lotto {} integrato nel piano {}: {} kg riservati, kg disponibili {} -> {} ({})", lottoId,
-                    pianoId, riserva.kgRiservati(), prima, piano.kgDisponibili(), esito);
-            return new EsitoIntegrazioneVista(esito, PianoVista.di(piano));
-        });
+        try {
+            return scrittura.execute(stato -> {
+                PianoDiProduzione piano = trova(pianoId);
+                BigDecimal prima = piano.kgDisponibili();
+                EsitoIntegrazione esito = piano.integraLotto(riservato, riserva.kgRiservati(), orologio.instant());
+                piani.save(piano);
+                log.info("Lotto {} integrato nel piano {}: {} kg riservati, kg disponibili {} -> {} ({})", lottoId,
+                        pianoId, riserva.kgRiservati(), prima, piano.kgDisponibili(), esito);
+                return new EsitoIntegrazioneVista(esito, PianoVista.di(piano));
+            });
+        } catch (RuntimeException errore) {
+            return pianoNonSalvato(pianoId, lottoId, riserva, errore);
+        }
+    }
+
+    /**
+     * Il piano non si è salvato dopo la riserva. Se il lotto è comunque nel
+     * piano, l'ha integrato un'altra richiesta nello stesso momento: la
+     * riserva serve e Marco riceve GIA_INTEGRATO. Altrimenti si annulla la
+     * riserva e Marco riceve l'errore di partenza.
+     *
+     * Se il piano non si riesce nemmeno a rileggere (database giù), si annulla
+     * lo stesso: quasi sempre il piano non è stato salvato. L'eccezione è un
+     * commit riuscito di cui si è persa la risposta (limiti in docs/grpc.md).
+     */
+    private EsitoIntegrazioneVista pianoNonSalvato(UUID pianoId, UUID lottoId, Giacenze.Riserva riserva,
+                                                  RuntimeException errore) {
+        PianoVista conIlLotto = null;
+        try {
+            conIlLotto = lettura.execute(stato -> {
+                PianoDiProduzione piano = trova(pianoId);
+                return piano.integrazioneDel(lottoId).isPresent() ? PianoVista.di(piano) : null;
+            });
+        } catch (RuntimeException rilettura) {
+            log.warn("Dopo il salvataggio fallito il piano {} non si rilegge ({}): si annulla la riserva", pianoId,
+                    rilettura.toString());
+        }
+        if (conIlLotto != null) {
+            log.info("Il salvataggio del piano {} è fallito ({}), ma il lotto {} è già nel piano: l'ha integrato "
+                    + "un'altra richiesta, la riserva resta", pianoId, errore.toString(), lottoId);
+            return new EsitoIntegrazioneVista(EsitoIntegrazione.GIA_INTEGRATO, conIlLotto);
+        }
+        compensa(pianoId, lottoId, riserva, errore);
+        throw errore;
+    }
+
+    /** Giacenze.AnnullaRiserva, best effort: un errore qui si logga e non nasconde quello di partenza. */
+    private void compensa(UUID pianoId, UUID lottoId, Giacenze.Riserva riserva, RuntimeException causa) {
+        try {
+            Giacenze.Annullamento annullamento = giacenze.annullaRiserva(lottoId, pianoId);
+            log.warn("Compensazione: il piano {} non si è salvato ({}), riserva del lotto {} annullata in "
+                            + "magazzino ({} kg liberati{})", pianoId, causa.toString(), lottoId,
+                    annullamento.kgLiberati(), annullamento.nessunaRiserva() ? ", nessuna riserva trovata" : "");
+        } catch (RuntimeException errore) {
+            log.error("Compensazione NON riuscita: il piano {} non si è salvato ({}) e i {} kg riservati del lotto {}"
+                            + " restano in magazzino (riserva orfana). Si sistema ripetendo l'integrazione: la riserva"
+                            + " è idempotente", pianoId, causa.toString(), riserva.kgRiservati(), lottoId, errore);
+            causa.addSuppressed(errore);
+        }
     }
 
     /**

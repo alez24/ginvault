@@ -45,9 +45,13 @@ import org.springframework.data.domain.DomainEvents;
  *  - una quota per canale, e la somma delle quote è sempre uguale alla tiratura;
  *  - se la tiratura scende si toglie prima da ONLINE, poi da BAR, mai da SOCI,
  *    e nessuna quota scende sotto le bottiglie già prenotate;
- *  - se la tiratura sale, le bottiglie in più vanno tutte a ONLINE (scelta da
- *    discutere, vedi README);
- *  - quando la tiratura scende, l'aggregato registra l'evento TiraturaRidotta.
+ *  - se la tiratura sale, le bottiglie in più vanno tutte a ONLINE, fino al
+ *    tetto di 600;
+ *  - quando la tiratura scende l'aggregato registra TiraturaRidotta, quando
+ *    sale TiraturaAumentata;
+ *  - la resa ricalcolata da Produzione (applicaResa) segue le stesse regole.
+ *    Se non si può applicare, l'edizione resta com'era e registra
+ *    RicalcoloRifiutato con la spiegazione.
  *
  * Origine della botanica di stagione (es. "Alta Val Varaita (Alpi Cozie)"):
  * la sceglie il distillatore e l'edizione la promette a soci e clienti.
@@ -72,6 +76,9 @@ public class Edizione {
 
     /** Dove vanno le bottiglie in più quando la tiratura sale. */
     private static final Canale CANALE_DEGLI_AUMENTI = Canale.ONLINE;
+
+    /** La causa negli eventi di un ricalcolo chiesto a mano (POST /edizioni/{id}/ricalcolo). */
+    public static final String RICALCOLO_MANUALE = "ricalcolo manuale del distillatore";
 
     @Id
     private UUID id;
@@ -172,6 +179,49 @@ public class Edizione {
      * @throws EdizioneNonValida     kg non validi o insufficienti per una bottiglia (-> 422)
      */
     public void ricalcola(BigDecimal nuoviKgDisponibili) {
+        ricalcola(nuoviKgDisponibili, RICALCOLO_MANUALE, null);
+    }
+
+    /**
+     * La resa ricalcolata da Produzione (evento ResaRicalcolata): stesse regole
+     * di ricalcola. Un ricalcolo impossibile qui non è un errore di chi chiama,
+     * è un fatto da far sapere: l'edizione resta com'era e registra
+     * RicalcoloRifiutato con la spiegazione, che parte su Kafka come gli altri
+     * eventi. Il messaggio di Produzione così non si perde.
+     *
+     * @return com'è andata: RIDOTTA, AUMENTATA, INVARIATA o RIFIUTATO
+     */
+    public EsitoRicalcolo applicaResa(ResaDiProduzione resa) {
+        if (resa == null || resa.kgDisponibili() == null || resa.kgDisponibili().signum() < 0) {
+            throw new IllegalArgumentException("Resa senza kg disponibili validi: " + resa);
+        }
+        int prima = tiratura.bottiglie();
+        try {
+            // Prima Tiratura.da: con 0 kg spiega "non si riempie nemmeno una bottiglia"
+            Tiratura.da(resa.kgDisponibili(), grammiPerBottiglia);
+            ricalcola(resa.kgDisponibili(), resa.motivo(), resa.eventoId());
+        } catch (TiraturaNonRiducibile rifiuto) {
+            return rifiuta(resa, RicalcoloRifiutato.Motivo.QUOTE_NON_RIDUCIBILI, rifiuto.getMessage());
+        } catch (EdizioneNonValida rifiuto) {
+            return rifiuta(resa, RicalcoloRifiutato.Motivo.BOTANICA_INSUFFICIENTE,
+                    rifiuto.getMessage() + ". L'edizione non è stata modificata.");
+        }
+        int dopo = tiratura.bottiglie();
+        EsitoRicalcolo.Tipo tipo = dopo < prima ? EsitoRicalcolo.Tipo.RIDOTTA
+                : dopo > prima ? EsitoRicalcolo.Tipo.AUMENTATA : EsitoRicalcolo.Tipo.INVARIATA;
+        return new EsitoRicalcolo(tipo, prima, dopo, null);
+    }
+
+    private EsitoRicalcolo rifiuta(ResaDiProduzione resa, RicalcoloRifiutato.Motivo motivo, String spiegazione) {
+        int bottiglie = tiratura.bottiglie();
+        eventi.add(new RicalcoloRifiutato(id, motivo, bottiglie,
+                Tiratura.bottigliePossibili(resa.kgDisponibili(), grammiPerBottiglia), botanicaDisponibileKg,
+                resa.kgDisponibili(), quote(), spiegazione, resa.motivo(), resa.eventoId(), Instant.now()));
+        return new EsitoRicalcolo(EsitoRicalcolo.Tipo.RIFIUTATO, bottiglie, bottiglie, spiegazione);
+    }
+
+    /** Il ricalcolo vero, manuale o da una resa: causa e resaRicalcolataId finiscono negli eventi. */
+    private void ricalcola(BigDecimal nuoviKgDisponibili, String causa, UUID resaRicalcolataId) {
         BigDecimal kg = verificaKg(nuoviKgDisponibili);
         Tiratura vecchia = tiratura;
         Tiratura nuova = Tiratura.da(kg, grammiPerBottiglia);
@@ -190,8 +240,11 @@ public class Edizione {
         tiratura = nuova;
         quote.putAll(ripartite);
         if (nuova.minoreDi(vecchia)) {
-            eventi.add(new TiraturaRidotta(id, vecchia.bottiglie(), nuova.bottiglie(), bottigliePerCanale(),
-                    Instant.now()));
+            eventi.add(new TiraturaRidotta(id, vecchia.bottiglie(), nuova.bottiglie(), bottigliePerCanale(), kg,
+                    causa, resaRicalcolataId, Instant.now()));
+        } else if (vecchia.minoreDi(nuova)) {
+            eventi.add(new TiraturaAumentata(id, vecchia.bottiglie(), nuova.bottiglie(), bottigliePerCanale(), kg,
+                    causa, resaRicalcolataId, Instant.now()));
         }
     }
 
@@ -316,7 +369,7 @@ public class Edizione {
                 + " L'edizione non è stata modificata.";
     }
 
-    /** Tiratura salita: per ora tutte le bottiglie in più vanno a ONLINE. */
+    /** Tiratura salita: tutte le bottiglie in più vanno a ONLINE (Tiratura.da ha già il tetto di 600). */
     private Map<Canale, Quota> aumenta(int inPiù) {
         EnumMap<Canale, Quota> ripartite = new EnumMap<>(quote());
         Quota quota = ripartite.get(CANALE_DEGLI_AUMENTI);

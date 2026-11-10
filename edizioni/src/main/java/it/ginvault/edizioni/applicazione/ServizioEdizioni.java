@@ -9,9 +9,11 @@ import it.ginvault.edizioni.dominio.Canale;
 import it.ginvault.edizioni.dominio.CatalogoRicette;
 import it.ginvault.edizioni.dominio.Edizione;
 import it.ginvault.edizioni.dominio.EdizioneRepository;
+import it.ginvault.edizioni.dominio.EsitoRicalcolo;
 import it.ginvault.edizioni.dominio.FormulazioneGiaUsata;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
+import it.ginvault.edizioni.dominio.ResaDiProduzione;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Sort;
@@ -102,6 +104,23 @@ public class ServizioEdizioni {
         // Spring Data pubblica gli eventi di dominio dell'aggregato (@DomainEvents)
         repository.save(edizione);
         return EdizioneVista.di(edizione);
+    }
+
+    /**
+     * La resa ricalcolata da Produzione (consumer di produzione.eventi):
+     * l'Edizione la applica con le regole del ricalcolo, oppure la rifiuta e
+     * registra RicalcoloRifiutato. Gira nella transazione del consumer:
+     * edizione, riga di outbox ed evento_elaborato entrano nello stesso commit.
+     *
+     * @throws EdizioneNonTrovata l'edizione non c'è: riprovare non serve (dead letter)
+     */
+    @Transactional
+    public EsitoRicalcolo applicaResa(UUID id, ResaDiProduzione resa) {
+        Edizione edizione = repository.findById(id).orElseThrow(() -> new EdizioneNonTrovata(id));
+        EsitoRicalcolo esito = edizione.applicaResa(resa);
+        // Anche se l'edizione non cambia (rifiuto): save() pubblica RicalcoloRifiutato
+        repository.save(edizione);
+        return esito;
     }
 
     @Transactional(readOnly = true)

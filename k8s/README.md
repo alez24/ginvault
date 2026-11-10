@@ -30,7 +30,7 @@ Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per 
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 
 Service kafka :9092 (headless) → pod kafka-0 (StatefulSet) → PVC dati-kafka-0 (1 GiB)
-   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi, produzione.dlt (Job kafka-topic)
+   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi, produzione.dlt, edizioni.dlt (Job kafka-topic)
    └─ i servizi che pubblicano o consumano eventi (edizioni, magazzino, produzione)
 
 NetworkPolicy: frontend accetta solo l'Ingress Controller; gateway l'Ingress
@@ -46,6 +46,8 @@ database, `magazzino-db`, e pubblica su `magazzino.eventi` dalla tabella outbox
 Allo stesso modo `/api/produzione/**` va al Service `produzione` (:8083), con
 il database `produzione-db`: consuma `edizioni.eventi` e `magazzino.eventi` e
 pubblica su `produzione.eventi` (vedi [Consumer di produzione](#consumer-di-produzione)).
+Edizioni, a sua volta, consuma `produzione.eventi` e ricalcola la tiratura
+(vedi [Consumer di edizioni](#consumer-di-edizioni)).
 
 Pagine e API hanno la stessa origine, `http://localhost`: i cookie del gateway
 valgono anche per le pagine e non serve CORS. Lo smistamento per path lo fa qui
@@ -111,16 +113,16 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.4 .\edizioni
+minikube image build -t ginvault/edizioni:0.5 .\edizioni
 minikube image build -t ginvault/ricette:0.2  .\ricette
 #    magazzino e produzione hanno bisogno anche del modulo giacenze-api, che sta
 #    fuori dalla loro cartella: un secondo build context con nome, che
 #    minikube image build non sa passare. Si costruiscono con Docker Desktop
 #    e si caricano nel nodo.
-docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.2 magazzino
-docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.2 produzione
-minikube image load ginvault/magazzino:0.2
-minikube image load ginvault/produzione:0.2
+docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.3 magazzino
+docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.3 produzione
+minikube image load ginvault/magazzino:0.3
+minikube image load ginvault/produzione:0.3
 minikube image build -t ginvault/gateway:0.3  .\gateway
 minikube image build -t ginvault/frontend:0.2 .\frontend   # npm ci, test e build di Vite dentro l'immagine
 
@@ -262,7 +264,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 | | edizioni-db | edizioni | gateway | frontend |
 |---|---|---|---|---|
-| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.4` | `ginvault/gateway:0.3` | `ginvault/frontend:0.2` (nginx) |
+| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.5` | `ginvault/gateway:0.3` | `ginvault/frontend:0.2` (nginx) |
 | Repliche | 1 | 1 (scalabile: è stateless) | 1 (sessione e chiave in memoria) | 2 (solo file statici) |
 | Strategia | `Recreate` (mai due Postgres sullo stesso volume) | `RollingUpdate` | `RollingUpdate` | `RollingUpdate`, `maxSurge 1`, `maxUnavailable 0` |
 | startupProbe | `pg_isready`, fino a 60 s | `/health/liveness`, fino a 2 min | `/health/liveness`, fino a 2 min | nessuna: nginx parte in un attimo |
@@ -271,8 +273,8 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 | requests / limits memoria | 128 Mi / 512 Mi | 384 Mi / 768 Mi | 384 Mi / 768 Mi | 16 Mi / 64 Mi (ne usa ~3) |
 
 ricette e ricette-db sono come edizioni ed edizioni-db (`ginvault/ricette:0.2`),
-e così magazzino e magazzino-db (`ginvault/magazzino:0.2`), produzione e
-produzione-db (`ginvault/produzione:0.2`). La readiness di edizioni, magazzino e
+e così magazzino e magazzino-db (`ginvault/magazzino:0.3`), produzione e
+produzione-db (`ginvault/produzione:0.3`). La readiness di edizioni, magazzino e
 produzione include il database ma **non Kafka**: con Kafka giù i servizi
 lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer di
 produzione si ricollegano da soli.
@@ -485,6 +487,38 @@ dall'ultimo offset salvato.
 Dashboard: **Workloads → Deployments → produzione** (i log con le partizioni
 assegnate) e **Config and Storage → Config Maps → produzione-config**.
 
+### Consumer di edizioni
+
+Edizioni legge `produzione.eventi` nel consumer group `edizioni`: un listener
+con 3 consumer, uno per partizione. Ogni `ResaRicalcolata` ricalcola la
+tiratura e scrive nell'outbox, nello stesso commit, `TiraturaRidotta`,
+`TiraturaAumentata` o `RicalcoloRifiutato` per `edizioni.eventi`. I messaggi
+che non riesce a elaborare vanno in `edizioni.dlt`
+([`docs/eventi.md`](../docs/eventi.md#il-consumer-di-edizioni)).
+
+Il topic `edizioni.dlt` lo crea il Job `kafka-topic`. Un Job finito non
+riparte, e Kubernetes lo cancella un'ora dopo la fine
+(`ttlSecondsAfterFinished`): se c'è ancora, lo si cancella e lo si
+riapplica. I topic che esistono già restano come sono (`--if-not-exists`).
+
+```powershell
+kubectl delete job kafka-topic -n ginvault --ignore-not-found
+kubectl apply -k k8s/
+kubectl wait -n ginvault --for=condition=Complete job/kafka-topic --timeout=120s
+
+# 3 righe, una per partizione di produzione.eventi, con offset e lag
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic edizioni.dlt
+# Gli eventi in uscita e le rese già applicate, con l'esito
+kubectl exec -n ginvault deploy/edizioni-db -- psql -U edizioni -d edizioni -c 'select tipo, chiave, pubblicato_il, tentativi from outbox order by creato_il'
+kubectl exec -n ginvault deploy/edizioni-db -- psql -U edizioni -d edizioni -c 'select event_id, tipo, esito, partizione, posizione from evento_elaborato'
+# Nel log: partizioni assegnate, rese applicate (INFO) e rifiutate (WARN)
+kubectl logs -n ginvault deploy/edizioni --tail=30
+```
+
+Dashboard: **Workloads → Deployments → edizioni** (log) e **Workloads → Jobs
+→ kafka-topic** (il log elenca i topic creati).
+
 ### gRPC tra produzione e magazzino
 
 Quando Marco integra un lotto nel piano, produzione chiama il servizio gRPC
@@ -520,13 +554,16 @@ kubectl exec -n ginvault deploy/gateway -- sh -c 'nc -z -w 3 magazzino 9084 && e
 kubectl port-forward -n ginvault svc/magazzino 19084:9084      # in un'altra finestra
 docker run --rm -v "${PWD}\giacenze-api\src\main\proto:/proto" fullstorydev/grpcurl:v1.9.3 -plaintext -import-path /proto -proto giacenze.proto -d '{\"botanica\": \"lavanda\"}' host.docker.internal:19084 ginvault.giacenze.v1.Giacenze/Disponibilita
 
-# Le riserve in magazzino e le integrazioni nei piani
+# Le riserve in magazzino e le integrazioni nei piani. Una riserva annullata
+# (compensazione) sparisce da lotto_riserva e lascia un WARN nel log di magazzino:
+#   kubectl logs -n ginvault deploy/magazzino | Select-String 'Riserva annullata'
 kubectl exec -n ginvault deploy/magazzino-db -- psql -U magazzino -d magazzino -c 'select lotto_id, piano_id, kg, riservata_da from lotto_riserva'
 kubectl exec -n ginvault deploy/produzione-db -- psql -U produzione -d produzione -c 'select piano_id, lotto_id, origine, kg, motivo from piano_integrazione'
 ```
 
 Dashboard: **Service → Services → magazzino** (le due porte) e **Service →
 Network Policies → magazzino-grpc-solo-da-produzione**.
+
 ### Ingress, IngressClass, Ingress Controller
 
 L'**Ingress** `ginvault` è solo un insieme di *regole* per l'host `localhost`.
@@ -663,7 +700,7 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.4, ricette:0.2, magazzino:0.2, produzione:0.2
+minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.5, ricette:0.2, magazzino:0.3, produzione:0.3
 ```
 
 Per un'immagine che manca, il suo `minikube image build` (per magazzino e
@@ -790,8 +827,8 @@ kubectl scale deployment/edizioni -n ginvault --replicas=1
 **Rolling update** con una nuova versione dell'immagine:
 
 ```powershell
-minikube image build -t ginvault/edizioni:0.5 .\edizioni
-# cambiare il tag in k8s/edizioni.yaml (0.4 -> 0.5), poi:
+minikube image build -t ginvault/edizioni:0.6 .\edizioni
+# cambiare il tag in k8s/edizioni.yaml (0.5 -> 0.6), poi:
 kubectl apply -k k8s/
 kubectl rollout status deployment/edizioni -n ginvault   # il nuovo pod parte prima che il vecchio si spenga
 kubectl rollout history deployment/edizioni -n ginvault

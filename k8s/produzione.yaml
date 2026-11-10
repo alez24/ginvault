@@ -4,7 +4,7 @@
 #
 # Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
 #   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
-#   2) Deployment  -> il pod con il container ginvault/produzione:0.2
+#   2) Deployment  -> il pod con il container ginvault/produzione:0.3
 #   3) Service     -> nome DNS stabile "produzione": lo usa il gateway
 #                     (/api/produzione/**, PRODUZIONE_URI in gateway.yaml)
 #
@@ -71,9 +71,10 @@ spec:
         - name: produzione
           # Costruita con Docker Desktop e caricata nel nodo (serve il secondo
           # build context giacenze-api, vedi k8s/README.md):
-          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.2 produzione
-          #   minikube image load ginvault/produzione:0.2
-          image: ginvault/produzione:0.2
+          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.3 produzione
+          #   minikube image load ginvault/produzione:0.3
+          # 0.3 = AnnullaRiserva (giacenze-api 0.2.0)
+          image: ginvault/produzione:0.3
           imagePullPolicy: Never
           ports:
             - name: http

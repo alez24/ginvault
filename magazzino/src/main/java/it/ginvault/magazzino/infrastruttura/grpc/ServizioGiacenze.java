@@ -9,6 +9,8 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.StreamObserver;
 
+import it.ginvault.giacenze.v1.AnnullaRiservaRequest;
+import it.ginvault.giacenze.v1.AnnullaRiservaResponse;
 import it.ginvault.giacenze.v1.DisponibilitaRequest;
 import it.ginvault.giacenze.v1.DisponibilitaResponse;
 import it.ginvault.giacenze.v1.GiacenzeGrpc;
@@ -17,6 +19,7 @@ import it.ginvault.giacenze.v1.RiservaLottoRequest;
 import it.ginvault.giacenze.v1.RiservaLottoResponse;
 import it.ginvault.magazzino.applicazione.LottoNonTrovato;
 import it.ginvault.magazzino.applicazione.ServizioApprovvigionamento;
+import it.ginvault.magazzino.applicazione.Viste.AnnullamentoVista;
 import it.ginvault.magazzino.applicazione.Viste.DisponibilitaVista;
 import it.ginvault.magazzino.applicazione.Viste.LottoDisponibileVista;
 import it.ginvault.magazzino.applicazione.Viste.RiservaVista;
@@ -37,7 +40,7 @@ import org.springframework.dao.OptimisticLockingFailureException;
  *   LottoNonTrovato                                  -> NOT_FOUND
  *   lotto non utilizzabile, kg insufficienti         -> FAILED_PRECONDITION
  *   il piano ha già riservato altri kg del lotto     -> ALREADY_EXISTS
- *   riserva concorrente sullo stesso lotto           -> ABORTED (si può ripetere)
+ *   riserva o annullamento concorrente sul lotto     -> ABORTED (si può ripetere)
  *   altro                                            -> INTERNAL, senza dettagli
  *
  * Arriva qui solo chi ha passato AutenticazioneGrpc.
@@ -92,6 +95,35 @@ public class ServizioGiacenze extends GiacenzeGrpc.GiacenzeImplBase {
                     .setKgRiservati(vista.kgRiservati().toPlainString())
                     .setKgDisponibili(vista.kgDisponibili().toPlainString())
                     .setGiaRiservato(vista.giaRiservato())
+                    .build();
+        });
+    }
+
+    /**
+     * La compensazione di Produzione. Non controlla se la chiamata è già stata
+     * annullata, al contrario di riservaLotto: liberare i kg serve anche se
+     * nessuno legge la risposta, e ripeterlo non fa danni.
+     */
+    @Override
+    public void annullaRiserva(AnnullaRiservaRequest richiesta, StreamObserver<AnnullaRiservaResponse> risposta) {
+        rispondi(risposta, () -> {
+            UUID lottoId = uuid(richiesta.getLottoId(), "lotto_id");
+            UUID pianoId = uuid(richiesta.getPianoId(), "piano_id");
+            String chi = AutenticazioneGrpc.utente().getName();
+            AnnullamentoVista vista = servizio.annullaRiserva(lottoId, pianoId);
+            if (vista.nessunaRiserva()) {
+                log.info("Annullamento senza riserva: il piano {} non ha riserve sul lotto {} (chiesto da {})",
+                        pianoId, lottoId, chi);
+            } else {
+                log.warn("Riserva annullata: {} kg del lotto {} tornano liberi, il piano {} non li usa (chiesto da {})"
+                        + ": liberi {} kg", vista.kgLiberati(), lottoId, pianoId, chi, vista.kgDisponibili());
+            }
+            return AnnullaRiservaResponse.newBuilder()
+                    .setLottoId(vista.lottoId().toString())
+                    .setPianoId(vista.pianoId().toString())
+                    .setKgLiberati(vista.kgLiberati().toPlainString())
+                    .setKgDisponibili(vista.kgDisponibili().toPlainString())
+                    .setNessunaRiserva(vista.nessunaRiserva())
                     .build();
         });
     }

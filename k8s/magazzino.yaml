@@ -4,7 +4,7 @@
 #
 # Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
 #   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
-#   2) Deployment  -> il pod con il container ginvault/magazzino:0.2
+#   2) Deployment  -> il pod con il container ginvault/magazzino:0.3
 #   3) Service     -> nome DNS stabile "magazzino", con DUE porte:
 #                     8084 http  per il gateway (/api/magazzino/**, MAGAZZINO_URI in gateway.yaml)
 #                     9084 grpc  per produzione (servizio Giacenze, MAGAZZINO_GRPC in produzione.yaml)
@@ -67,9 +67,10 @@ spec:
         - name: magazzino
           # Costruita con Docker Desktop e caricata nel nodo (serve il secondo
           # build context giacenze-api, vedi k8s/README.md):
-          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.2 magazzino
-          #   minikube image load ginvault/magazzino:0.2
-          image: ginvault/magazzino:0.2
+          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.3 magazzino
+          #   minikube image load ginvault/magazzino:0.3
+          # 0.3 = AnnullaRiserva (giacenze-api 0.2.0)
+          image: ginvault/magazzino:0.3
           imagePullPolicy: Never
           ports:
             - name: http

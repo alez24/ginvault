@@ -7,7 +7,7 @@ Il contratto gRPC del servizio **Giacenze**, che Magazzino offre a Produzione:
 `protoc` e il plugin `protoc-gen-grpc-java` da Maven Central e genera le classi
 Java: i messaggi (`RiservaLottoRequest`...), lo stub client (`GiacenzeGrpc.newBlockingStub`)
 e la classe base del server (`GiacenzeGrpc.GiacenzeImplBase`). Magazzino e
-Produzione dipendono dal jar `it.ginvault:giacenze-api:0.1.0`, quindi un campo
+Produzione dipendono dal jar `it.ginvault:giacenze-api:0.2.0`, quindi un campo
 cambiato si vede in compilazione da entrambe le parti.
 
 ```powershell

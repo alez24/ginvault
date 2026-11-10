@@ -2,6 +2,7 @@ package it.ginvault.edizioni.infrastruttura.eventi;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -10,6 +11,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import it.ginvault.edizioni.dominio.Canale;
 import it.ginvault.edizioni.dominio.EdizioneCreata;
+import it.ginvault.edizioni.dominio.Quota;
+import it.ginvault.edizioni.dominio.RicalcoloRifiutato;
+import it.ginvault.edizioni.dominio.TiraturaAumentata;
+import it.ginvault.edizioni.dominio.TiraturaRidotta;
 
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
@@ -25,8 +30,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * La chiave del messaggio è l'id dell'edizione: tutti gli eventi di
  * un'edizione finiscono nella stessa partizione, nell'ordine in cui nascono.
  *
- * TiraturaRidotta per ora resta nel log (InoltroTiratureRidotte): passerà da
- * qui quando Edizioni consumerà ResaRicalcolata.
+ * Gli eventi: EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
+ * RicalcoloRifiutato. Gli ultimi tre nascono quasi sempre da una
+ * ResaRicalcolata di Produzione (ElaborazioneEventi): in quel caso la riga di
+ * outbox entra nello stesso commit dell'edizione ricalcolata e della riga di
+ * evento_elaborato. Nascono anche dal ricalcolo manuale del distillatore.
  */
 @Component
 public class ScritturaOutbox {
@@ -48,6 +56,30 @@ public class ScritturaOutbox {
                 evento.botanicaDiStagione(), evento.grammiPerBottiglia(), evento.origineBotanica(),
                 evento.kgPrevisti(), evento.tiratura(), evento.quote());
         scrivi("EdizioneCreata", 1, evento.edizioneId(), evento.occorsoIl(), payload);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void tiraturaRidotta(TiraturaRidotta evento) {
+        scrivi("TiraturaRidotta", 1, evento.edizioneId(), evento.avvenutaIl(),
+                new TiraturaCambiataV1(evento.edizioneId(), evento.tiraturaVecchia(), evento.tiraturaNuova(),
+                        evento.quote(), evento.kgDisponibili(), evento.causa(), evento.resaRicalcolataId()));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void tiraturaAumentata(TiraturaAumentata evento) {
+        scrivi("TiraturaAumentata", 1, evento.edizioneId(), evento.avvenutaIl(),
+                new TiraturaCambiataV1(evento.edizioneId(), evento.tiraturaVecchia(), evento.tiraturaNuova(),
+                        evento.quote(), evento.kgDisponibili(), evento.causa(), evento.resaRicalcolataId()));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void ricalcoloRifiutato(RicalcoloRifiutato evento) {
+        Map<Canale, QuotaV1> quote = new EnumMap<>(Canale.class);
+        evento.quote().forEach((canale, quota) -> quote.put(canale, QuotaV1.di(quota)));
+        scrivi("RicalcoloRifiutato", 1, evento.edizioneId(), evento.avvenutaIl(),
+                new RicalcoloRifiutatoV1(evento.edizioneId(), evento.motivo().name(), evento.spiegazione(),
+                        evento.tiratura(), evento.tiraturaRichiesta(), evento.kgDisponibili(), evento.kgRichiesti(),
+                        quote, evento.causa(), evento.resaRicalcolataId()));
     }
 
     private void scrivi(String tipo, int versione, UUID edizioneId, Instant occorsoIl, Object payload) {
@@ -77,5 +109,37 @@ public class ScritturaOutbox {
     }
 
     record FormulazioneV1(UUID id, int versione) {
+    }
+
+    /**
+     * Il payload di TiraturaRidotta e di TiraturaAumentata, versione 1: lo
+     * stesso per tutti e due, cambia il tipo nella busta. Lo leggerà Notifiche
+     * per avvisare chi ha prenotato.
+     *
+     * @param quote             le quote nuove per canale
+     * @param causa             in italiano: il motivo della resa di Produzione o "ricalcolo manuale del distillatore"
+     * @param resaRicalcolataId l'eventId della ResaRicalcolata che l'ha causato; null per un ricalcolo manuale
+     */
+    record TiraturaCambiataV1(UUID edizioneId, int tiraturaPrima, int tiratura, Map<Canale, Integer> quote,
+                              BigDecimal kgDisponibili, String causa, UUID resaRicalcolataId) {
+    }
+
+    /**
+     * Il payload di RicalcoloRifiutato, versione 1: l'edizione è rimasta com'era.
+     *
+     * @param motivo            QUOTE_NON_RIDUCIBILI o BOTANICA_INSUFFICIENTE
+     * @param tiraturaRichiesta quella che verrebbe con i kg della resa (0: nemmeno una bottiglia)
+     * @param quote             le quote dell'edizione, con le prenotate: il perché del rifiuto
+     */
+    record RicalcoloRifiutatoV1(UUID edizioneId, String motivo, String spiegazione, int tiratura,
+                                int tiraturaRichiesta, BigDecimal kgDisponibili, BigDecimal kgRichiesti,
+                                Map<Canale, QuotaV1> quote, String causa, UUID resaRicalcolataId) {
+    }
+
+    record QuotaV1(int bottiglie, int prenotate) {
+
+        static QuotaV1 di(Quota quota) {
+            return new QuotaV1(quota.bottiglie(), quota.prenotate());
+        }
     }
 }

@@ -6,14 +6,12 @@ e il punto esatto in cui siamo arrivati.
 ## In breve: dove siamo
 
 - **Branch:** `storia-elena` (creato da `main` aggiornato, `ed2c054`).
-- **Storia di Elena, passi 1–4 committati** su `storia-elena`, **senza push**.
-  Il passo 4 (gRPC) è nel commit "gRPC Produzione ↔ Magazzino: Giacenze,
-  integrazione di un lotto, NetworkPolicy", insieme a questo file; le 4 scelte
-  del passo 4 sono confermate.
-- **Prossimo:** `AnnullaRiserva` (compensazione), poi il passo 5.
-- Sul cluster girano già `magazzino:0.2` e `produzione:0.2` con il gRPC e la
-  nuova NetworkPolicy. Dopo un riavvio del PC servono di nuovo Docker Desktop
-  e `minikube start`.
+- **Storia di Elena, passi 1–5 committati** su `storia-elena`, **senza push**.
+  `AnnullaRiserva` (la compensazione di Produzione) e il passo 5 (Edizioni
+  consuma `ResaRicalcolata`) sono nel commit con questo file.
+- **Prossimo:** il passo 6, il frontend per Elena.
+- Sul cluster girano `edizioni:0.5`, `magazzino:0.3` e `produzione:0.3`.
+  Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
 
@@ -30,7 +28,8 @@ e il punto esatto in cui siamo arrivati.
 | `86fe672` | 7 nov | **Elena, passo 1: Kafka** (vedi sotto) |
 | `830a03f` | 8 nov | **Elena, passo 2: Magazzino** (vedi sotto) |
 | `0298ebb` | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
-| (il commit con questo file) | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
+| `497fd93` | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
+| (il commit con questo file) | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
 
 Le PR #1, #2 e #3 sono unite in `main` con merge commit.
 
@@ -49,8 +48,9 @@ I sette passi:
 | 1 | Kafka 4.x KRaft in Compose e su K8s, 3 topic | ✅ committato `86fe672` |
 | 2 | Servizio magazzino (8084): ordini, consegne, lotti, fornitori, outbox | ✅ committato `830a03f` |
 | 3 | Servizio produzione (8083): piani, consumer idempotenti, retry, DLT, `ResaRicalcolata` | ✅ committato `0298ebb` |
-| 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ✅ committato |
-| 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `RicalcoloRifiutato` | da fare |
+| 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ✅ committato `497fd93` |
+| 4+ | `AnnullaRiserva`: compensazione se il piano non si salva dopo la riserva | ✅ committato |
+| 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `TiraturaAumentata` / `RicalcoloRifiutato` | ✅ committato |
 | 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | da fare |
 | 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | da fare |
 
@@ -218,7 +218,7 @@ I sette passi:
 | Un ordine in più dai campi dopo Elena | non toglie niente | resta 10,8 |
 | Un riordino dall'Alta Val Varaita | | torna a 12 |
 
-### Passo 4: gRPC Produzione ↔ Magazzino (committato)
+### Passo 4: gRPC Produzione ↔ Magazzino (`497fd93`)
 
 Tutto spiegato in [docs/grpc.md](grpc.md). Scelte confermate: la regola
 dell'origine prima della riserva, `GET /piani/{id}/lotti`, `lottoId` facoltativo
@@ -268,15 +268,107 @@ in `ResaRicalcolata` v1, immagini con `docker build` + `minikube image load`.
   - le tabelle `lotto_riserva` e `piano_integrazione` sono create.
   Non è stata fatta un'integrazione vera sul cluster: serve il JWT di un
   login OAuth (si farà nella demo del passo 7).
-- **Da decidere nel passo 5:** con un'integrazione la resa può risalire
-  (10,8 → 12). Edizioni dovrà decidere cosa fare di un `ResaRicalcolata` in
-  aumento.
+- **Deciso nel passo 5:** con un'integrazione la resa risale (10,8 → 12), e
+  le bottiglie in più tornano a ONLINE (`TiraturaAumentata`).
 
-### Prossimi passi (5–7)
+### `AnnullaRiserva`: la compensazione (committato)
 
-- **Passo 5:** Edizioni consuma `ResaRicalcolata` e applica il ricalcolo
-  (ONLINE → BAR, mai SOCI). Poi pubblica `TiraturaRidotta`, oppure
-  `RicalcoloRifiutato` se non si può, sempre via outbox.
+Dettagli in [docs/grpc.md](grpc.md#la-compensazione-annullariserva).
+
+- **Contratto:** `giacenze-api` 0.2.0, `rpc AnnullaRiserva(lotto_id,
+  piano_id)`. Risponde con i kg liberati e `nessuna_riserva`.
+- **Magazzino:**
+  - `LottoDiBotanica.annullaRiserva(pianoId)` toglie la riserva del piano;
+  - è idempotente: senza riserva risponde OK con `nessuna_riserva = true` e
+    0 kg liberati;
+  - ruoli DISTILLATORE e ADMIN;
+  - lotto sconosciuto → `NOT_FOUND`, modifica concorrente (`@Version`) →
+    `ABORTED`.
+- **Produzione** (`ServizioIntegrazioni`), se il salvataggio del piano fallisce
+  dopo la riserva:
+  1. rilegge il piano: se il lotto è già integrato (ha vinto una richiesta
+     uguale, per esempio un doppio clic), risponde `GIA_INTEGRATO` e non annulla;
+  2. altrimenti chiama `AnnullaRiserva` e scrive un WARN "Compensazione: ...";
+  3. se anche l'annullamento fallisce, scrive un ERROR "riserva orfana" e lo
+     aggiunge all'errore di partenza (`addSuppressed`);
+  4. Marco riceve sempre l'errore di partenza (409 "Modifica concorrente" nei
+     test).
+- **Compose:** la 9084 è protetta solo dal JWT (annotato in `docs/grpc.md` e
+  nel README).
+- **Immagini:** `magazzino:0.3` e `produzione:0.3`.
+- **Test:**
+  - magazzino 64/64: annullare libera i kg, la seconda volta non cambia niente,
+    lotto sconosciuto e ruolo sbagliato;
+  - produzione 64/64:
+    - il piano che non si salva, con un CHECK di prova sul DB, fa annullare la
+      riserva;
+    - l'annullamento che fallisce lascia l'errore di partenza e il log della
+      riserva orfana;
+    - un test unitario per la rilettura (richiesta concorrente vincente).
+
+### Passo 5: Edizioni consuma `ResaRicalcolata` (committato)
+
+Dettagli in [docs/eventi.md](eventi.md#il-consumer-di-edizioni).
+
+- **Consumer:**
+  - Edizioni legge `produzione.eventi` nel gruppo `edizioni`: un listener, 3
+    consumer, `ack-mode: record`, niente auto-commit;
+  - stesse classi di Produzione: `ConsumerEventi`, `ElaborazioneEventi`,
+    `LettoreEventi`, `ConfigurazioneKafka`, `EventoElaborato`;
+  - idempotente con `evento_elaborato`, che qui ha anche l'`esito`;
+  - retry 1, 2, 4, 8 s;
+  - dead letter `edizioni.dlt` nella stessa partizione. Ci vanno subito
+    `EventoNonValido` ed `EdizioneNonTrovata`.
+- **Dominio** (`Edizione.applicaResa`):
+  - se la tiratura scende, il ricalcolo esistente (ONLINE → BAR, mai SOCI, mai
+    sotto le prenotate) → `TiraturaRidotta`;
+  - se sale, le bottiglie in più vanno a ONLINE, fino a 600 →
+    `TiraturaAumentata`;
+  - se non si può → `RicalcoloRifiutato`, e l'edizione resta com'era. Motivi:
+    `QUOTE_NON_RIDUCIBILI`, oppure `BOTANICA_INSUFFICIENTE` se i kg non
+    bastano per una bottiglia (anche 0 kg);
+  - stessa tiratura → nessun evento (esito `INVARIATA`).
+- **Eventi** (tutti via outbox, nel commit dell'edizione):
+  - `TiraturaRidotta` e `TiraturaAumentata` hanno in più `causa` (il motivo
+    della resa) e `resaRicalcolataId` (l'`eventId` della resa, `null` per il
+    ricalcolo manuale);
+  - `RicalcoloRifiutato` ha anche la spiegazione in italiano e le quote con le
+    prenotate.
+- **Ricalcolo manuale di Marco:** ora pubblica anche lui `TiraturaRidotta` o
+  `TiraturaAumentata`. Il rifiuto resta un 409, senza evento.
+- **Tolto** `InoltroTiratureRidotte`, che scriveva `TiraturaRidotta` solo nel
+  log: ora l'evento va nell'outbox.
+- **Compose e K8s:**
+  - topic `edizioni.dlt` nel servizio e nel Job `kafka-topic`;
+  - immagine `edizioni:0.5`;
+  - nessuna NetworkPolicy nuova: edizioni aveva già la label
+    `ginvault/usa-kafka`.
+- **Test:** edizioni 82/82.
+  - `EdizioneTest`: 540 con la causa, ritorno a 600 dopo il lotto integrato,
+    rifiuto sotto le prenotate e con 0 kg, nessun evento a tiratura invariata;
+  - `ResaRicalcolataTest` (Postgres e Kafka veri): la catena 600 → 540 →
+    600, `RicalcoloRifiutato`, l'idempotenza, il retry (un CHECK di prova su
+    `evento_elaborato`), il dead letter subito per un messaggio illeggibile e
+    per un'edizione che non esiste.
+- **Documentazione:** `docs/eventi.md` (payload dei tre eventi, il consumer di
+  Edizioni), `README.md`, `docs/grpc.md` (limiti), `k8s/README.md` (sezione
+  "Consumer di edizioni"), `docs/demo-storia-marco.md` (il ricalcolo di
+  Marco ora si vede nell'outbox e nel topic, non più solo nel log).
+- **Verificato sul cluster (10 nov):**
+  - `edizioni:0.5`, `magazzino:0.3` e `produzione:0.3` Ready, 13 pod;
+    kafka-0 non è ripartito;
+  - il Job `kafka-topic` ricreato ha creato `edizioni.dlt`, con 3 partizioni;
+  - il gruppo `edizioni` ha 3 consumer, uno per partizione di
+    `produzione.eventi`; `produzione` ne ha sempre 6;
+  - `evento_elaborato` di edizioni ha la colonna `esito` (`not null`, messo a
+    mano con un `alter` sulla tabella ancora vuota);
+  - "Server gRPC Giacenze in ascolto sulla porta 9084" in magazzino.
+  Nessun messaggio sui topic veri e nessuna NetworkPolicy cambiata (edizioni
+  aveva già la label `ginvault/usa-kafka`), quindi niente test busybox. La
+  catena 600 → 540 sul cluster si vedrà nella demo del passo 7.
+
+### Prossimi passi (6–7)
+
 - **Passo 6:** area acquisti nel frontend, cioè ordini, consegna con l'avviso
   "consegna ridotta: 10,8 su 12 kg", lotti e scheda fornitore. Nella pagina del
   piano, l'integrazione di un lotto con il rifiuto spiegato.
@@ -326,6 +418,7 @@ docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.so
 minikube start
 kubectl get pods -n ginvault
 kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
 kubectl logs -n ginvault deploy/produzione --tail=20
 ```
 

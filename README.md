@@ -43,8 +43,8 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
  rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione e magazzino
    topic edizioni.eventi, magazzino.eventi, produzione.eventi (docs/eventi.md)
 
- gRPC produzione ──▶ magazzino :9084  servizio Giacenze (Disponibilita, RiservaLotto),
-   deadline 2 s, JWT dell'utente nel metadata (docs/grpc.md)
+ gRPC produzione ──▶ magazzino :9084  servizio Giacenze (Disponibilita, RiservaLotto,
+   AnnullaRiserva), deadline 2 s, JWT dell'utente nel metadata (docs/grpc.md)
 ```
 
 | Servizio    | Tecnologia                  | Porta | Database (porta in sviluppo) | `GET /prova` richiede |
@@ -300,21 +300,45 @@ tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sem
   ora le crea solo `Edizione.prenota()` nei test. L'endpoint arriverà con la
   storia delle prenotazioni.
 
-**Scelta da discutere:** se la tiratura **sale** (es. arriva altra lavanda),
-oggi tutte le bottiglie in più vanno a ONLINE. Alternative: rimetterle prima
-dove erano state tolte (BAR, poi ONLINE), ripartirle in proporzione, oppure
-lasciarle "da assegnare" e farle decidere a Marco.
+Se la tiratura **sale** (lotto integrato, altra lavanda arrivata), le
+bottiglie in più vanno tutte a ONLINE, fino a 600.
 
-**Evento di dominio `TiraturaRidotta`** (id edizione, tiratura vecchia e
-nuova, quote nuove):
-- lo registra l'aggregato `Edizione` quando la tiratura scende;
-- Spring Data lo pubblica al `save()` (`@DomainEvents`);
-- dopo il commit lo riceve `InoltroTiratureRidotte` (`@TransactionalEventListener`),
-  che per ora lo scrive solo nel log, dentro il processo.
+**Il ricalcolo arriva da solo, da Produzione.** Edizioni consuma
+`ResaRicalcolata` da `produzione.eventi` (consumer group `edizioni`) e
+applica la stessa regola del ricalcolo manuale. Nessuna azione dopo la
+consegna di Elena:
 
-Con la storia di Elena passerà su **Kafka** verso **Notifiche**, che avviserà
-chi aveva prenotato, passando dalla *transactional outbox* che Edizioni usa
-già per `EdizioneCreata`.
+```
+produzione.eventi  ResaRicalcolata 10,8 kg ──▶ 600 → 540 ──▶ edizioni.eventi  TiraturaRidotta
+produzione.eventi  ResaRicalcolata 12 kg   ──▶ 540 → 600 ──▶ edizioni.eventi  TiraturaAumentata
+produzione.eventi  ResaRicalcolata 10,8 kg ──▶ ONLINE e BAR tutte prenotate:
+                                               l'edizione resta com'è ──▶ edizioni.eventi  RicalcoloRifiutato
+```
+
+- `RicalcoloRifiutato` dice perché (`QUOTE_NON_RIDUCIBILI` o
+  `BOTANICA_INSUFFICIENTE`, se i kg non bastano per una bottiglia), con la
+  spiegazione in italiano e le quote con le prenotate. Il messaggio è
+  elaborato lo stesso: un rifiuto non è un errore;
+- gli eventi di dominio (`TiraturaRidotta`, `TiraturaAumentata`,
+  `RicalcoloRifiutato`) li registra l'aggregato `Edizione`, Spring Data li
+  pubblica al `save()` (`@DomainEvents`) e `ScritturaOutbox` li scrive
+  nell'outbox **nello stesso commit** dell'edizione, come `EdizioneCreata`.
+  Hanno la `causa` (il motivo della resa) e l'`eventId` della resa;
+- anche il ricalcolo manuale di Marco pubblica `TiraturaRidotta` o
+  `TiraturaAumentata`; se non si può, resta un 409 per lui e non parte niente;
+- il consumer è **idempotente**, con **retry** (1, 2, 4, 8 s) e **dead
+  letter** `edizioni.dlt`, come quello di Produzione. Una resa per
+  un'edizione che non esiste va subito nel dead letter: l'edizione nasce
+  prima della resa, quindi non arriverà più.
+
+`TiraturaRidotta` la leggerà **Notifiche** (storia di Giulia), per avvisare
+chi aveva prenotato. Formato degli eventi in [docs/eventi.md](docs/eventi.md).
+
+```bash
+# Gli eventi di Edizioni in uscita e le rese già applicate
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select tipo, chiave, pubblicato_il, tentativi from outbox order by creato_il"
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select event_id, tipo, esito, partizione, posizione, elaborato_il from evento_elaborato order by elaborato_il"
+```
 
 ## Magazzino: approvvigionamento e transactional outbox
 
@@ -415,6 +439,7 @@ lotto del magazzino, via gRPC. Dal gateway: `/api/produzione/...`.
 edizioni.eventi   EdizioneCreata      ──▶ nuovo piano: 12 kg di lavanda, Alta Val Varaita, 20 g, 600 bottiglie
 magazzino.eventi  ConsegnaRegistrata  ──▶ piano a 10,8 kg (540 bottiglie)
                                       ──▶ produzione.eventi  ResaRicalcolata (kgDisponibili 10,8)
+                                          ──▶ Edizioni: 600 → 540, TiraturaRidotta
 ```
 
 | Endpoint | Ruolo | Cosa fa |
@@ -452,7 +477,13 @@ La partnership Produzione → Magazzino è l'unica chiamata sincrona tra i due
   nel metadata;
 - la regola dell'origine si applica **prima** della riserva: il lotto dei
   campi è rifiutato senza toccare il magazzino;
-- su Kubernetes solo produzione può aprire la 9084 (NetworkPolicy).
+- se il piano non si salva dopo la riserva, Produzione la annulla con
+  `AnnullaRiserva` (compensazione best effort, con log);
+- su Kubernetes solo produzione può aprire la 9084 (NetworkPolicy);
+- **in Compose la porta 9084 è protetta solo dal JWT.** Non è pubblicata
+  sull'host, ma le reti di Compose non filtrano per porta: ogni container
+  della rete `backend` può collegarsi, e senza un JWT con il ruolo giusto
+  riceve `UNAUTHENTICATED` o `PERMISSION_DENIED`.
 
 ```bash
 # Le riserve in magazzino e le integrazioni nei piani
@@ -504,8 +535,19 @@ JSON e partizione. Poi prova l'outbox:
   non si salva nemmeno la consegna.
 
 Anche Edizioni ha Kafka nei test: `EdizioneCreata` arriva su `edizioni.eventi`
-dall'outbox. Produzione fa la parte di Edizioni e Magazzino scrivendo sui loro
-topic, e verifica:
+dall'outbox. `ResaRicalcolataTest` fa la parte di Produzione scrivendo su
+`produzione.eventi`, e verifica:
+- la consegna di Elena (10,8 kg) porta l'edizione a 540 e `TiraturaRidotta`
+  esce su `edizioni.eventi`; il lotto integrato (12 kg) la riporta a 600 con
+  `TiraturaAumentata`;
+- con ONLINE e BAR tutte prenotate parte `RicalcoloRifiutato` e l'edizione
+  non cambia;
+- la stessa resa rimandata si scarta; il database che rifiuta per un momento
+  fa riprovare; un messaggio illeggibile e una resa per un'edizione che non
+  esiste vanno subito in `edizioni.dlt`.
+
+Produzione fa la parte di Edizioni e Magazzino scrivendo sui loro topic, e
+verifica:
 - la catena: `EdizioneCreata` → piano da 12 kg; `ConsegnaRegistrata` da 10,8 →
   piano a 10,8 e `ResaRicalcolata` su `produzione.eventi`;
 - **idempotenza**: lo stesso messaggio rimandato, e un messaggio con lo stesso
@@ -522,7 +564,9 @@ Il gRPC tra Produzione e Magazzino si prova da tutte e due le parti:
   lo chiama con un client come quello di Produzione;
 - `IntegrazioneLottiTest` (produzione) usa un magazzino finto con lo stesso
   contratto, su una porta vera. Prova il rifiuto per origine diversa, la
-  deadline di 2 secondi, il magazzino lento o spento (503) e il JWT inoltrato.
+  deadline di 2 secondi, il magazzino lento o spento (503), il JWT inoltrato
+  e la compensazione: se il piano non si salva, la riserva si annulla con
+  `AnnullaRiserva`.
 
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
@@ -637,11 +681,11 @@ avviato in IntelliJ.
     blocca quelli dopo di lui, per non cambiarne l'ordine. Si vede da
     `tentativi` e `ultimo_errore` nella tabella `outbox`.
 - **gRPC Produzione → Magazzino** (vedi [docs/grpc.md](docs/grpc.md#limiti-noti)):
-  - se il commit del piano fallisce dopo la riserva, i kg restano riservati
-    finché Marco non ripete la richiesta (idempotente). Manca un
-    `AnnullaRiserva` di compensazione;
+  - se il piano non si salva dopo la riserva e anche `AnnullaRiserva`
+    fallisce, i kg restano riservati finché Marco non ripete la richiesta
+    (idempotente). C'è un log ERROR, ma nessun job che riprova da solo;
   - il bilanciamento è per connessione, e va bene con una replica;
-  - in Compose la porta 9084 non è filtrata: la protegge solo il JWT.
+  - in Compose la porta 9084 non è filtrata per porta: la protegge solo il JWT.
 - **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
   [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
   Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.

@@ -42,7 +42,9 @@ import jakarta.persistence.Version;
  *    dopo una deadline scaduta;
  *  - solo se il lotto è utilizzabile (conforme e non scaduto);
  *  - mai più dei kg liberi: kg - Σ riservati. Due riserve nello stesso istante
- *    sullo stesso lotto: la @Version fa fallire la seconda, che riprova.
+ *    sullo stesso lotto: la @Version fa fallire la seconda, che riprova;
+ *  - una riserva si può annullare (annullaRiserva, la compensazione di
+ *    Produzione): i kg tornano liberi. Anche questo è idempotente.
  *
  * L'origine NON è una regola del magazzino: un lotto dei campi si può
  * riservare per qualunque piano. Decide Produzione, che sa da dove deve venire
@@ -186,6 +188,23 @@ public class LottoDiBotanica {
         }
         riserve.add(new RiservaDiLotto(pianoId, kg, chi, adesso));
         return new EsitoRiserva(kg, kgDisponibili(), false);
+    }
+
+    /**
+     * Toglie la riserva del piano e ne libera i kg: la compensazione di
+     * Produzione quando non riesce a salvare il piano dopo aver riservato.
+     * Idempotente: senza riserva non cambia niente. Si può annullare sempre,
+     * anche un lotto scaduto o non conforme: liberare kg non fa danni.
+     *
+     * @return la riserva tolta, vuoto se il piano non ne aveva
+     */
+    public Optional<RiservaDiLotto> annullaRiserva(UUID pianoId) {
+        if (pianoId == null) {
+            throw new RiservaRifiutata(Motivo.DATI_NON_VALIDI, "Serve il piano di produzione di cui annullare la riserva");
+        }
+        Optional<RiservaDiLotto> riserva = riservaDel(pianoId);
+        riserva.ifPresent(riserve::remove);
+        return riserva;
     }
 
     /** I kg non ancora riservati: kg - Σ riservati. */

@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> configurazione NON segreta (indirizzi, nomi), come variabili
-#   2) Deployment  -> il pod con il container ginvault/edizioni:0.4
+#   2) Deployment  -> il pod con il container ginvault/edizioni:0.5
 #   3) Service     -> nome DNS stabile "edizioni" (lo usa il gateway)
 #
 # Le stesse variabili d'ambiente che docker-compose.yml passa al container:
@@ -88,7 +88,9 @@ spec:
           # Immagine costruita DENTRO Minikube (minikube image build):
           # Never = non cercarla mai su un registry. Se manca: ErrImageNeverPull
           # 0.2 = storia di Marco: edizioni, tiratura, chiamata a Ricette
-          image: ginvault/edizioni:0.4
+          # 0.5 = storia di Elena: consuma ResaRicalcolata, pubblica TiraturaRidotta,
+          #       TiraturaAumentata e RicalcoloRifiutato
+          image: ginvault/edizioni:0.5
           imagePullPolicy: Never
           ports:
             - name: http

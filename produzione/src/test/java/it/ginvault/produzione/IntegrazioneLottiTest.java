@@ -37,6 +37,8 @@ import io.grpc.ServerInterceptors;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 
+import it.ginvault.giacenze.v1.AnnullaRiservaRequest;
+import it.ginvault.giacenze.v1.AnnullaRiservaResponse;
 import it.ginvault.giacenze.v1.DisponibilitaRequest;
 import it.ginvault.giacenze.v1.DisponibilitaResponse;
 import it.ginvault.giacenze.v1.GiacenzeGrpc;
@@ -51,10 +53,13 @@ import it.ginvault.produzione.sicurezza.GatewayDiProva;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
@@ -78,7 +83,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
  *  - un lotto dell'origine richiesta: riservato, piano di nuovo a 12 kg,
  *    ResaRicalcolata nell'outbox; rimandato -> 200, nessuna nuova riserva;
  *  - deadline di 2 secondi sul filo; magazzino lento o spento -> 503;
- *  - un rifiuto del magazzino -> 409; il JWT di Marco arriva al magazzino.
+ *  - un rifiuto del magazzino -> 409; il JWT di Marco arriva al magazzino;
+ *  - il piano non si salva dopo la riserva -> compensazione: AnnullaRiserva,
+ *    anche quando il magazzino non risponde (resta l'errore di partenza).
  *
  * Kafka non serve: i consumer restano spenti e ResaRicalcolata si controlla
  * nella tabella outbox (il viaggio fino a Kafka è in ProduzioneIntegrazioneTest).
@@ -87,6 +94,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
         "spring.kafka.listener.auto-startup=false",
         "produzione.outbox.intervallo-ms=3600000"})
 @AutoConfigureMockMvc
+@ExtendWith(OutputCaptureExtension.class)
 class IntegrazioneLottiTest {
 
     private static final String ORIGINE = "Alta Val Varaita (Alpi Cozie)";
@@ -301,7 +309,73 @@ class IntegrazioneLottiTest {
         assertThat(MAGAZZINO.disponibilitaChieste).isEmpty();
     }
 
+    // ------------------------------------------------------------- la compensazione
+
+    @Test
+    void seIlPianoNonSiSalvaDopoLaRiservaLaRiservaVieneAnnullata(CapturedOutput output) throws Exception {
+        UUID piano = pianoDopoLaConsegnaDiElena();
+        UUID lotto = MAGAZZINO.aggiungi(ORIGINE, "3.000");
+
+        conIlDatabaseCheRifiutaLeIntegrazioni(() -> mvc.perform(integra(piano, lotto, "1.2", JWT_DI_MARCO))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Modifica concorrente")));
+
+        // Riservato e poi annullato, con lo stesso JWT di Marco
+        assertThat(MAGAZZINO.riserve).hasSize(1);
+        assertThat(MAGAZZINO.annullamenti).singleElement().satisfies(annullamento -> {
+            assertThat(annullamento.getLottoId()).isEqualTo(lotto.toString());
+            assertThat(annullamento.getPianoId()).isEqualTo(piano.toString());
+        });
+        assertThat(MAGAZZINO.autorizzazioni).hasSize(3).allMatch(("Bearer " + JWT_DI_MARCO)::equals);
+        assertThat(kgDisponibili(piano)).isEqualByComparingTo("10.8");
+        assertThat(righeResaRicalcolata(piano)).isEqualTo(1);
+        assertThat(output).contains("Compensazione: il piano " + piano + " non si è salvato");
+
+        // Con il database a posto Marco riprova: riservato di nuovo e integrato
+        mvc.perform(integra(piano, lotto, "1.2", JWT_DI_MARCO))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.piano.kgDisponibili").value(12.0));
+        assertThat(MAGAZZINO.riserve).hasSize(2);
+        assertThat(MAGAZZINO.annullamenti).hasSize(1);
+    }
+
+    @Test
+    void seAncheLAnnullamentoFallisceRestanoLErroreDiPartenzaEUnLogDellaRiservaOrfana(CapturedOutput output)
+            throws Exception {
+        UUID piano = pianoDopoLaConsegnaDiElena();
+        UUID lotto = MAGAZZINO.aggiungi(ORIGINE, "3.000");
+        MAGAZZINO.erroreAnnullamento = Status.UNAVAILABLE.withDescription("magazzino in riavvio");
+
+        conIlDatabaseCheRifiutaLeIntegrazioni(() -> mvc.perform(integra(piano, lotto, "1.2", JWT_DI_MARCO))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Modifica concorrente")));
+
+        assertThat(MAGAZZINO.annullamenti).hasSize(1);
+        assertThat(kgDisponibili(piano)).isEqualByComparingTo("10.8");
+        assertThat(output).contains("Compensazione NON riuscita: il piano " + piano)
+                .contains("restano in magazzino (riserva orfana)");
+    }
+
     // ------------------------------------------------------------- aiuti
+
+    /**
+     * Il database rifiuta ogni nuova riga di piano_integrazione: un vincolo
+     * CHECK messo dal test (NOT VALID: non guarda le righe che ci sono già).
+     * È il salvataggio del piano che fallisce DOPO la riserva in magazzino.
+     */
+    private void conIlDatabaseCheRifiutaLeIntegrazioni(Azione azione) throws Exception {
+        jdbc.execute("alter table piano_integrazione add constraint prova_salvataggio_fallito check (kg < 0) not valid");
+        try {
+            azione.esegui();
+        } finally {
+            jdbc.execute("alter table piano_integrazione drop constraint prova_salvataggio_fallito");
+        }
+    }
+
+    @FunctionalInterface
+    private interface Azione {
+        void esegui() throws Exception;
+    }
 
     /** L'edizione d'estate (12 kg, 600 bottiglie) dopo la consegna di Elena: 10,8 kg, 540 bottiglie. */
     private UUID pianoDopoLaConsegnaDiElena() {
@@ -353,19 +427,23 @@ class IntegrazioneLottiTest {
         final List<LottoDisponibile> lotti = new CopyOnWriteArrayList<>();
         final List<String> disponibilitaChieste = new CopyOnWriteArrayList<>();
         final List<RiservaLottoRequest> riserve = new CopyOnWriteArrayList<>();
+        final List<AnnullaRiservaRequest> annullamenti = new CopyOnWriteArrayList<>();
         final List<String> autorizzazioni = new CopyOnWriteArrayList<>();
         final List<Long> millisAllaDeadline = new CopyOnWriteArrayList<>();
         volatile Duration ritardo = Duration.ZERO;
         volatile Status erroreRiserva;
+        volatile Status erroreAnnullamento;
 
         void azzera() {
             lotti.clear();
             disponibilitaChieste.clear();
             riserve.clear();
+            annullamenti.clear();
             autorizzazioni.clear();
             millisAllaDeadline.clear();
             ritardo = Duration.ZERO;
             erroreRiserva = null;
+            erroreAnnullamento = null;
         }
 
         UUID aggiungi(String origine, String kg) {
@@ -429,6 +507,23 @@ class IntegrazioneLottiTest {
                     .setKgRiservati(richiesta.getKg())
                     .setKgDisponibili(new BigDecimal(lotto.getKgDisponibili())
                             .subtract(new BigDecimal(richiesta.getKg())).toPlainString())
+                    .build());
+            risposta.onCompleted();
+        }
+
+        @Override
+        public void annullaRiserva(AnnullaRiservaRequest richiesta, StreamObserver<AnnullaRiservaResponse> risposta) {
+            annullamenti.add(richiesta);
+            Status errore = erroreAnnullamento;
+            if (errore != null) {
+                risposta.onError(errore.asRuntimeException());
+                return;
+            }
+            risposta.onNext(AnnullaRiservaResponse.newBuilder()
+                    .setLottoId(richiesta.getLottoId())
+                    .setPianoId(richiesta.getPianoId())
+                    .setKgLiberati("1.200")
+                    .setKgDisponibili("3.000")
                     .build());
             risposta.onCompleted();
         }

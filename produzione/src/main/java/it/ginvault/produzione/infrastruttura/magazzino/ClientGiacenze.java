@@ -11,6 +11,8 @@ import io.grpc.Channel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 
+import it.ginvault.giacenze.v1.AnnullaRiservaRequest;
+import it.ginvault.giacenze.v1.AnnullaRiservaResponse;
 import it.ginvault.giacenze.v1.DisponibilitaRequest;
 import it.ginvault.giacenze.v1.GiacenzeGrpc;
 import it.ginvault.giacenze.v1.LottoDisponibile;
@@ -77,6 +79,20 @@ public class ClientGiacenze implements Giacenze {
                     new BigDecimal(risposta.getKgDisponibili()), risposta.getGiaRiservato());
         } catch (StatusRuntimeException errore) {
             throw traduci(errore, "RiservaLotto");
+        }
+    }
+
+    @Override
+    public Annullamento annullaRiserva(UUID lottoId, UUID pianoId) {
+        AnnullaRiservaRequest richiesta = AnnullaRiservaRequest.newBuilder()
+                .setLottoId(lottoId.toString())
+                .setPianoId(pianoId.toString())
+                .build();
+        try {
+            AnnullaRiservaResponse risposta = stub().annullaRiserva(richiesta);
+            return new Annullamento(new BigDecimal(risposta.getKgLiberati()), risposta.getNessunaRiserva());
+        } catch (StatusRuntimeException errore) {
+            throw traduci(errore, "AnnullaRiserva");
         }
     }
 

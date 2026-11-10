@@ -48,6 +48,18 @@ service Giacenze {
   //   ALREADY_EXISTS       il piano ha già una riserva su questo lotto, con altri kg
   //   ABORTED              un'altra riserva sullo stesso lotto nello stesso istante: si può ripetere
   rpc RiservaLotto(RiservaLottoRequest) returns (RiservaLottoResponse);
+
+  // Annulla la riserva di un piano su un lotto e ne libera i kg. Serve come
+  // COMPENSAZIONE: Produzione ha riservato, ma poi non è riuscita a salvare il
+  // piano. IDEMPOTENTE: se la riserva non c'è (già annullata, o mai fatta)
+  // risponde OK con nessuna_riserva, senza errore.
+  // Ruoli: DISTILLATORE, ADMIN (gli stessi di RiservaLotto).
+  //
+  // Errori:
+  //   INVALID_ARGUMENT     id non validi
+  //   NOT_FOUND            il lotto non esiste
+  //   ABORTED              un'altra riserva o annullamento sullo stesso lotto nello stesso istante: si può ripetere
+  rpc AnnullaRiserva(AnnullaRiservaRequest) returns (AnnullaRiservaResponse);
 }
 
 message DisponibilitaRequest {
@@ -95,4 +107,20 @@ message RiservaLottoResponse {
   string kg_disponibili = 6;
   // true: la riserva c'era già (richiesta ripetuta), niente di nuovo riservato
   bool gia_riservato = 7;
+}
+
+message AnnullaRiservaRequest {
+  string lotto_id = 1;
+  string piano_id = 2;
+}
+
+message AnnullaRiservaResponse {
+  string lotto_id = 1;
+  string piano_id = 2;
+  // I kg tornati liberi ("0.000" se non c'era nessuna riserva)
+  string kg_liberati = 3;
+  // I kg del lotto liberi dopo l'annullamento
+  string kg_disponibili = 4;
+  // true: il piano non aveva riserve su questo lotto (richiesta ripetuta), niente da liberare
+  bool nessuna_riserva = 5;
 }

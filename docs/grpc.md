@@ -20,6 +20,7 @@ package `ginvault.giacenze.v1`:
 |---|---|---|
 | `Disponibilita(botanica)` | i lotti utilizzabili della botanica (conformi, non scaduti) con origine e kg liberi | DISTILLATORE, RESP_ACQUISTI, ADMIN |
 | `RiservaLotto(lotto_id, piano_id, kg)` | mette da parte kg di un lotto per un piano; **idempotente** su (lotto, piano) | DISTILLATORE, ADMIN |
+| `AnnullaRiserva(lotto_id, piano_id)` | toglie la riserva del piano e libera i kg: la **compensazione** di Produzione; **idempotente** (senza riserva risponde OK con `nessuna_riserva`) | DISTILLATORE, ADMIN |
 
 Regole del contratto:
 
@@ -33,7 +34,7 @@ Regole del contratto:
 
 Il modulo è una libreria Maven: il `protobuf-maven-plugin` compila il `.proto`
 con `protoc` e genera i messaggi, lo stub client e la classe base del server.
-Magazzino e Produzione dipendono dal jar `it.ginvault:giacenze-api:0.1.0`.
+Magazzino e Produzione dipendono dal jar `it.ginvault:giacenze-api:0.2.0`.
 
 ## Il caso d'uso: `POST /piani/{id}/integrazioni`
 
@@ -49,6 +50,7 @@ Marco ──POST──▶ Produzione                                   Magazzino
                  4. RiservaLotto(lotto, piano, 1.200) ── gRPC, 2 s ──▶ riserva (idempotente)
                  5. il piano integra il lotto e ricalcola la resa:
                     piano + riga di outbox di ResaRicalcolata nello stesso commit
+                    il commit fallisce? ──▶ AnnullaRiserva(lotto, piano) ── gRPC, 2 s ──▶ kg di nuovo liberi
          ◀── 201 {esito, piano}
 ```
 
@@ -84,6 +86,41 @@ lotti utilizzabili della botanica), `ALTRA_BOTANICA`, `LOTTO_GIA_INTEGRATO`,
 `PIANO_COMPLETO` (non mancano kg), `KG_ECCESSIVI` (più di quelli che mancano),
 `KG_NON_VALIDI`.
 
+## La compensazione: `AnnullaRiserva`
+
+Il passo 5 può fallire dopo che il magazzino ha già riservato: il database di
+Produzione è giù, oppure il piano è stato cambiato nello stesso momento da
+un'altra richiesta (vincolo UNIQUE, `@Version`). Le due scritture stanno in due
+database diversi, quindi non c'è un commit unico: si **compensa**.
+`ServizioIntegrazioni` intercetta l'errore del passo 5 e:
+
+1. **rilegge il piano.** Se il lotto c'è già, l'ha integrato un'altra
+   richiesta nello stesso momento (Marco ha premuto due volte e l'altra ha
+   vinto). La riserva è usata: non si tocca, e Marco riceve 200 `GIA_INTEGRATO`;
+2. **altrimenti chiama `AnnullaRiserva(lotto, piano)`**, con lo stesso JWT e la
+   stessa deadline di 2 secondi. I kg tornano liberi e si scrive un log WARN
+   `Compensazione: il piano ... non si è salvato (...), riserva del lotto ... annullata`;
+3. **restituisce l'errore di partenza** (409 "Modifica concorrente", 500 per
+   il database giù): l'annullamento non lo nasconde.
+
+È **best effort**. Se anche `AnnullaRiserva` fallisce (magazzino giù proprio
+in quel momento), l'errore si aggiunge come *suppressed* e si scrive un log
+ERROR `Compensazione NON riuscita ... (riserva orfana)`. Si sistema ripetendo
+l'integrazione: `RiservaLotto` è idempotente, restituisce la riserva che c'è
+già e il piano si allinea. Se il piano non si riesce nemmeno a rileggere
+(database giù), si annulla lo stesso: quasi sempre vuol dire che il piano non
+è stato salvato.
+
+`AnnullaRiserva` è idempotente, come `RiservaLotto`: la seconda volta risponde
+OK con `nessuna_riserva: true` e `kg_liberati: "0.000"`. Si può annullare anche
+la riserva di un lotto scaduto o non conforme: liberare kg non fa danni. Lato
+magazzino non controlla se chi ha chiamato ha già smesso di aspettare, al
+contrario di `RiservaLotto`: liberare i kg serve comunque.
+
+È una saga minima con un solo passo di compensazione. L'ordine dei passi
+aiuta: la regola dell'origine viene prima della riserva, quindi un lotto
+rifiutato non va mai annullato.
+
 C'è anche `GET /piani/{id}/lotti` (DISTILLATORE, RESP_ACQUISTI, ADMIN). Chiama
 `Disponibilita` e restituisce i lotti con `stessaOrigine`: la pagina del piano
 (passo 6) li mostra prima che Marco provi.
@@ -102,7 +139,8 @@ C'è anche `GET /piani/{id}/lotti` (DISTILLATORE, RESP_ACQUISTI, ADMIN). Chiama
 | `INVALID_ARGUMENT`, `UNAUTHENTICATED`, `PERMISSION_DENIED`, `INTERNAL`... | errore tra i due servizi, non di Marco | 502 |
 
 Dal lato di Magazzino la traduzione è in `ServizioGiacenze`. Dal lato di
-Produzione è in `ClientGiacenze`, poi in `GestoreErrori`.
+Produzione è in `ClientGiacenze`, poi in `GestoreErrori`. Per `AnnullaRiserva`
+la tabella vale solo per il log: Marco riceve sempre l'errore del passo 5.
 
 ### La deadline di 2 secondi
 
@@ -130,7 +168,12 @@ esserci anche se Marco riceve un 503. Ripetendo la richiesta, `RiservaLotto`
   - metodo senza regola → negato;
   - JWKS del gateway irraggiungibile → `UNAVAILABLE`.
 - **Rete.** In chiaro (HTTP/2 senza TLS), solo sulla rete interna:
-  - Compose: rete `backend`, porta 9084 non pubblicata sull'host;
+  - Compose: rete `backend`, porta 9084 non pubblicata sull'host. **In Compose
+    la 9084 è protetta solo dal JWT**: le reti di Compose non filtrano per
+    porta, quindi tutti i container della rete `backend` (gateway, edizioni,
+    ricette, pagamenti, notifiche) possono aprire la connessione. Senza un JWT
+    valido con il ruolo giusto, però, ricevono `UNAUTHENTICATED` o
+    `PERMISSION_DENIED`;
   - Kubernetes: la NetworkPolicy `magazzino-grpc-solo-da-produzione`
     ([k8s/networkpolicy-magazzino.yaml](../k8s/networkpolicy-magazzino.yaml))
     apre la 9084 solo ai pod di produzione. L'8084 resta aperta come prima,
@@ -163,11 +206,22 @@ docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.so
   PostgreSQL. Copre disponibilità, riserva, idempotenza, kg insufficienti,
   due riserve nello stesso istante e i JWT mancanti, falsi o con il ruolo
   sbagliato.
+  Copre anche `AnnullaRiserva`: i kg liberati, la seconda volta senza
+  errore, il lotto inesistente, il ruolo.
 - `produzione` → `IntegrazioneLottiTest`: un magazzino finto con lo stesso
   contratto, su una porta vera. Copre il rifiuto per origine diversa senza
   riserva, l'integrazione che riporta il piano a 12 kg e 600 bottiglie, il JWT
   e la deadline sul filo, il magazzino lento o spento (503) e il rifiuto del
-  magazzino (409).
+  magazzino (409). Per la **compensazione**, un vincolo `CHECK` messo dal test
+  fa fallire il salvataggio del piano dopo la riserva:
+  - `AnnullaRiserva` arriva al magazzino con il JWT di Marco, il piano resta
+    a 10,8 kg, e riprovando l'integrazione riesce;
+  - con il magazzino che non risponde all'annullamento resta l'errore di
+    partenza, con il log ERROR della riserva orfana.
+- `produzione` → `ServizioIntegrazioniTest` (senza database): i due casi che
+  con un database vero non si provocano a comando. Un'altra richiesta ha già
+  integrato il lotto, quindi la riserva non si annulla. Il database è giù,
+  quindi si annulla senza rileggere il piano.
 
 A mano sul cluster, con [grpcurl](https://github.com/fullstorydev/grpcurl). Il
 port-forward passa dal kubelet, quindi la NetworkPolicy non si applica:
@@ -184,14 +238,19 @@ docker run --rm -v "${PWD}\giacenze-api\src\main\proto:/proto" fullstorydev/grpc
 
 ## Limiti noti
 
-- **Riserva orfana.** Se il commit del piano fallisce dopo la riserva (database
-  di Produzione giù), i kg restano riservati in magazzino. Si sistema
-  ripetendo la richiesta (idempotente). Un `AnnullaRiserva` di compensazione,
-  cioè una saga, sarebbe il passo successivo.
+- **Riserva orfana.** Resta solo se il piano non si salva e anche
+  `AnnullaRiserva` fallisce (log ERROR). Si sistema ripetendo la richiesta
+  (idempotente). Non c'è un job che ritenta da solo l'annullamento.
+- **Commit perso.** Se il database salva il piano ma la risposta si perde, e
+  poi il piano non si rilegge, la compensazione annulla una riserva che il
+  piano usa. È un caso raro, e nessun test lo copre.
 - **Una replica.** Una connessione gRPC dura a lungo e resta sul pod scelto
   all'apertura. Con più repliche di magazzino servirebbe un bilanciamento per
   chiamata: Service headless e `round_robin` nel client.
 - **Compose** non può filtrare per porta: lì la 9084 è raggiungibile da tutta
-  la rete `backend`, e protegge solo il JWT.
-- **La resa può risalire** (10,8 → 12 dopo un'integrazione): `ResaRicalcolata`
-  lo dice, Edizioni deciderà nel passo 5.
+  la rete `backend`, e **la protegge solo il JWT** (vedi [Sicurezza](#sicurezza)).
+- **Il rifiuto non torna a Produzione.** Dopo un'integrazione la resa risale
+  (10,8 → 12) ed Edizioni rimette le bottiglie a ONLINE (`TiraturaAumentata`,
+  vedi [docs/eventi.md](eventi.md)). Una resa che scende sotto le prenotate,
+  invece, Edizioni la rifiuta con `RicalcoloRifiutato`: per ora nessuno lo
+  consuma, e il piano di produzione resta con i suoi kg.

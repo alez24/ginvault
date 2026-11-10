@@ -43,13 +43,10 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
@@ -74,14 +71,13 @@ import org.testcontainers.kafka.KafkaContainer;
  *    con il JSON di Ricette (FormulazioneVista) o con errori e ritardi.
  * Si verificano le risposte a Marco, le chiamate fatte a Ricette (con il suo
  * JWT inoltrato), cosa finisce, o non finisce, nel database e l'evento
- * TiraturaRidotta (registrato con @RecordApplicationEvents, log catturato).
+ * TiraturaRidotta (registrato con @RecordApplicationEvents e scritto nell'outbox).
  * Con un Kafka vero: EdizioneCreata passa dall'outbox a edizioni.eventi, e
  * un'edizione non creata non lascia eventi.
  */
 @SpringBootTest(properties = "edizioni.outbox.intervallo-ms=200")
 @AutoConfigureMockMvc
 @RecordApplicationEvents
-@ExtendWith(OutputCaptureExtension.class)
 class EdizioniIntegrazioneTest {
 
     private static final String TOPIC = "edizioni.eventi";
@@ -111,6 +107,12 @@ class EdizioniIntegrazioneTest {
         @Bean
         NewTopic edizioniEventi() {
             return TopicBuilder.name(TOPIC).partitions(3).replicas(1).build();
+        }
+
+        /** Quello che legge il consumer delle rese (provato in ResaRicalcolataTest): qui resta vuoto. */
+        @Bean
+        NewTopic produzioneEventi() {
+            return TopicBuilder.name("produzione.eventi").partitions(3).replicas(1).build();
         }
     }
 
@@ -375,7 +377,7 @@ class EdizioniIntegrazioneTest {
     // ---------------------------------------------------------------- ricalcolo
 
     @Test
-    void laLavandaArrivaScarsaEDa600SiScendeA540SenzaChiamareRicette(CapturedOutput log) throws Exception {
+    void laLavandaArrivaScarsaEDa600SiScendeA540SenzaChiamareRicette() throws Exception {
         String edizione = edizioneDa600Bottiglie();
         RICETTE.resetAll();   // da qui Ricette non serve: i grammi per bottiglia sono nell'Edizione
 
@@ -392,14 +394,19 @@ class EdizioniIntegrazioneTest {
                 .isEqualTo(540);
         assertThat(jdbc.queryForObject("select bottiglie from quota where edizione_id = ? and canale = 'ONLINE'",
                 Integer.class, id)).isEqualTo(90);
-        // Evento di dominio pubblicato (in-process) e loggato dopo il commit
+        // Evento di dominio pubblicato (in-process) e scritto nell'outbox nello stesso commit
         assertThat(eventi.stream(TiraturaRidotta.class)).singleElement().satisfies(evento -> {
             assertThat(evento.edizioneId()).isEqualTo(id);
             assertThat(evento.tiraturaVecchia()).isEqualTo(600);
             assertThat(evento.tiraturaNuova()).isEqualTo(540);
+            assertThat(evento.causa()).isEqualTo("ricalcolo manuale del distillatore");
         });
-        assertThat(log).contains("Evento TiraturaRidotta: edizione " + edizione
-                + " da 600 a 540 bottiglie, nuove quote {SOCI=300, BAR=150, ONLINE=90}");
+        JsonNode busta = json.readTree(jdbc.queryForObject(
+                "select messaggio from outbox where tipo = 'TiraturaRidotta' and chiave = ?", String.class, edizione));
+        assertThat(busta.at("/payload/tiraturaPrima").asInt()).isEqualTo(600);
+        assertThat(busta.at("/payload/tiratura").asInt()).isEqualTo(540);
+        assertThat(busta.at("/payload/quote/ONLINE").asInt()).isEqualTo(90);
+        assertThat(busta.at("/payload/resaRicalcolataId").isNull()).isTrue();
     }
 
     @Test
@@ -414,6 +421,9 @@ class EdizioniIntegrazioneTest {
         assertThat(jdbc.queryForObject("select tiratura from edizione where id = ?", Integer.class,
                 UUID.fromString(edizione))).isEqualTo(600);
         assertThat(eventi.stream(TiraturaRidotta.class)).isEmpty();
+        // Il 409 del ricalcolo manuale non è un RicalcoloRifiutato: quello nasce solo dalle rese di Produzione
+        assertThat(jdbc.queryForObject("select count(*) from outbox where chiave = ? and tipo <> 'EdizioneCreata'",
+                Integer.class, edizione)).isZero();
     }
 
     // ---------------------------------------------------------------- elenco

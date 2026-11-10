@@ -6,11 +6,13 @@ import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import it.ginvault.magazzino.applicazione.Viste.AnnullamentoVista;
 import it.ginvault.magazzino.applicazione.Viste.DisponibilitaVista;
 import it.ginvault.magazzino.applicazione.Viste.EsitoConsegna;
 import it.ginvault.magazzino.applicazione.Viste.FornitoreVista;
@@ -29,6 +31,7 @@ import it.ginvault.magazzino.dominio.LottoRepository;
 import it.ginvault.magazzino.dominio.OrdineDiAcquisto;
 import it.ginvault.magazzino.dominio.OrdineNonValido;
 import it.ginvault.magazzino.dominio.OrdineRepository;
+import it.ginvault.magazzino.dominio.RiservaDiLotto;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -169,6 +172,22 @@ public class ServizioApprovvigionamento {
         EsitoRiserva esito = lotto.riserva(pianoId, kg, oggi(), chi, orologio.instant());
         lotti.save(lotto);
         return RiservaVista.di(lotto, pianoId, esito);
+    }
+
+    /**
+     * Giacenze.AnnullaRiserva: toglie la riserva di un piano e ne libera i kg
+     * (la compensazione di Produzione). Idempotente: senza riserva risponde
+     * con nessunaRiserva. Anche qui la @Version del lotto protegge da una
+     * riserva contemporanea sullo stesso lotto.
+     *
+     * @throws LottoNonTrovato il lotto non esiste
+     */
+    @Transactional
+    public AnnullamentoVista annullaRiserva(UUID lottoId, UUID pianoId) {
+        LottoDiBotanica lotto = lotti.findById(lottoId).orElseThrow(() -> new LottoNonTrovato(lottoId));
+        Optional<RiservaDiLotto> annullata = lotto.annullaRiserva(pianoId);
+        lotti.save(lotto);
+        return AnnullamentoVista.di(lotto, pianoId, annullata);
     }
 
     @Transactional(readOnly = true)

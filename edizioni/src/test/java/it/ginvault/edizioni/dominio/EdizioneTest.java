@@ -262,7 +262,13 @@ class EdizioneTest {
         assertThat(estate.tiratura()).isEqualTo(new Tiratura(600));
         assertThat(estate.bottigliePerCanale()).containsExactly(
                 Map.entry(Canale.SOCI, 300), Map.entry(Canale.BAR, 150), Map.entry(Canale.ONLINE, 150));
-        assertThat(estate.eventi()).isEmpty();   // TiraturaRidotta solo quando scende
+        assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(TiraturaAumentata.class, evento -> {
+            assertThat(evento.tiraturaVecchia()).isEqualTo(540);
+            assertThat(evento.tiraturaNuova()).isEqualTo(600);
+            assertThat(evento.quote()).containsEntry(Canale.ONLINE, 150);
+            assertThat(evento.causa()).isEqualTo(Edizione.RICALCOLO_MANUALE);
+            assertThat(evento.resaRicalcolataId()).isNull();
+        });
     }
 
     @Test
@@ -284,6 +290,96 @@ class EdizioneTest {
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("nemmeno una bottiglia");
         assertThat(estate.tiratura()).isEqualTo(new Tiratura(600));
+    }
+
+    // ---------------------------------------------------------------- la resa da Produzione
+
+    @Test
+    void laResaDellaConsegnaDiElenaPortaLEdizioneA540ConLaCausa() {
+        Edizione estate = estate();
+        ResaDiProduzione resa = resa("10.8", "consegna ridotta: 10,8 su 12 kg");
+
+        EsitoRicalcolo esito = estate.applicaResa(resa);
+
+        assertThat(esito).isEqualTo(new EsitoRicalcolo(EsitoRicalcolo.Tipo.RIDOTTA, 600, 540, null));
+        assertThat(estate.bottigliePerCanale()).containsExactly(
+                Map.entry(Canale.SOCI, 300), Map.entry(Canale.BAR, 150), Map.entry(Canale.ONLINE, 90));
+        assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(TiraturaRidotta.class, evento -> {
+            assertThat(evento.kgDisponibili()).isEqualByComparingTo("10.8");
+            assertThat(evento.causa()).isEqualTo("consegna ridotta: 10,8 su 12 kg");
+            assertThat(evento.resaRicalcolataId()).isEqualTo(resa.eventoId());
+        });
+    }
+
+    @Test
+    void conIlLottoIntegratoLeBottiglieTornanoAOnlineMaiOltre600() {
+        Edizione estate = estate();
+        estate.applicaResa(resa("10.8", "consegna ridotta: 10,8 su 12 kg"));
+        estate.eventiPubblicati();
+
+        EsitoRicalcolo esito = estate.applicaResa(resa("15", "integrazione: 4,2 kg dal lotto ..."));
+
+        assertThat(esito.tipo()).isEqualTo(EsitoRicalcolo.Tipo.AUMENTATA);
+        assertThat(estate.tiratura()).isEqualTo(new Tiratura(600));   // 15 kg darebbero 750 bottiglie
+        assertThat(estate.bottigliePerCanale()).containsExactly(
+                Map.entry(Canale.SOCI, 300), Map.entry(Canale.BAR, 150), Map.entry(Canale.ONLINE, 150));
+        assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(TiraturaAumentata.class, evento -> {
+            assertThat(evento.tiraturaVecchia()).isEqualTo(540);
+            assertThat(evento.tiraturaNuova()).isEqualTo(600);
+            assertThat(evento.causa()).startsWith("integrazione");
+        });
+    }
+
+    @Test
+    void unaResaCheScenderebbeSottoLePrenotateERifiutataELEdizioneNonCambia() {
+        Edizione estate = estate();
+        estate.prenota(Canale.ONLINE, 100);
+        estate.prenota(Canale.BAR, 150);
+        ResaDiProduzione resa = resa("10.8", "consegna ridotta: 10,8 su 12 kg");
+
+        EsitoRicalcolo esito = estate.applicaResa(resa);
+
+        assertThat(esito.tipo()).isEqualTo(EsitoRicalcolo.Tipo.RIFIUTATO);
+        assertThat(esito.tiratura()).isEqualTo(600);
+        assertThat(esito.spiegazione()).contains("ne vanno tolte 60", "solo 50 non prenotate",
+                "L'edizione non è stata modificata");
+        assertThat(estate.tiratura()).isEqualTo(new Tiratura(600));
+        assertThat(estate.botanicaDisponibileKg()).isEqualByComparingTo("12");
+        assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(RicalcoloRifiutato.class, evento -> {
+            assertThat(evento.motivo()).isEqualTo(RicalcoloRifiutato.Motivo.QUOTE_NON_RIDUCIBILI);
+            assertThat(evento.tiratura()).isEqualTo(600);
+            assertThat(evento.tiraturaRichiesta()).isEqualTo(540);
+            assertThat(evento.kgDisponibili()).isEqualByComparingTo("12");
+            assertThat(evento.kgRichiesti()).isEqualByComparingTo("10.8");
+            assertThat(evento.quote()).containsEntry(Canale.ONLINE, new Quota(150, 100));
+            assertThat(evento.spiegazione()).isEqualTo(esito.spiegazione());
+            assertThat(evento.resaRicalcolataId()).isEqualTo(resa.eventoId());
+        });
+    }
+
+    @Test
+    void conZeroKgUtilizzabiliIlRicalcoloERifiutatoSenzaToccareLEdizione() {
+        Edizione estate = estate();
+
+        EsitoRicalcolo esito = estate.applicaResa(resa("0", "lotto non conforme: 0 su 12 kg"));
+
+        assertThat(esito.tipo()).isEqualTo(EsitoRicalcolo.Tipo.RIFIUTATO);
+        assertThat(esito.spiegazione()).contains("non si riempie nemmeno una bottiglia",
+                "L'edizione non è stata modificata");
+        assertThat(estate.tiratura()).isEqualTo(new Tiratura(600));
+        assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(RicalcoloRifiutato.class, evento -> {
+            assertThat(evento.motivo()).isEqualTo(RicalcoloRifiutato.Motivo.BOTANICA_INSUFFICIENTE);
+            assertThat(evento.tiraturaRichiesta()).isZero();
+        });
+    }
+
+    @Test
+    void unaResaConLaStessaTiraturaNonPubblicaNiente() {
+        Edizione estate = estate();
+
+        assertThat(estate.applicaResa(resa("13", "riordino")).tipo()).isEqualTo(EsitoRicalcolo.Tipo.INVARIATA);
+        assertThat(estate.botanicaDisponibileKg()).isEqualByComparingTo("13");
+        assertThat(estate.eventi()).isEmpty();
     }
 
     // ---------------------------------------------------------------- prenotazioni
@@ -309,6 +405,10 @@ class EdizioneTest {
         Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, QUOTE_600);
         estate.eventiPubblicati();
         return estate;
+    }
+
+    private static ResaDiProduzione resa(String kg, String motivo) {
+        return new ResaDiProduzione(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal(kg), motivo);
     }
 
     private static FormulazioneInCatalogo scelta(int versione, String grammi) {

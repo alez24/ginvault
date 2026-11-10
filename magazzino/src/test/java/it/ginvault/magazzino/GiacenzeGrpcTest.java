@@ -26,6 +26,8 @@ import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.MetadataUtils;
 
+import it.ginvault.giacenze.v1.AnnullaRiservaRequest;
+import it.ginvault.giacenze.v1.AnnullaRiservaResponse;
 import it.ginvault.giacenze.v1.DisponibilitaRequest;
 import it.ginvault.giacenze.v1.DisponibilitaResponse;
 import it.ginvault.giacenze.v1.GiacenzeGrpc;
@@ -63,6 +65,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
  *  - Disponibilita: solo i lotti utilizzabili, con i kg liberi;
  *  - RiservaLotto: riserva, idempotenza, kg insufficienti, lotto non
  *    utilizzabile o inesistente, due riserve nello stesso istante;
+ *  - AnnullaRiserva: libera i kg, è idempotente, si può riservare di nuovo;
  *  - sicurezza: senza JWT, con un JWT falso o con il ruolo sbagliato non passa.
  *
  * Kafka non serve: le riserve non pubblicano eventi (l'outbox resta vuota).
@@ -217,6 +220,50 @@ class GiacenzeGrpcTest {
     }
 
     @Test
+    void annullareUnaRiservaLiberaIKgEDueVolteNonFaDanni() {
+        UUID lotto = lotto(ORIGINE, "3", EsitoQualita.CONFORME, LocalDate.of(2027, 8, 31), LocalDate.of(2026, 8, 6));
+        UUID piano = UUID.randomUUID();
+        UUID altroPiano = UUID.randomUUID();
+        come(JWT_DI_MARCO).riservaLotto(riserva(lotto, piano, "1.2"));
+        come(JWT_DI_MARCO).riservaLotto(riserva(lotto, altroPiano, "0.5"));
+
+        AnnullaRiservaResponse annullata = come(JWT_DI_MARCO).annullaRiserva(annulla(lotto, piano));
+
+        assertThat(annullata.getNessunaRiserva()).isFalse();
+        assertThat(annullata.getKgLiberati()).isEqualTo("1.200");
+        assertThat(annullata.getKgDisponibili()).isEqualTo("2.500");
+        // la riserva dell'altro piano resta
+        assertThat(jdbc.queryForList("select piano_id from lotto_riserva where lotto_id = ?", UUID.class, lotto))
+                .containsExactly(altroPiano);
+
+        // Ripetuta (la compensazione riprovata): OK, niente da liberare
+        AnnullaRiservaResponse ripetuta = come(JWT_DI_MARCO).annullaRiserva(annulla(lotto, piano));
+        assertThat(ripetuta.getNessunaRiserva()).isTrue();
+        assertThat(ripetuta.getKgLiberati()).isEqualTo("0.000");
+        assertThat(ripetuta.getKgDisponibili()).isEqualTo("2.500");
+
+        // I kg liberati si possono riservare di nuovo, anche con altri kg
+        assertThat(come(JWT_DI_MARCO).riservaLotto(riserva(lotto, piano, "2")).getGiaRiservato()).isFalse();
+        assertThat(righeRiserva(lotto)).isEqualTo(2);
+    }
+
+    @Test
+    void annullareSuUnLottoCheNonEsisteOSenzaIlRuoloNonSiPuo() {
+        UUID lotto = lotto(ORIGINE, "3", EsitoQualita.CONFORME, LocalDate.of(2027, 8, 31), LocalDate.of(2026, 8, 6));
+        UUID piano = UUID.randomUUID();
+        come(JWT_DI_MARCO).riservaLotto(riserva(lotto, piano, "1"));
+
+        assertStato(() -> come(JWT_DI_MARCO).annullaRiserva(annulla(UUID.randomUUID(), piano)),
+                Status.Code.NOT_FOUND, "non trovato");
+        assertStato(() -> come(JWT_DI_MARCO).annullaRiserva(AnnullaRiservaRequest.newBuilder()
+                        .setLottoId(lotto.toString()).setPianoId("piano-1").build()),
+                Status.Code.INVALID_ARGUMENT, "piano_id non è un UUID");
+        assertStato(() -> come(JWT_DI_ELENA).annullaRiserva(annulla(lotto, piano)),
+                Status.Code.PERMISSION_DENIED, "ROLE_DISTILLATORE");
+        assertThat(righeRiserva(lotto)).isEqualTo(1);
+    }
+
+    @Test
     void lottiNonUtilizzabiliOInesistentiNonSiRiservano() {
         UUID nonConforme = lotto(ORIGINE, "5", EsitoQualita.NON_CONFORME, LocalDate.of(2027, 8, 31),
                 LocalDate.of(2026, 8, 1));
@@ -331,6 +378,10 @@ class GiacenzeGrpcTest {
                 .setPianoId(piano.toString())
                 .setKg(kg)
                 .build();
+    }
+
+    private static AnnullaRiservaRequest annulla(UUID lotto, UUID piano) {
+        return AnnullaRiservaRequest.newBuilder().setLottoId(lotto.toString()).setPianoId(piano.toString()).build();
     }
 
     private int righeRiserva(UUID lotto) {

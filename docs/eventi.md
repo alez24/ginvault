@@ -29,10 +29,11 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 
 | Topic | Produttore (unico) | Chiave | Eventi | Consumer group |
 |---|---|---|---|---|
-| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `RicalcoloRifiutato` | `produzione`; più avanti `notifiche` |
+| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato` | `produzione`; più avanti `notifiche` |
 | `magazzino.eventi` | Magazzino | nome della botanica (`lavanda`) | `ConsegnaRegistrata` | `produzione` |
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
 | `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
+| `edizioni.dlt` | Edizioni (dead letter) | quella del messaggio originale | i messaggi che Edizioni non riesce a elaborare | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
   possiede è l'unico che ci scrive. I nomi usano il punto e mai il trattino
@@ -51,7 +52,8 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
   verità è il database di ogni servizio, non Kafka.
 - `produzione.dlt` è il **dead letter topic** di Produzione: un topic solo per
   tutti i messaggi scartati dai suoi consumer, qualunque sia il topic
-  d'origine (lo dicono gli header). Vedi [Consumer](#consumer-idempotenza-retry-e-dead-letter).
+  d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni. Vedi
+  [Consumer](#consumer-idempotenza-retry-e-dead-letter).
 
 ## Formato dei messaggi
 
@@ -98,11 +100,14 @@ qui c'è cosa deve dire.
 | `EdizioneCreata` | `edizioni.eventi` | Marco crea un'edizione | edizione, botanica di stagione, grammi per bottiglia, origine richiesta, kg previsti |
 | `ConsegnaRegistrata` | `magazzino.eventi` | Elena registra una consegna, anche ridotta | ordine, botanica, kg ordinati, kg arrivati, origine, edizione |
 | `ResaRicalcolata` | `produzione.eventi` | la botanica disponibile per un piano cambia | edizione, kg disponibili |
-| `TiraturaRidotta` | `edizioni.eventi` | Edizioni applica il ricalcolo (600 → 540) | edizione, tiratura prima e dopo, nuove quote |
-| `RicalcoloRifiutato` | `edizioni.eventi` | il ricalcolo toglierebbe bottiglie già prenotate | edizione, kg disponibili, motivo |
+| `TiraturaRidotta` | `edizioni.eventi` | Edizioni applica il ricalcolo (600 → 540) | edizione, tiratura prima e dopo, nuove quote, causa |
+| `TiraturaAumentata` | `edizioni.eventi` | la resa risale (lotto integrato: 540 → 600) | come `TiraturaRidotta` |
+| `RicalcoloRifiutato` | `edizioni.eventi` | il ricalcolo toglierebbe bottiglie già prenotate, o i kg non bastano per una bottiglia | edizione, kg richiesti, motivo, spiegazione, quote con le prenotate |
 
 La catena: `ConsegnaRegistrata` → Produzione → `ResaRicalcolata` → Edizioni →
-`TiraturaRidotta`, senza nessuna azione manuale dopo la registrazione della consegna.
+`TiraturaRidotta`, senza nessuna azione manuale dopo la registrazione della
+consegna. Con il lotto integrato da Marco: `ResaRicalcolata` (12 kg) →
+Edizioni → `TiraturaAumentata`.
 
 ### `EdizioneCreata` v1 (edizioni.eventi)
 
@@ -141,8 +146,9 @@ nella stessa transazione dell'edizione. Produzione ne fa un piano di produzione.
 
 Chiave: l'id dell'edizione. Lo pubblica Produzione quando una consegna, o un
 lotto integrato da Marco ([docs/grpc.md](grpc.md)), cambia i kg di botanica di
-stagione su cui il piano può contare. Edizioni lo userà per ricalcolare la
-tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
+stagione su cui il piano può contare. Edizioni lo usa per ricalcolare la
+tiratura: 10,8 kg a 20 g = 540 bottiglie (vedi
+[`TiraturaRidotta`](#tiraturaridotta-e-tiraturaaumentata-v1-edizionieventi)).
 
 ```json
 {
@@ -203,7 +209,95 @@ ordinati. Un lotto di un'altra origine non si integra mai: il piano lo rifiuta
 prima di riservarlo.
 
 `ResaRicalcolata` parte solo se il valore cambia. Con un'integrazione il valore
-può anche **salire** (10,8 → 12): Edizioni ne terrà conto nel passo 5.
+può anche **salire** (10,8 → 12): Edizioni allora rimette le bottiglie su
+ONLINE e pubblica `TiraturaAumentata`.
+
+### `TiraturaRidotta` e `TiraturaAumentata` v1 (edizioni.eventi)
+
+Chiave: l'id dell'edizione. Li pubblica Edizioni quando la tiratura cambia,
+nella stessa transazione dell'edizione. Quasi sempre nascono da una
+`ResaRicalcolata`, e allora entrano nello stesso commit della riga di
+`evento_elaborato`. Nascono anche dal ricalcolo manuale del distillatore
+(`POST /edizioni/{id}/ricalcolo`). Il payload è lo stesso, cambia il `tipo`:
+
+```json
+{
+  "eventId": "d4e5f6a7-1b2c-4d3e-8f9a-0b1c2d3e4f5a",
+  "tipo": "TiraturaRidotta",
+  "versione": 1,
+  "occorsoIl": "2026-08-06T08:30:02Z",
+  "payload": {
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "tiraturaPrima": 600,
+    "tiratura": 540,
+    "quote": { "SOCI": 300, "BAR": 150, "ONLINE": 90 },
+    "kgDisponibili": 10.800,
+    "causa": "consegna ridotta: 10,8 su 12 kg",
+    "resaRicalcolataId": "8c1f4e2a-0d3b-4a5c-9e7f-1a2b3c4d5e6f"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `tiraturaPrima`, `tiratura` | le bottiglie prima e dopo |
+| `quote` | le quote **nuove** per canale. Si scende togliendo da ONLINE, poi da BAR, mai da SOCI e mai sotto le prenotate. Si risale con le bottiglie in più tutte su ONLINE, mai oltre 600 |
+| `kgDisponibili` | i kg su cui è calcolata la tiratura nuova |
+| `causa` | in italiano: il `motivo` della `ResaRicalcolata`, oppure `ricalcolo manuale del distillatore` |
+| `resaRicalcolataId` | l'`eventId` della `ResaRicalcolata` che l'ha causato; `null` per un ricalcolo manuale |
+
+Con il lotto integrato da Marco la resa torna a 12 kg: `TiraturaAumentata` con
+`tiraturaPrima` 540, `tiratura` 600 e ONLINE di nuovo a 150. Con 15 kg la
+tiratura resta 600: è il tetto di ogni edizione.
+
+`TiraturaRidotta` lo leggerà Notifiche (storia di Giulia), per avvisare chi ha
+prenotato.
+
+### `RicalcoloRifiutato` v1 (edizioni.eventi)
+
+Chiave: l'id dell'edizione. Lo pubblica Edizioni quando una `ResaRicalcolata`
+non si può applicare. L'edizione resta com'era, e il rifiuto non si perde:
+parte come evento, con l'`eventId` della resa, e il messaggio di Produzione
+risulta elaborato (non va nel dead letter).
+
+```json
+{
+  "eventId": "0f9e8d7c-6b5a-4c3d-9e2f-1a0b9c8d7e6f",
+  "tipo": "RicalcoloRifiutato",
+  "versione": 1,
+  "occorsoIl": "2026-08-06T08:30:02Z",
+  "payload": {
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "motivo": "QUOTE_NON_RIDUCIBILI",
+    "spiegazione": "Con 10.8 kg di lavanda la tiratura scenderebbe da 600 a 540 bottiglie: ne vanno tolte 60, ma ONLINE e BAR ne hanno solo 50 non prenotate (ONLINE 100 prenotate su 150, BAR 150 su 150): nessuna quota può scendere sotto le bottiglie già prenotate. L'edizione non è stata modificata.",
+    "tiratura": 600,
+    "tiraturaRichiesta": 540,
+    "kgDisponibili": 12.000,
+    "kgRichiesti": 10.800,
+    "quote": {
+      "SOCI":   { "bottiglie": 300, "prenotate": 0 },
+      "BAR":    { "bottiglie": 150, "prenotate": 150 },
+      "ONLINE": { "bottiglie": 150, "prenotate": 100 }
+    },
+    "causa": "consegna ridotta: 10,8 su 12 kg",
+    "resaRicalcolataId": "8c1f4e2a-0d3b-4a5c-9e7f-1a2b3c4d5e6f"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `motivo` | `QUOTE_NON_RIDUCIBILI`: bisognerebbe togliere da SOCI o scendere sotto le prenotate. `BOTANICA_INSUFFICIENTE`: con quei kg non si riempie nemmeno una bottiglia (es. 0 kg utilizzabili) |
+| `spiegazione` | in italiano, la stessa del 409 del ricalcolo manuale |
+| `tiratura`, `kgDisponibili` | quelli dell'edizione, rimasti com'erano |
+| `tiraturaRichiesta`, `kgRichiesti` | quelli della resa rifiutata (0 bottiglie per `BOTANICA_INSUFFICIENTE`) |
+| `quote` | le quote attuali con le prenotate: il perché del rifiuto |
+| `causa`, `resaRicalcolataId` | come in `TiraturaRidotta`: la resa rifiutata |
+
+Il ricalcolo manuale rifiutato è un 409 per Marco, non un `RicalcoloRifiutato`.
+Oggi l'evento non lo legge nessuno, e l'edizione resta indietro finché una
+resa nuova non si può applicare. Lo leggerà Notifiche, per avvisare il
+distillatore.
 
 ### `ConsegnaRegistrata` v1 (magazzino.eventi)
 
@@ -270,8 +364,9 @@ Il publisher gira ogni secondo e manda gli eventi uno alla volta, aspettando la
 conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
 gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
 volta**: i consumer devono scartare gli `eventId` già visti. L'outbox ce
-l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`) e
-Produzione (`ResaRicalcolata`).
+l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`,
+`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`) e Produzione
+(`ResaRicalcolata`).
 
 ## Consumer: idempotenza, retry e dead letter
 
@@ -301,8 +396,9 @@ della stessa edizione non crea un altro piano (UNIQUE su `edizione_id`).
 | `topic`, `partizione`, `posizione` | da dove è arrivato (posizione = offset) |
 | `elaborato_il` | quando |
 
-Gli eventi di tipo sconosciuto si ignorano e non si scrivono nella tabella (su
-`edizioni.eventi` arriveranno anche `TiraturaRidotta` e `RicalcoloRifiutato`).
+Gli eventi di tipo sconosciuto si ignorano e non si scrivono nella tabella: su
+`edizioni.eventi` ci sono anche `TiraturaRidotta`, `TiraturaAumentata` e
+`RicalcoloRifiutato`, che a Produzione non servono.
 
 **Retry con backoff.** Un errore che può passare (il piano non c'è ancora
 perché `EdizioneCreata` arriva dopo la consegna: i due topic non hanno un
@@ -326,6 +422,29 @@ Poi l'offset avanza e i messaggi dopo ripartono: un messaggio sbagliato non
 blocca la partizione. Nel log un WARN per ogni tentativo e un ERROR quando
 il messaggio va nel dead letter.
 
+### Il consumer di Edizioni
+
+Edizioni legge `produzione.eventi` nel consumer group `edizioni`, con 3
+consumer, uno per partizione. Le stesse regole di Produzione, nelle stesse
+classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
+
+- **idempotenza:** `ResaRicalcolata` si applica nella transazione che scrive
+  la riga di outbox e quella di `evento_elaborato`. Lo stesso `eventId`
+  rimandato si scarta. Serve davvero: la resa di Elena (10,8 kg) rimandata
+  dopo quella dell'integrazione (12 kg) riporterebbe l'edizione a 540. In
+  `evento_elaborato` di Edizioni c'è anche l'`esito`: `RIDOTTA`,
+  `AUMENTATA`, `INVARIATA` o `RIFIUTATO`;
+- **retry:** 1, 2, 4, 8 secondi (`edizioni.consumer.*`), per esempio con il
+  database occupato o con un ricalcolo manuale sulla stessa edizione nello
+  stesso istante (`@Version`);
+- **dead letter** `edizioni.dlt`, nella stessa partizione, con gli stessi
+  header. Ci va subito un messaggio illeggibile (`EventoNonValido`, anche per
+  kg negativi o con più di 3 decimali) o una resa per un'edizione che non
+  esiste (`EdizioneNonTrovata`). Una resa arriva sempre dopo la sua edizione,
+  quindi riprovare non serve;
+- **un ricalcolo rifiutato non è un errore:** il messaggio è elaborato, l'offset
+  avanza e parte `RicalcoloRifiutato`, con un WARN nel log.
+
 Limite noto: `evento_elaborato` cresce con gli eventi. Kafka tiene i messaggi
 7 giorni, quindi le righe più vecchie si potrebbero cancellare dopo quel
 tempo (non lo fa ancora nessun job).
@@ -345,6 +464,15 @@ chi legge cosa) e il dead letter topic con gli header:
 ```powershell
 docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
+```
+
+Lo stesso per Edizioni: il gruppo `edizioni` su `produzione.eventi`, i suoi
+eventi su `edizioni.eventi` e il suo dead letter topic:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.eventi --from-beginning --formatter-property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Su Kubernetes gli stessi comandi, con `kubectl exec -it -n ginvault kafka-0 --`

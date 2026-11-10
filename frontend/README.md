@@ -42,7 +42,7 @@ Prerequisiti:
 
 - Node 20.19+ o 22.12+;
 - il cluster avviato come in [`k8s/README.md`](../k8s/README.md), con le
-  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2` e `ginvault/edizioni:0.4`.
+  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2` e `ginvault/edizioni:0.5`.
 
 1. **Terminale 1: il gateway del cluster su `localhost:8080`.** Lascialo aperto.
 
@@ -225,7 +225,8 @@ i dati sono finti, in un modulo a parte, già nella forma delle risposte vere.
   `datiFinti` con le chiamate `api('GET', …)` in quel file e si cancella `src/mock/`:
   pagine e tipi restano uguali.
 - **Avvisi.** Oggi arrivano con `area()`. Poi li manderà il servizio Notifiche
-  (NestJS), via WebSocket, quando Edizioni pubblicherà `TiraturaRidotta`: la forma di
+  (NestJS), via WebSocket, leggendo `TiraturaRidotta` che Edizioni pubblica già su
+  `edizioni.eventi`: la forma di
   `Notifica` (evento, titolo, testo, edizione) è già quella. Nella pagina dell'edizione
   l'avviso si ricava dai dati: tiratura sotto quella annunciata e prenotazione confermata.
 - **Movimento.** Le quote partono da quelle annunciate e calano quando arrivano sullo

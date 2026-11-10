@@ -31,9 +31,12 @@ spring:
       # invece che con una query per edizione (il problema "N+1").
       hibernate.default_batch_fetch_size: 50
 
-  # Kafka: per ora solo per PUBBLICARE (EdizioneCreata su edizioni.eventi),
-  # dalla tabella outbox come in Magazzino: se Kafka è giù l'edizione si crea
-  # lo stesso e l'evento aspetta nella tabella (PubblicatoreOutbox).
+  # Kafka:
+  #  - PUBBLICARE: EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
+  #    RicalcoloRifiutato su edizioni.eventi, dalla tabella outbox come in
+  #    Magazzino: se Kafka è giù l'evento aspetta nella tabella (PubblicatoreOutbox);
+  #  - LEGGERE: ResaRicalcolata da produzione.eventi (ConsumerEventi), con
+  #    consumer idempotente, retry e dead letter edizioni.dlt come in Produzione.
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     producer:
@@ -52,6 +55,29 @@ spring:
         # Dopo un riavvio di kafka-0 (IP nuovo) non aspettare 30 s sul vecchio indirizzo
         socket.connection.setup.timeout.ms: 1000
         socket.connection.setup.timeout.max.ms: 5000
+    consumer:
+      client-id: edizioni
+      # Il consumer group: le partizioni di produzione.eventi si dividono tra le
+      # repliche di edizioni, e Kafka ricorda per il gruppo fin dove si è letto
+      group-id: edizioni
+      # Alla prima partenza (nessun offset salvato per il gruppo) si legge dal
+      # primo messaggio: nessuna resa pubblicata prima di Edizioni va persa
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # L'offset lo salva Spring, solo DOPO che il messaggio è stato elaborato
+      # (e il database ha fatto commit)
+      enable-auto-commit: false
+      properties:
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+    listener:
+      # Offset salvato dopo ogni messaggio elaborato: dopo una caduta al più uno
+      # si rielabora, e lo scarta evento_elaborato
+      ack-mode: record
+      # 3 consumer, uno per partizione: i tentativi su una partizione non
+      # fermano le altre due
+      concurrency: 3
 
   security:
     oauth2:
@@ -92,6 +118,12 @@ ricette:
   timeout: 2s
 
 edizioni:
+  consumer:
+    # Messaggio non elaborato (es. database occupato): nuovi tentativi dopo 1,
+    # 2, 4 e 8 secondi, poi il messaggio va in edizioni.dlt (ConfigurazioneKafka)
+    tentativi: 4
+    attesa-iniziale: 1s
+    attesa-massima: 8s
   outbox:
     # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
     intervallo-ms: 1000

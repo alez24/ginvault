@@ -103,6 +103,22 @@ class LottoDiBotanicaTest {
         assertThat(lotto.riserve()).isEmpty();
     }
 
+    @Test
+    void annullareLaRiservaLiberaIKgEUnaSecondaVoltaNonCambiaNiente() {
+        // Scaduto nel frattempo: annullare si può lo stesso
+        LottoDiBotanica lotto = lotto(EsitoQualita.CONFORME, LocalDate.of(2026, 8, 31));
+        lotto.riserva(PIANO, new BigDecimal("1.2"), OGGI, MARCO, ADESSO);
+
+        assertThat(lotto.annullaRiserva(PIANO)).hasValueSatisfying(
+                annullata -> assertThat(annullata.kg()).isEqualByComparingTo("1.2"));
+        assertThat(lotto.kgDisponibili()).isEqualByComparingTo("2");
+        assertThat(lotto.riserve()).isEmpty();
+
+        assertThat(lotto.annullaRiserva(PIANO)).isEmpty();
+        assertThat(lotto.kgDisponibili()).isEqualByComparingTo("2");
+        assertRifiuto(() -> lotto.annullaRiserva(null), Motivo.DATI_NON_VALIDI, "piano");
+    }
+
     private static LottoDiBotanica lotto(EsitoQualita esito, LocalDate scadenza) {
         return LottoDiBotanica.senzaOrdine(UUID.randomUUID(), "lavanda", "Campi GinVault (Saluzzo, 400 m)",
                 new BigDecimal("2"), scadenza, esito, UUID.randomUUID(), LocalDate.of(2026, 7, 15), ADESSO);

@@ -18,7 +18,8 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
  *
  * I ruoli per metodo sono l'equivalente dei @PreAuthorize dei controller:
  *  - Disponibilita: chi guarda i lotti (Marco, Elena, admin);
- *  - RiservaLotto:  solo chi decide il piano di produzione (Marco, admin).
+ *  - RiservaLotto e AnnullaRiserva: solo chi decide il piano di produzione
+ *    (Marco, admin).
  */
 @Configuration
 public class ConfigurazioneGrpc {
@@ -34,6 +35,8 @@ public class ConfigurazioneGrpc {
                 GiacenzeGrpc.getDisponibilitaMethod().getFullMethodName(),
                 Set.of("ROLE_DISTILLATORE", "ROLE_RESP_ACQUISTI", "ROLE_ADMIN"),
                 GiacenzeGrpc.getRiservaLottoMethod().getFullMethodName(),
+                Set.of("ROLE_DISTILLATORE", "ROLE_ADMIN"),
+                GiacenzeGrpc.getAnnullaRiservaMethod().getFullMethodName(),
                 Set.of("ROLE_DISTILLATORE", "ROLE_ADMIN")));
     }
 

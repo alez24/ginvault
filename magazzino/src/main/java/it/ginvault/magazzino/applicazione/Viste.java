@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import it.ginvault.magazzino.dominio.Consegna;
@@ -12,6 +13,7 @@ import it.ginvault.magazzino.dominio.EsitoRiserva;
 import it.ginvault.magazzino.dominio.Fornitore;
 import it.ginvault.magazzino.dominio.LottoDiBotanica;
 import it.ginvault.magazzino.dominio.OrdineDiAcquisto;
+import it.ginvault.magazzino.dominio.RiservaDiLotto;
 import it.ginvault.magazzino.dominio.StatoOrdine;
 import it.ginvault.magazzino.dominio.VoceStorico;
 
@@ -101,6 +103,21 @@ public final class Viste {
         static RiservaVista di(LottoDiBotanica lotto, UUID pianoId, EsitoRiserva esito) {
             return new RiservaVista(lotto.id(), pianoId, lotto.botanica(), lotto.origine(), esito.kgRiservati(),
                     esito.kgDisponibili(), esito.giaRiservato());
+        }
+    }
+
+    /**
+     * Il risultato di Giacenze.AnnullaRiserva.
+     *
+     * @param kgLiberati     i kg tornati liberi (0 se non c'era nessuna riserva)
+     * @param nessunaRiserva true: il piano non aveva riserve su questo lotto
+     */
+    public record AnnullamentoVista(UUID lottoId, UUID pianoId, BigDecimal kgLiberati, BigDecimal kgDisponibili,
+                                    boolean nessunaRiserva) {
+
+        static AnnullamentoVista di(LottoDiBotanica lotto, UUID pianoId, Optional<RiservaDiLotto> annullata) {
+            BigDecimal liberati = annullata.map(RiservaDiLotto::kg).orElse(BigDecimal.ZERO.setScale(3));
+            return new AnnullamentoVista(lotto.id(), pianoId, liberati, lotto.kgDisponibili(), annullata.isEmpty());
         }
     }
 

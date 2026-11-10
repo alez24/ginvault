@@ -34,10 +34,27 @@ public interface Giacenze {
     Riserva riservaLotto(UUID lottoId, UUID pianoId, BigDecimal kg);
 
     /**
+     * Annulla la riserva del piano sul lotto: la compensazione quando il piano
+     * non si salva dopo una riserva. Idempotente: senza riserva non è un errore.
+     *
+     * @throws RiservaNonRiuscita      il lotto non esiste, o una modifica concorrente (si può ripetere)
+     * @throws MagazzinoNonDisponibile il magazzino non risponde entro la deadline o non è raggiungibile
+     * @throws ErroreMagazzino         il magazzino ha risposto con un errore inatteso
+     */
+    Annullamento annullaRiserva(UUID lottoId, UUID pianoId);
+
+    /**
      * @param kgDisponibili i kg del lotto rimasti liberi dopo la riserva
      * @param giaRiservato  true: la riserva c'era già (richiesta ripetuta)
      */
     record Riserva(UUID lottoId, UUID pianoId, String origine, BigDecimal kgRiservati, BigDecimal kgDisponibili,
                    boolean giaRiservato) {
+    }
+
+    /**
+     * @param kgLiberati     i kg tornati liberi in magazzino (0 se non c'era la riserva)
+     * @param nessunaRiserva true: il piano non aveva riserve su quel lotto
+     */
+    record Annullamento(BigDecimal kgLiberati, boolean nessunaRiserva) {
     }
 }
