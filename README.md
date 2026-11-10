@@ -279,7 +279,12 @@ tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sem
 ```
 
 - **Creazione:** una quota per canale (SOCI, BAR, ONLINE), e la somma delle
-  quote deve essere uguale alla tiratura, altrimenti 422.
+  quote deve essere uguale alla tiratura, altrimenti 422. Serve anche
+  l'**origine** della botanica di stagione (`origineBotanica`, es. "Alta Val
+  Varaita (Alpi Cozie)"): l'edizione resta fedele a quella, e Produzione non
+  conta i lotti di un'altra origine. L'edizione creata pubblica
+  `EdizioneCreata` su `edizioni.eventi`, con la stessa transactional outbox
+  di Magazzino (vedi sotto).
 - **Ricalcolo:** `POST /edizioni/{id}/ricalcolo` (solo DISTILLATORE) con
   `{"botanicaDisponibileKg": 10.8}`. Se la tiratura scende:
   - si toglie prima da ONLINE, poi da BAR, **mai da SOCI**;
@@ -304,8 +309,8 @@ nuova, quote nuove):
   che per ora lo scrive solo nel log, dentro il processo.
 
 Con la storia di Elena passerà su **Kafka** verso **Notifiche**, che avviserà
-chi aveva prenotato. Per non perdere eventi se Kafka è giù, si potrà usare una
-*transactional outbox* (Magazzino la usa già, vedi sotto).
+chi aveva prenotato, passando dalla *transactional outbox* che Edizioni usa
+già per `EdizioneCreata`.
 
 ## Magazzino: approvvigionamento e transactional outbox
 
@@ -357,7 +362,7 @@ Per questo:
    riprova, finché Kafka torna. La richiesta HTTP di Elena non aspetta mai Kafka;
 4. garanzia **almeno una volta**: se la conferma si perde, lo stesso evento
    (stesso `eventId`) può partire due volte. Il consumer di Produzione scarta
-   gli `eventId` già elaborati (passo 3).
+   gli `eventId` già elaborati (vedi sotto).
 
 Un blocco *advisory* di PostgreSQL (`pg_try_advisory_xact_lock`) fa lavorare
 un solo publisher alla volta anche con più repliche di magazzino.
@@ -385,18 +390,72 @@ await api('GET', `/api/magazzino/fornitori/${fornitore}`);
 await api('GET', '/api/magazzino/lotti?botanica=lavanda');
 ```
 
+Con un `edizioneId` inventato, come qui, Produzione non trova il piano: dopo i
+tentativi la consegna finisce in `produzione.dlt` (vedi
+[Produzione](#produzione-piani-consumer-idempotenti-e-dead-letter)). Con
+l'id di un'edizione vera il piano scende a 10,8 kg.
+
 Per vedere l'outbox al lavoro: `docker compose stop kafka`, registra un'altra
 consegna (risponde 201 lo stesso), guarda la riga in attesa con `tentativi`
 che sale, poi `docker compose start kafka`: dopo qualche secondo la riga ha
 `pubblicato_il` e il messaggio è nel topic. Su Kubernetes la stessa prova è in
 [k8s/README.md](k8s/README.md#transactional-outbox-con-kafka-spento).
 
+## Produzione: piani, consumer idempotenti e dead letter
+
+Produzione non ha moduli da compilare: i suoi **piani di produzione** nascono
+e cambiano con gli eventi. Dal gateway: `/api/produzione/...`.
+
+```
+edizioni.eventi   EdizioneCreata      ──▶ nuovo piano: 12 kg di lavanda, Alta Val Varaita, 20 g, 600 bottiglie
+magazzino.eventi  ConsegnaRegistrata  ──▶ piano a 10,8 kg (540 bottiglie)
+                                      ──▶ produzione.eventi  ResaRicalcolata (kgDisponibili 10,8)
+```
+
+| Endpoint | Ruolo | Cosa fa |
+|---|---|---|
+| `GET /piani`, `GET /piani?edizione={id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i piani, dal più recente (o quello di un'edizione) |
+| `GET /piani/{id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | un piano: kg previsti e disponibili, `bottiglieProducibili`, le consegne con i kg utilizzabili e il motivo |
+
+Regole del piano (aggregato `PianoDiProduzione`):
+- conta solo la **botanica di stagione** dell'edizione: le altre consegne si ignorano;
+- i kg di una consegna sono **utilizzabili** solo se il lotto è CONFORME e ha
+  l'**origine richiesta** dall'edizione; altrimenti zero;
+- `disponibili = min(previsti, max(0, previsti − Σ ordinati con l'origine richiesta) + Σ utilizzabili)`.
+  Produzione vede un ordine solo quando arriva la consegna: gli ordini ancora
+  aperti sono nei kg previsti non coperti. Esempi:
+  - la consegna di Elena dà `0 + 10,8 = 10,8`;
+  - due ordini da 6 kg, uno consegnato: `6 + 6 = 12`;
+  - 2 kg dai campi (altra origine) non tolgono niente;
+  - un riordino dall'Alta Val Varaita riporta a 12;
+- ogni ordine conta una volta; `ResaRicalcolata` parte solo se il valore cambia.
+
+I consumer (dettagli in [docs/eventi.md](docs/eventi.md#consumer-idempotenza-retry-e-dead-letter)):
+- **idempotenti**: in una transazione sola si controlla la tabella
+  `evento_elaborato`, si applica l'evento, si scrive l'outbox e l'`eventId`.
+  Lo stesso evento rimandato si scarta;
+- **retry con backoff**: 1, 2, 4, 8 secondi. Serve per esempio se la
+  consegna arriva prima dell'edizione (i due topic non hanno un ordine tra loro);
+- **dead letter topic** `produzione.dlt`: ci va il messaggio dopo i tentativi,
+  o subito se riprovare non serve (JSON illeggibile, versione non supportata).
+  Gli header dicono da dove veniva e perché è stato scartato;
+- due listener, uno per topic, 3 consumer ciascuno: i tentativi su
+  `magazzino.eventi` non fermano la lettura di `edizioni.eventi`.
+
+```bash
+# Piani e consegne applicate
+docker compose exec produzione-db psql -U produzione -d produzione -c "select edizione_id, botanica, kg_previsti, kg_disponibili from piano_di_produzione"
+docker compose exec produzione-db psql -U produzione -d produzione -c "select ordine_id, kg_ordinati, kg_arrivati, kg_utilizzabili, motivo from piano_consegna"
+# Gli eventi già elaborati (la difesa contro i doppioni)
+docker compose exec produzione-db psql -U produzione -d produzione -c "select event_id, tipo, topic, partizione, posizione, elaborato_il from evento_elaborato order by elaborato_il"
+```
+
 ## Test
 
 Ogni servizio Spring ha test di sicurezza (401/403/200, token scaduto, firma
 falsa, issuer sbagliato). Il gateway ha test sul flusso BFF: JWT inoltrato,
 header falsi rimossi, pagina di login, JWKS, ruoli.
-Ricette, Edizioni e Magazzino hanno anche:
+Ricette, Edizioni, Magazzino e Produzione hanno anche:
 - test di dominio;
 - test web (`@WebMvcTest`);
 - test di integrazione con un PostgreSQL vero, avviato da
@@ -413,6 +472,20 @@ JSON e partizione. Poi prova l'outbox:
 - quando Kafka riprende, l'evento parte da solo;
 - se la riga di outbox non si può scrivere (un trigger di prova la rifiuta),
   non si salva nemmeno la consegna.
+
+Anche Edizioni ha Kafka nei test: `EdizioneCreata` arriva su `edizioni.eventi`
+dall'outbox. Produzione fa la parte di Edizioni e Magazzino scrivendo sui loro
+topic, e verifica:
+- la catena: `EdizioneCreata` → piano da 12 kg; `ConsegnaRegistrata` da 10,8 →
+  piano a 10,8 e `ResaRicalcolata` su `produzione.eventi`;
+- **idempotenza**: lo stesso messaggio rimandato, e un messaggio con lo stesso
+  `eventId` ma un altro ordine, non cambiano niente. Il test aspetta che il
+  consumer group abbia superato il loro offset, poi controlla il piano;
+- **retry**: una consegna arrivata prima della sua edizione passa al nuovo tentativo;
+- **dead letter**: un messaggio non JSON e uno in versione 2 ci vanno subito,
+  e la consegna buona dopo di loro passa; una consegna per un'edizione che non
+  esiste ci va dopo i tentativi, nella stessa partizione, con gli header
+  `kafka_dlt-*`.
 
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
@@ -462,6 +535,11 @@ docker compose logs kafka-topic
 
 # I messaggi di un topic, con chiave e partizione (Ctrl+C per uscire)
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic magazzino.eventi --from-beginning --formatter-property print.key=true --formatter-property print.partition=true
+
+# Il consumer group di Produzione: chi legge quale partizione, offset e lag
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
+# Il dead letter topic, con gli header che dicono perché (Ctrl+C per uscire)
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Topic, chiavi e formato JSON degli eventi sono in [`docs/eventi.md`](docs/eventi.md).
@@ -509,9 +587,10 @@ avviato in IntelliJ.
   `VerificaJwtService`, e da controllare l'header `Origin`.
 - **Aumento di tiratura tutto su ONLINE:** scelta provvisoria, da discutere (vedi
   [Edizione: tiratura, quote e ricalcolo](#edizione-tiratura-quote-e-ricalcolo)).
-- **Outbox di magazzino:**
-  - le righe pubblicate restano nella tabella. Andranno cancellate dopo
-    qualche giorno, con un job periodico;
+- **Outbox (magazzino, edizioni, produzione) ed eventi elaborati:**
+  - le righe pubblicate restano nella tabella `outbox`, e quelle di
+    `evento_elaborato` in Produzione. Andranno cancellate dopo qualche giorno
+    (Kafka tiene i messaggi 7), con un job periodico;
   - un evento che non può partire mai (per esempio un topic che non esiste)
     blocca quelli dopo di lui, per non cambiarne l'ordine. Si vede da
     `tentativi` e `ultimo_errore` nella tabella `outbox`.

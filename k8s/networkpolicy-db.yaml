@@ -93,3 +93,27 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: produzione-db-solo-da-produzione
+  labels:
+    app.kubernetes.io/name: produzione-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: produzione-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: produzione
+      ports:
+        - protocol: TCP
+          port: 5432

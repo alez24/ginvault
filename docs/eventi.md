@@ -32,6 +32,7 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 | `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `RicalcoloRifiutato` | `produzione`; più avanti `notifiche` |
 | `magazzino.eventi` | Magazzino | nome della botanica (`lavanda`) | `ConsegnaRegistrata` | `produzione` |
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
+| `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
   possiede è l'unico che ci scrive. I nomi usano il punto e mai il trattino
@@ -48,7 +49,9 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
   per partizione: è il "consumer scalato" del piano.
 - I messaggi restano nel topic **7 giorni** (default di Kafka). La fonte di
   verità è il database di ogni servizio, non Kafka.
-- I topic delle lettere scartate (dead letter) arrivano con i consumer, al passo 3.
+- `produzione.dlt` è il **dead letter topic** di Produzione: un topic solo per
+  tutti i messaggi scartati dai suoi consumer, qualunque sia il topic
+  d'origine (lo dicono gli header). Vedi [Consumer](#consumer-idempotenza-retry-e-dead-letter).
 
 ## Formato dei messaggi
 
@@ -100,6 +103,93 @@ qui c'è cosa deve dire.
 
 La catena: `ConsegnaRegistrata` → Produzione → `ResaRicalcolata` → Edizioni →
 `TiraturaRidotta`, senza nessuna azione manuale dopo la registrazione della consegna.
+
+### `EdizioneCreata` v1 (edizioni.eventi)
+
+Chiave: l'id dell'edizione. Lo pubblica Edizioni quando Marco crea un'edizione,
+nella stessa transazione dell'edizione. Produzione ne fa un piano di produzione.
+
+```json
+{
+  "eventId": "3a7d0c52-8f1e-4b6a-9c2d-5e8f0a1b3c4d",
+  "tipo": "EdizioneCreata",
+  "versione": 1,
+  "occorsoIl": "2026-06-15T09:00:00Z",
+  "payload": {
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "formulazione": { "id": "c0000000-0000-4000-8000-000000000001", "versione": 2 },
+    "botanicaDiStagione": "lavanda",
+    "grammiPerBottiglia": 20.00,
+    "origineBotanica": "Alta Val Varaita (Alpi Cozie)",
+    "kgPrevisti": 12.000,
+    "tiratura": 600,
+    "quote": { "SOCI": 300, "BAR": 150, "ONLINE": 150 }
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `formulazione` | la ricetta (id e versione in Ricette) da cui nasce l'edizione |
+| `botanicaDiStagione` | minuscola, come in Ricette (`lavanda`) |
+| `grammiPerBottiglia` | la dose della botanica di stagione |
+| `origineBotanica` | da dove deve venire la botanica: un lotto di un'altra origine non conta per l'edizione |
+| `kgPrevisti` | i kg con cui è stata calcolata la tiratura |
+| `tiratura`, `quote` | le bottiglie e la loro divisione per canale (Notifiche le userà per gli annunci) |
+
+### `ResaRicalcolata` v1 (produzione.eventi)
+
+Chiave: l'id dell'edizione. Lo pubblica Produzione quando una consegna cambia
+i kg di botanica di stagione su cui il piano può contare. Edizioni lo
+userà per ricalcolare la tiratura (passo 5): 10,8 kg a 20 g = 540 bottiglie.
+
+```json
+{
+  "eventId": "8c1f4e2a-0d3b-4a5c-9e7f-1a2b3c4d5e6f",
+  "tipo": "ResaRicalcolata",
+  "versione": 1,
+  "occorsoIl": "2026-08-06T08:30:01Z",
+  "payload": {
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "pianoId": "90000000-0000-4000-8000-000000000001",
+    "botanica": "lavanda",
+    "kgPrevisti": 12.000,
+    "kgDisponibiliPrima": 12.000,
+    "kgDisponibili": 10.800,
+    "ordineId": "0b6e1f9a-2c4d-4e8f-9a1b-3c5d7e9f1a2b",
+    "motivo": "consegna ridotta: 10,8 su 12 kg"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `kgDisponibili` | i kg su cui contare adesso: è il dato che serve a Edizioni |
+| `kgDisponibiliPrima`, `kgPrevisti` | per i log e per chi legge il topic: da quanto si scende, rispetto a cosa era previsto |
+| `ordineId` | la consegna che ha cambiato la resa |
+| `motivo` | in italiano: `consegna ridotta: 10,8 su 12 kg`, `origine diversa (...)`, `lotto non conforme ...` |
+
+Come Produzione calcola i kg disponibili, consegna dopo consegna:
+
+    disponibili = min(previsti, max(0, previsti − Σ kg ordinati con l'origine richiesta) + Σ kg utilizzabili)
+
+I kg utilizzabili di una consegna sono quelli arrivati, ma solo se il lotto è
+`CONFORME` e ha l'origine richiesta dall'edizione (si confrontano le parole,
+senza badare a maiuscole e spazi); altrimenti zero. Una consegna di un'altra
+botanica si ignora.
+
+Produzione vede un ordine solo quando arriva la sua `ConsegnaRegistrata`. Gli
+ordini ancora aperti stanno nei kg previsti non coperti, cioè si aspettano
+ancora. Un ordine di un'altra origine non copre i kg previsti, quindi non entra
+in Σ ordinati.
+
+| Caso | Conto | Disponibili |
+|---|---|---|
+| La consegna di Elena: 10,8 su 12 kg | `max(0, 12 − 12) + 10,8` | 10,8 |
+| Due ordini da 6 kg, uno consegnato completo | `max(0, 12 − 6) + 6` | 12 |
+| 2 kg dai campi (altra origine) prima dell'ordine da 12 | `max(0, 12 − 0) + 0` | 12 |
+
+`ResaRicalcolata` parte solo se il valore cambia.
 
 ### `ConsegnaRegistrata` v1 (magazzino.eventi)
 
@@ -165,8 +255,66 @@ Un publisher la svuota verso Kafka. Così:
 Il publisher gira ogni secondo e manda gli eventi uno alla volta, aspettando la
 conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
 gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
-volta**: i consumer devono scartare gli `eventId` già visti. Ce l'ha Magazzino
-dal passo 2; Edizioni la avrà dal passo 3, per `EdizioneCreata`.
+volta**: i consumer devono scartare gli `eventId` già visti. L'outbox ce
+l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`) e
+Produzione (`ResaRicalcolata`).
+
+## Consumer: idempotenza, retry e dead letter
+
+Produzione legge `edizioni.eventi` e `magazzino.eventi` nel consumer group
+`produzione`, con due listener separati (uno per topic) e 3 consumer ciascuno,
+uno per partizione.
+
+**Idempotenza.** Ogni messaggio si elabora in **una transazione** del database:
+
+1. legge la busta; se è illeggibile → dead letter;
+2. se l'`eventId` è nella tabella `evento_elaborato` → già elaborato, si scarta;
+3. applica l'evento (crea il piano, o ricalcola la resa e scrive la riga di
+   outbox di `ResaRicalcolata`);
+4. scrive l'`eventId` in `evento_elaborato` (chiave primaria).
+
+Tutto nello stesso commit: se c'è la riga in `evento_elaborato`, c'è anche
+l'effetto. L'offset si salva **dopo** il commit (`enable-auto-commit: false`,
+`ack-mode: record`): se Produzione cade nel mezzo, Kafka ripropone il
+messaggio e il passo 2 lo scarta. Seconda difesa, nel dominio: una consegna
+dello stesso `ordineId` conta una volta sola; una seconda `EdizioneCreata`
+della stessa edizione non crea un altro piano (UNIQUE su `edizione_id`).
+
+| Colonna di `evento_elaborato` | Significato |
+|---|---|
+| `event_id` | l'`eventId` della busta (chiave primaria) |
+| `tipo` | `EdizioneCreata` o `ConsegnaRegistrata` |
+| `topic`, `partizione`, `posizione` | da dove è arrivato (posizione = offset) |
+| `elaborato_il` | quando |
+
+Gli eventi di tipo sconosciuto si ignorano e non si scrivono nella tabella (su
+`edizioni.eventi` arriveranno anche `TiraturaRidotta` e `RicalcoloRifiutato`).
+
+**Retry con backoff.** Un errore che può passare (il piano non c'è ancora
+perché `EdizioneCreata` arriva dopo la consegna: i due topic non hanno un
+ordine tra loro; il database occupato) si riprova dopo 1, 2, 4 e 8 secondi
+(`produzione.consumer.*` in `application.yml`). Mentre si riprova, gli altri
+messaggi della stessa partizione aspettano: l'ordine non cambia.
+
+**Dead letter.** Finiti i tentativi, o subito per gli errori che riprovare non
+risolve (JSON non valido, campo obbligatorio mancante, `versione` non
+supportata: `EventoNonValido`; dati fuori dalle regole del piano:
+`PianoNonValido`), il messaggio va in `produzione.dlt`, **nella stessa
+partizione**, con questi header:
+
+| Header | Contenuto |
+|---|---|
+| `kafka_dlt-original-topic`, `-partition`, `-offset` | dove stava il messaggio |
+| `kafka_dlt-exception-fqcn`, `kafka_dlt-exception-cause-fqcn` | l'eccezione (es. `...PianoNonTrovato`) |
+| `kafka_dlt-exception-message` | il messaggio d'errore, in italiano |
+
+Poi l'offset avanza e i messaggi dopo ripartono: un messaggio sbagliato non
+blocca la partizione. Nel log un WARN per ogni tentativo e un ERROR quando
+il messaggio va nel dead letter.
+
+Limite noto: `evento_elaborato` cresce con gli eventi. Kafka tiene i messaggi
+7 giorni, quindi le righe più vecchie si potrebbero cancellare dopo quel
+tempo (non lo fa ancora nessun job).
 
 ## Vedere i messaggi
 
@@ -175,6 +323,14 @@ Con Docker Compose:
 ```powershell
 docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic magazzino.eventi --from-beginning --formatter-property print.key=true --formatter-property print.partition=true
+```
+
+Il consumer group di Produzione (a quale offset è arrivato, per partizione, e
+chi legge cosa) e il dead letter topic con gli header:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Su Kubernetes gli stessi comandi, con `kubectl exec -it -n ginvault kafka-0 --`

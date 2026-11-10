@@ -19,6 +19,8 @@ export interface Edizione {
   botanicaDiStagione: string;
   grammiPerBottiglia: number;
   botanicaDisponibileKg: number;
+  /** Da dove deve venire la botanica di stagione; null per le edizioni create prima del campo. */
+  origineBotanica: string | null;
   tiratura: number;
   quote: Record<Canale, number>;
   prenotate: Record<Canale, number>;
@@ -28,6 +30,7 @@ export interface Edizione {
 export interface NuovaEdizione {
   formulazione: { id: string; versione: number };
   botanicaDisponibileKg: number;
+  origineBotanica: string;
   quote: Record<Canale, number>;
 }
 

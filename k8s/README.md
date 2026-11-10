@@ -30,19 +30,22 @@ Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per 
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 
 Service kafka :9092 (headless) → pod kafka-0 (StatefulSet) → PVC dati-kafka-0 (1 GiB)
-   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi (Job kafka-topic)
-   └─ i servizi che pubblicano o consumano eventi (edizioni, magazzino; poi produzione)
+   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi, produzione.dlt (Job kafka-topic)
+   └─ i servizi che pubblicano o consumano eventi (edizioni, magazzino, produzione)
 
 NetworkPolicy: frontend accetta solo l'Ingress Controller; gateway l'Ingress
 Controller e i microservizi (JWKS); edizioni-db solo edizioni, ricette-db solo
-ricette, magazzino-db solo magazzino; kafka solo i pod con la label
-ginvault/usa-kafka.
+ricette, magazzino-db solo magazzino, produzione-db solo produzione; kafka
+solo i pod con la label ginvault/usa-kafka.
 ```
 
 Il gateway inoltra anche `/api/ricette/**` al Service `ricette` e
 `/api/magazzino/**` al Service `magazzino` (:8084). Magazzino ha il suo
 database, `magazzino-db`, e pubblica su `magazzino.eventi` dalla tabella outbox
 (vedi [Transactional outbox con Kafka spento](#transactional-outbox-con-kafka-spento)).
+Allo stesso modo `/api/produzione/**` va al Service `produzione` (:8083), con
+il database `produzione-db`: consuma `edizioni.eventi` e `magazzino.eventi` e
+pubblica su `produzione.eventi` (vedi [Consumer di produzione](#consumer-di-produzione)).
 
 Pagine e API hanno la stessa origine, `http://localhost`: i cookie del gateway
 valgono anche per le pagine e non serve CORS. Lo smistamento per path lo fa qui
@@ -60,7 +63,9 @@ proxy di Vite.
 | `ricette.yaml` | ConfigMap, Deployment, Service |
 | `magazzino-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `magazzino.yaml` | ConfigMap, Deployment, Service |
-| `networkpolicy-db.yaml` | Tre NetworkPolicy: ogni database accetta solo il suo servizio |
+| `produzione-db.yaml` | PersistentVolumeClaim, Deployment, Service |
+| `produzione.yaml` | ConfigMap, Deployment, Service |
+| `networkpolicy-db.yaml` | Quattro NetworkPolicy: ogni database accetta solo il suo servizio |
 | `networkpolicy-frontend-gateway.yaml` | Due NetworkPolicy: il front-end accetta solo l'Ingress Controller, il gateway l'Ingress Controller e i microservizi |
 | `networkpolicy-kafka.yaml` | NetworkPolicy: Kafka accetta solo i pod con la label `ginvault/usa-kafka: "true"` |
 | `kafka.yaml` | Service headless, StatefulSet (con il suo PVC), Job che crea i topic |
@@ -68,7 +73,7 @@ proxy di Vite.
 | `frontend.yaml` | Deployment (2 repliche), Service |
 | `ingress.yaml` | Ingress: `/api`, `/auth`, `/oauth2`, `/login`, `/logout` → gateway; tutto il resto → frontend |
 | `kustomization.yaml` | Elenco dei file: `kubectl apply -k k8s/` li applica tutti |
-| `crea-secret.ps1` | Secret `gateway-segreti` (dal `.env`), `edizioni-db`, `ricette-db` e `magazzino-db` (password casuali) |
+| `crea-secret.ps1` | Secret `gateway-segreti` (dal `.env`), `edizioni-db`, `ricette-db`, `magazzino-db` e `produzione-db` (password casuali) |
 
 I Secret non stanno in nessun file del repository: li crea lo script.
 
@@ -105,11 +110,12 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.3 .\edizioni
+minikube image build -t ginvault/edizioni:0.4 .\edizioni
 minikube image build -t ginvault/ricette:0.2  .\ricette
 minikube image build -t ginvault/magazzino:0.1 .\magazzino
+minikube image build -t ginvault/produzione:0.1 .\produzione
 minikube image build -t ginvault/gateway:0.3  .\gateway
-minikube image build -t ginvault/frontend:0.1 .\frontend   # npm ci, test e build di Vite dentro l'immagine
+minikube image build -t ginvault/frontend:0.2 .\frontend   # npm ci, test e build di Vite dentro l'immagine
 
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
@@ -249,7 +255,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 | | edizioni-db | edizioni | gateway | frontend |
 |---|---|---|---|---|
-| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.3` | `ginvault/gateway:0.3` | `ginvault/frontend:0.1` (nginx) |
+| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.4` | `ginvault/gateway:0.3` | `ginvault/frontend:0.2` (nginx) |
 | Repliche | 1 | 1 (scalabile: è stateless) | 1 (sessione e chiave in memoria) | 2 (solo file statici) |
 | Strategia | `Recreate` (mai due Postgres sullo stesso volume) | `RollingUpdate` | `RollingUpdate` | `RollingUpdate`, `maxSurge 1`, `maxUnavailable 0` |
 | startupProbe | `pg_isready`, fino a 60 s | `/health/liveness`, fino a 2 min | `/health/liveness`, fino a 2 min | nessuna: nginx parte in un attimo |
@@ -258,9 +264,11 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 | requests / limits memoria | 128 Mi / 512 Mi | 384 Mi / 768 Mi | 384 Mi / 768 Mi | 16 Mi / 64 Mi (ne usa ~3) |
 
 ricette e ricette-db sono come edizioni ed edizioni-db (`ginvault/ricette:0.2`),
-e così magazzino e magazzino-db (`ginvault/magazzino:0.1`). La readiness di
-magazzino include il database ma **non Kafka**: con Kafka giù magazzino lavora
-lo stesso, e gli eventi aspettano nella tabella outbox.
+e così magazzino e magazzino-db (`ginvault/magazzino:0.1`), produzione e
+produzione-db (`ginvault/produzione:0.1`). La readiness di edizioni, magazzino e
+produzione include il database ma **non Kafka**: con Kafka giù i servizi
+lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer di
+produzione si ricollegano da soli.
 
 - **startupProbe**: tempo concesso per partire; finché non passa, le altre non contano.
 - **readinessProbe**: se fallisce, il pod esce dal Service (niente traffico) ma
@@ -438,6 +446,33 @@ Verificato su Minikube con una riga di prova su un topic usa e getta:
 - evento pubblicato 13 s dopo che kafka-0 era tornato Ready;
 - una sola copia nel topic.
 
+### Consumer di produzione
+
+Produzione legge `edizioni.eventi` e `magazzino.eventi` nel consumer group
+`produzione`: due listener (uno per topic) con 3 consumer ciascuno, uno per
+partizione. I messaggi che non riesce a elaborare vanno in `produzione.dlt`
+([`docs/eventi.md`](../docs/eventi.md#consumer-idempotenza-retry-e-dead-letter)).
+
+```powershell
+# Chi legge cosa: 6 righe, una per partizione, con offset e lag
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
+# Il dead letter topic: 3 partizioni come gli altri
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic produzione.dlt
+# I messaggi scartati, con gli header kafka_dlt-* (Ctrl+C per uscire)
+kubectl exec -it -n ginvault kafka-0 -- /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
+# Piani ed eventi già elaborati
+kubectl exec -n ginvault deploy/produzione-db -- psql -U produzione -d produzione -c "select edizione_id, botanica, kg_previsti, kg_disponibili from piano_di_produzione"
+kubectl exec -n ginvault deploy/produzione-db -- psql -U produzione -d produzione -c "select event_id, tipo, topic, partizione, posizione from evento_elaborato"
+# Nel log: partizioni assegnate, eventi elaborati, tentativi (WARN) e dead letter (ERROR)
+kubectl logs -n ginvault deploy/produzione --tail=30
+```
+
+Come magazzino, la readiness di produzione non dipende da Kafka: con Kafka
+spento i piani si leggono lo stesso, e quando torna i consumer riprendono
+dall'ultimo offset salvato.
+
+Dashboard: **Workloads → Deployments → produzione** (i log con le partizioni
+assegnate) e **Config and Storage → Config Maps → produzione-config**.
 ### Ingress, IngressClass, Ingress Controller
 
 L'**Ingress** `ginvault` è solo un insieme di *regole* per l'host `localhost`.
@@ -481,16 +516,17 @@ Pods** per il controller e i suoi log.
 
 Di default ogni pod del cluster può collegarsi a qualsiasi altro. In Compose
 l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
-`magazzino-db-net`, `frontend-net`, `kafka-net`); qui lo danno sei **NetworkPolicy**:
+`magazzino-db-net`, `produzione-db-net`, `frontend-net`, `kafka-net`); qui lo danno sette **NetworkPolicy**:
 
 | NetworkPolicy | Pod protetti | Sorgenti ammesse | Porta |
 |---|---|---|---|
 | `edizioni-db-solo-da-edizioni` | edizioni-db | i pod di edizioni | 5432 |
 | `ricette-db-solo-da-ricette` | ricette-db | i pod di ricette | 5432 |
 | `magazzino-db-solo-da-magazzino` | magazzino-db | i pod di magazzino | 5432 |
+| `produzione-db-solo-da-produzione` | produzione-db | i pod di produzione | 5432 |
 | `frontend-solo-da-ingress` | frontend | il controller ingress-nginx | 8080 |
 | `gateway-da-ingress-e-servizi` | gateway | il controller ingress-nginx; i pod con `app.kubernetes.io/component: microservizio` (scaricano la JWKS) | 8080 |
-| `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni, magazzino; poi produzione); Kafka stesso sulla 9093 del controller | 9092, 9093 |
+| `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni, magazzino, produzione); Kafka stesso sulla 9093 del controller | 9092, 9093 |
 
 Come sono fatte:
 
@@ -522,7 +558,7 @@ kubectl describe networkpolicy gateway-da-ingress-e-servizi -n ginvault
 
 # Un pod qualsiasi NON raggiunge database, front-end, gateway e Kafka (timeout dopo 3 s)...
 # (virgolette semplici: con le doppie PowerShell sostituirebbe $s prima di passarlo)
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 frontend:80 gateway:8080 kafka:9092; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 frontend:80 gateway:8080 kafka:9092; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
 # ...con la label di chi usa Kafka, Kafka risponde
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
 # Da edizioni (ha la label) sì, da ricette (non usa Kafka) no
@@ -530,6 +566,8 @@ kubectl exec -n ginvault deploy/edizioni -- sh -c 'nc -z -w 3 kafka 9092 && echo
 kubectl exec -n ginvault deploy/ricette -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
 # Magazzino raggiunge Kafka e il suo database, ma non quello di edizioni
 kubectl exec -n ginvault deploy/magazzino -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO; nc -z -w 3 edizioni-db 5432 && echo edizioni-db APERTO || echo edizioni-db BLOCCATO'
+# Produzione: Kafka, il suo database e la JWKS sì; il database di magazzino no
+kubectl exec -n ginvault deploy/produzione -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 produzione-db 5432 && echo produzione-db APERTO || echo produzione-db BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO'
 # ...ma raggiunge ricette, che è un servizio
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 ricette 8082 && echo APERTO || echo BLOCCATO"
 
@@ -569,7 +607,7 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.1, gateway:0.3, edizioni:0.3, ricette:0.2, magazzino:0.1
+minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.4, ricette:0.2, magazzino:0.1, produzione:0.1
 ```
 
 Per un'immagine che manca, il suo `minikube image build` di
@@ -585,8 +623,9 @@ kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s      
 kubectl get pods -n ginvault
 ```
 
-Dieci pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
-`ricette`, `ricette-db`, `magazzino`, `magazzino-db`, `kafka-0`. In più il pod del Job `kafka-topic`,
+Dodici pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
+`ricette`, `ricette-db`, `magazzino`, `magazzino-db`, `produzione`, `produzione-db`,
+`kafka-0`. In più il pod del Job `kafka-topic`,
 `0/1 Completed`: ha creato i topic ed è terminato. Il Job sparisce da solo
 un'ora dopo, e il prossimo `apply` lo ricrea.
 
@@ -694,8 +733,8 @@ kubectl scale deployment/edizioni -n ginvault --replicas=1
 **Rolling update** con una nuova versione dell'immagine:
 
 ```powershell
-minikube image build -t ginvault/edizioni:0.4 .\edizioni
-# cambiare il tag in k8s/edizioni.yaml (0.3 -> 0.4), poi:
+minikube image build -t ginvault/edizioni:0.5 .\edizioni
+# cambiare il tag in k8s/edizioni.yaml (0.4 -> 0.5), poi:
 kubectl apply -k k8s/
 kubectl rollout status deployment/edizioni -n ginvault   # il nuovo pod parte prima che il vecchio si spenga
 kubectl rollout history deployment/edizioni -n ginvault

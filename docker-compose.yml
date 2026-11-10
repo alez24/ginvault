@@ -198,7 +198,9 @@ services:
     image: apache/kafka:4.3.0
     restart: "no"
     environment:
-      TOPIC: edizioni.eventi magazzino.eventi produzione.eventi
+      # produzione.dlt: il dead letter topic di Produzione (messaggi che non
+      # si riescono a elaborare, docs/eventi.md)
+      TOPIC: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt
       PARTIZIONI: 3
       KAFKA_HEAP_OPTS: -Xmx128m
     # $$ = un "$" per la shell: Compose non prova a sostituirlo con una variabile
@@ -247,6 +249,8 @@ services:
       # validare la formulazione. Niente depends_on: se Ricette è giù, Edizioni
       # parte lo stesso e risponde 503 solo quando serve Ricette.
       RICETTE_URI: http://ricette:8082
+      # Pubblica EdizioneCreata su edizioni.eventi, dalla tabella outbox
+      KAFKA_BOOTSTRAP: kafka:9092
     depends_on:
       edizioni-db:
         condition: service_healthy
@@ -292,6 +296,9 @@ services:
       DB_USER: produzione
       DB_PASSWORD: produzione
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Legge edizioni.eventi e magazzino.eventi (consumer group "produzione"),
+      # pubblica ResaRicalcolata su produzione.eventi e gli scarti su produzione.dlt
+      KAFKA_BOOTSTRAP: kafka:9092
     depends_on:
       produzione-db:
         condition: service_healthy

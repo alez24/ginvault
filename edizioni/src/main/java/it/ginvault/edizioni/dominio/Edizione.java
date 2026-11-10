@@ -49,6 +49,15 @@ import org.springframework.data.domain.DomainEvents;
  *    discutere, vedi README);
  *  - quando la tiratura scende, l'aggregato registra l'evento TiraturaRidotta.
  *
+ * Origine della botanica di stagione (es. "Alta Val Varaita (Alpi Cozie)"):
+ * la sceglie il distillatore e l'edizione la promette a soci e clienti.
+ * Produzione la riceve con EdizioneCreata e accetta per il piano solo lotti
+ * con la stessa origine: l'edizione resta fedele alla sua origine.
+ *
+ * Quando nasce, l'edizione registra l'evento EdizioneCreata: va su Kafka
+ * (edizioni.eventi) attraverso la tabella outbox, nella stessa transazione
+ * del salvataggio.
+ *
  * Rete di sicurezza: vincolo UNIQUE su (formulazione_id, formulazione_versione).
  * Anche se Ricette sbagliasse (o il suo database venisse ricreato), nel
  * database di Edizioni la stessa formulazione non può finire in due edizioni.
@@ -79,6 +88,14 @@ public class Edizione {
     @Column(name = "botanica_disponibile_kg", nullable = false, precision = 8, scale = 3)
     private BigDecimal botanicaDisponibileKg;
 
+    /**
+     * Obbligatoria per ogni edizione nuova (la controlla nuova()). Nel database
+     * può essere vuota solo per le edizioni create prima che esistesse:
+     * ddl-auto non può aggiungere una colonna NOT NULL a una tabella con righe.
+     */
+    @Column(name = "origine_botanica", length = 100)
+    private String origineBotanica;
+
     @Embedded
     private Tiratura tiratura;
 
@@ -105,12 +122,14 @@ public class Edizione {
     }
 
     private Edizione(RiferimentoFormulazione formulazione, String botanicaDiStagione, BigDecimal grammiPerBottiglia,
-                     BigDecimal botanicaDisponibileKg, Tiratura tiratura, Map<Canale, Integer> bottiglie) {
+                     BigDecimal botanicaDisponibileKg, String origineBotanica, Tiratura tiratura,
+                     Map<Canale, Integer> bottiglie) {
         this.id = UUID.randomUUID();
         this.formulazione = formulazione;
         this.botanicaDiStagione = botanicaDiStagione;
         this.grammiPerBottiglia = grammiPerBottiglia;
         this.botanicaDisponibileKg = botanicaDisponibileKg;
+        this.origineBotanica = origineBotanica;
         this.tiratura = tiratura;
         bottiglie.forEach((canale, numero) -> this.quote.put(canale, Quota.di(numero)));
         this.creataIl = Instant.now();
@@ -123,17 +142,23 @@ public class Edizione {
      *
      * @param formulazione      la formulazione letta da Ricette (tramite CatalogoRicette)
      * @param versioneRichiesta la versione indicata dal distillatore: deve essere quella scelta
+     * @param origineBotanica   da dove deve venire la botanica di stagione
      * @param quote             bottiglie per canale: la somma deve essere uguale alla tiratura
      */
     public static Edizione nuova(FormulazioneInCatalogo formulazione, int versioneRichiesta,
-                                 BigDecimal botanicaDisponibileKg, Map<Canale, Integer> quote) {
+                                 BigDecimal botanicaDisponibileKg, String origineBotanica,
+                                 Map<Canale, Integer> quote) {
         RiferimentoFormulazione riferimento = formulazione.riferimentoPer(versioneRichiesta);
         String botanica = formulazione.botanicaDiStagione().trim().toLowerCase(Locale.ROOT);
         BigDecimal grammi = formulazione.grammiPerBottiglia().setScale(2, RoundingMode.HALF_UP);
         BigDecimal kg = verificaKg(botanicaDisponibileKg);
+        String origine = verificaOrigine(origineBotanica);
         Tiratura tiratura = Tiratura.da(kg, grammi);
         Map<Canale, Integer> bottiglie = verificaQuote(quote, tiratura, kg, botanica, grammi);
-        return new Edizione(riferimento, botanica, grammi, kg, tiratura, bottiglie);
+        Edizione edizione = new Edizione(riferimento, botanica, grammi, kg, origine, tiratura, bottiglie);
+        edizione.eventi.add(new EdizioneCreata(edizione.id, riferimento, botanica, grammi, origine, kg,
+                tiratura.bottiglie(), edizione.bottigliePerCanale(), edizione.creataIl));
+        return edizione;
     }
 
     // ---------------------------------------------------------------- comportamento
@@ -227,6 +252,11 @@ public class Edizione {
         return botanicaDisponibileKg;
     }
 
+    /** null solo per le edizioni create prima che l'origine esistesse. */
+    public String origineBotanica() {
+        return origineBotanica;
+    }
+
     public Tiratura tiratura() {
         return tiratura;
     }
@@ -302,6 +332,19 @@ public class Edizione {
             throw new EdizioneNonValida("I kg di botanica si indicano al grammo (al massimo 3 decimali)");
         }
         return kg.setScale(3, RoundingMode.UNNECESSARY);
+    }
+
+    /** Obbligatoria, al massimo 100 caratteri; spazi doppi ridotti a uno. */
+    private static String verificaOrigine(String origine) {
+        if (origine == null || origine.isBlank()) {
+            throw new EdizioneNonValida("Serve l'origine della botanica di stagione (es. Alta Val Varaita (Alpi Cozie)):"
+                    + " Produzione accetterà solo lotti con questa origine");
+        }
+        String pulita = origine.trim().replaceAll("\\s+", " ");
+        if (pulita.length() > 100) {
+            throw new EdizioneNonValida("L'origine della botanica può avere al massimo 100 caratteri");
+        }
+        return pulita;
     }
 
     private static Map<Canale, Integer> verificaQuote(Map<Canale, Integer> quote, Tiratura tiratura, BigDecimal kg,

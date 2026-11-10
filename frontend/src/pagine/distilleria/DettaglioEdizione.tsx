@@ -116,6 +116,12 @@ export function DettaglioEdizione() {
         {numero(edizione.botanicaDisponibileKg)} kg di {edizione.botanicaDiStagione} a {numero(edizione.grammiPerBottiglia)} g
         per bottiglia fanno {bottiglie(edizione.tiratura)}; il massimo è {TIRATURA_MASSIMA}. Il numero sul
         cartellino segue la tiratura.
+        {edizione.origineBotanica && (
+          <>
+            {' '}
+            La {edizione.botanicaDiStagione} deve venire da {edizione.origineBotanica}.
+          </>
+        )}
       </p>
 
       <div className="due-colonne">

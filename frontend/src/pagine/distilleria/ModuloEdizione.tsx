@@ -18,6 +18,16 @@ import {
 
 type TestiQuote = Record<Canale, string>;
 
+/** Come Edizioni: obbligatoria, al massimo 100 caratteri. */
+const ORIGINE_MASSIMA = 100;
+
+const controllaOrigine = (origine: string): string | undefined =>
+  !origine.trim()
+    ? 'Scrivi da dove deve venire la botanica: un lotto di un’altra origine non entrerà in questa edizione.'
+    : origine.trim().length > ORIGINE_MASSIMA
+      ? `Al massimo ${ORIGINE_MASSIMA} caratteri.`
+      : undefined;
+
 const testi = (quote: Record<Canale, number>): TestiQuote => ({
   SOCI: String(quote.SOCI),
   BAR: String(quote.BAR),
@@ -26,7 +36,7 @@ const testi = (quote: Record<Canale, number>): TestiQuote => ({
 
 /**
  * POST /api/edizioni/edizioni da una formulazione SCELTA: kg di botanica di
- * stagione disponibili e quote per canale. Edizioni chiede a Ricette la
+ * stagione disponibili, la sua origine e quote per canale. Edizioni chiede a Ricette la
  * versione scelta, calcola la tiratura e segna la formulazione come USATA.
  */
 export function ModuloEdizione({ formulazione }: { formulazione: Formulazione }) {
@@ -36,6 +46,7 @@ export function ModuloEdizione({ formulazione }: { formulazione: Formulazione })
   const stagione = formulazione.botanicaDiStagione;
 
   const [kg, setKg] = useState('');
+  const [origine, setOrigine] = useState('');
   const [quote, setQuote] = useState<TestiQuote>({ SOCI: '', BAR: '', ONLINE: '' });
   /** Finché l'utente non tocca le quote, seguono la tiratura con la divisione di partenza. */
   const [quoteToccate, setQuoteToccate] = useState(false);
@@ -74,10 +85,12 @@ export function ModuloEdizione({ formulazione }: { formulazione: Formulazione })
         : `${bottiglie(sommaQuote - tiratura)} di troppo: la somma delle quote deve fare ${numero(tiratura)}.`
       : undefined;
 
+  const erroreOrigine = controllaOrigine(origine);
+
   const crea = async (evento?: FormEvent) => {
     evento?.preventDefault();
     setMostraErrori(true);
-    if (!prova || typeof kgLetti !== 'number' || erroreKg || sommaQuote === undefined || erroreSomma) {
+    if (!prova || typeof kgLetti !== 'number' || erroreKg || erroreOrigine || sommaQuote === undefined || erroreSomma) {
       return;
     }
     setInvio(true);
@@ -87,6 +100,7 @@ export function ModuloEdizione({ formulazione }: { formulazione: Formulazione })
       const edizione = await edizioni.crea({
         formulazione: { id: formulazione.id, versione: prova.versione },
         botanicaDisponibileKg: kgLetti,
+        origineBotanica: origine.trim().replace(/\s+/g, ' '),
         quote: { SOCI: soci, BAR: bar, ONLINE: online },
       });
       naviga(`${PAGINE.edizioni.percorso}/${edizione.id}`, {
@@ -145,6 +159,32 @@ export function ModuloEdizione({ formulazione }: { formulazione: Formulazione })
             'Scrivi i kg per vedere quante bottiglie si fanno.'
           )}
         </p>
+      </div>
+
+      <div className="campo">
+        <label className="campo__etichetta" htmlFor="origine">
+          Origine della {stagione}
+        </label>
+        <input
+          id="origine"
+          className="campo__input"
+          value={origine}
+          onChange={(evento) => setOrigine(evento.target.value)}
+          placeholder="Alta Val Varaita (Alpi Cozie)"
+          maxLength={ORIGINE_MASSIMA}
+          autoComplete="off"
+          aria-invalid={mostraErrori && erroreOrigine ? true : undefined}
+          aria-describedby="origine-nota"
+        />
+        {mostraErrori && erroreOrigine ? (
+          <p className="campo__errore" id="origine-nota">
+            {erroreOrigine}
+          </p>
+        ) : (
+          <p className="anteprima" id="origine-nota">
+            L’edizione resta fedele a questa origine: la produzione userà solo lotti che vengono da qui.
+          </p>
+        )}
       </div>
 
       <fieldset className="quote-modulo">

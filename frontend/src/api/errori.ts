@@ -31,6 +31,7 @@ const NOMI: Record<string, string> = {
   'formulazione.id': 'Formulazione',
   'formulazione.versione': 'Versione della formulazione',
   botanicaDisponibileKg: 'Kg di botanica disponibili',
+  origineBotanica: 'Origine della botanica',
   quote: 'Quote',
 };
 

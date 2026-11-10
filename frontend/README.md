@@ -42,7 +42,7 @@ Prerequisiti:
 
 - Node 20.19+ o 22.12+;
 - il cluster avviato come in [`k8s/README.md`](../k8s/README.md), con le
-  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2` e `ginvault/edizioni:0.3`.
+  immagini `ginvault/gateway:0.3`, `ginvault/ricette:0.2` e `ginvault/edizioni:0.4`.
 
 1. **Terminale 1: il gateway del cluster su `localhost:8080`.** Lascialo aperto.
 
@@ -156,7 +156,7 @@ Minikube sono 32. Per dei file statici ne bastano 2.
 ### Su Kubernetes
 
 La stessa immagine, costruita nel nodo con
-`minikube image build -t ginvault/frontend:0.1 .\frontend`, gira su Minikube
+`minikube image build -t ginvault/frontend:0.2 .\frontend`, gira su Minikube
 ([`k8s/frontend.yaml`](../k8s/frontend.yaml)):
 
 - **Deployment a 2 repliche**: il front-end non ha stato, se un pod cade

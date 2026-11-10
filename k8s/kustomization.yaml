@@ -25,6 +25,8 @@ resources:
   - ricette.yaml
   - magazzino-db.yaml
   - magazzino.yaml
+  - produzione-db.yaml
+  - produzione.yaml
   - networkpolicy-db.yaml
   - networkpolicy-frontend-gateway.yaml
   - networkpolicy-kafka.yaml

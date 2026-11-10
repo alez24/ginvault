@@ -7,8 +7,8 @@
 #   - gateway-segreti  client id/secret OAuth ed elenchi RUOLI_*, letti dal .env
 #   - edizioni-db,     utente e password di Postgres, uno per database. La
 #     ricette-db,      password viene generata a caso la PRIMA volta e poi non
-#     magazzino-db     viene piu' toccata: il database, una volta inizializzato
-#                      sul volume, ricorda la sua password. Per ripartire da zero
+#     magazzino-db,    viene piu' toccata: il database, una volta inizializzato
+#     produzione-db    sul volume, ricorda la sua password. Per ripartire da zero
 #                      vanno cancellati insieme il Secret e il volume (PVC).
 #
 # Si puo' rilanciare dopo aver cambiato il .env: gateway-segreti viene
@@ -42,7 +42,7 @@ kubectl create secret generic gateway-segreti --namespace $ns --from-env-file $e
 if ($LASTEXITCODE -ne 0) { throw 'Creazione di gateway-segreti fallita' }
 
 # --- 3) Un Secret per database, solo se non esiste ancora --------------------
-foreach ($servizio in @('edizioni', 'ricette', 'magazzino')) {
+foreach ($servizio in @('edizioni', 'ricette', 'magazzino', 'produzione')) {
     $nome = "$servizio-db"
     $esistente = kubectl get secret $nome --namespace $ns --ignore-not-found -o name
     if ($esistente) {

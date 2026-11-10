@@ -270,7 +270,8 @@ spec:
           image: apache/kafka:4.3.0
           env:
             - name: TOPIC
-              value: edizioni.eventi magazzino.eventi produzione.eventi
+              # produzione.dlt: il dead letter topic di Produzione (docs/eventi.md)
+              value: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt
             - name: PARTIZIONI
               value: "3"
             - name: KAFKA_HEAP_OPTS

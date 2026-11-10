@@ -19,6 +19,7 @@ function edizione(modifiche: Partial<Edizione> = {}): Edizione {
     botanicaDiStagione: 'lavanda',
     grammiPerBottiglia: 20,
     botanicaDisponibileKg: 12,
+    origineBotanica: 'Alta Val Varaita (Alpi Cozie)',
     tiratura: 600,
     quote: { SOCI: 300, BAR: 150, ONLINE: 150 },
     prenotate: { SOCI: 0, BAR: 0, ONLINE: 0 },

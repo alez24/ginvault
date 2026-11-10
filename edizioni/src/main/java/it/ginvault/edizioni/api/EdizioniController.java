@@ -44,7 +44,7 @@ public class EdizioniController {
     @PreAuthorize("hasRole('DISTILLATORE')")
     public ResponseEntity<EdizioneVista> crea(@Valid @RequestBody Richieste.NuovaEdizione richiesta) {
         EdizioneVista creata = servizio.crea(richiesta.formulazione().id(), richiesta.formulazione().versione(),
-                richiesta.botanicaDisponibileKg(), richiesta.quote());
+                richiesta.botanicaDisponibileKg(), richiesta.origineBotanica(), richiesta.quote());
         URI indirizzo = ServletUriComponentsBuilder.fromCurrentContextPath()
                 .path("/edizioni/{id}").buildAndExpand(creata.id()).toUri();
         return ResponseEntity.created(indirizzo).body(creata);

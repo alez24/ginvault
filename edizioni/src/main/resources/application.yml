@@ -5,7 +5,7 @@
 #   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
 #     su localhost:5441, gateway su localhost:8080)
 #   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
-#     container (edizioni-db:5432, gateway:8080)
+#     container (edizioni-db:5432, gateway:8080, kafka:9092)
 
 spring:
   application:
@@ -30,6 +30,28 @@ spring:
       # Elenco delle edizioni: le quote si caricano a blocchi di 50 edizioni
       # invece che con una query per edizione (il problema "N+1").
       hibernate.default_batch_fetch_size: 50
+
+  # Kafka: per ora solo per PUBBLICARE (EdizioneCreata su edizioni.eventi),
+  # dalla tabella outbox come in Magazzino: se Kafka è giù l'edizione si crea
+  # lo stesso e l'evento aspetta nella tabella (PubblicatoreOutbox).
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      client-id: edizioni
+      # Chiave e valore come testo: il valore è il JSON della busta, già scritto
+      # dall'outbox (nessun header __TypeId__, docs/eventi.md)
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Con Kafka giù il publisher rinuncia dopo pochi secondi e riprova al giro dopo
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 4000
+        # Dopo un riavvio di kafka-0 (IP nuovo) non aspettare 30 s sul vecchio indirizzo
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
 
   security:
     oauth2:
@@ -68,6 +90,21 @@ ricette:
   # Sia per aprire la connessione sia per aspettare la risposta: oltre -> 503.
   # Il circuit breaker vero arriverà con Istio (configurazione della mesh).
   timeout: 2s
+
+edizioni:
+  outbox:
+    # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
+    intervallo-ms: 1000
+    # Quanti eventi al massimo per giro
+    lotto: 50
+    # Quanto aspettare la conferma di Kafka per un evento, oltre -> nuovo tentativo
+    attesa-conferma: 5s
+
+logging:
+  level:
+    # Il WARN di PubblicatoreOutbox basta (al primo tentativo fallito, poi ogni
+    # 30): senza questa riga Spring Kafka scriverebbe un ERROR a ogni invio fallito
+    org.springframework.kafka.support.LoggingProducerListener: off
 
 management:
   endpoints:

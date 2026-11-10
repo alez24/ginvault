@@ -8,10 +8,12 @@ import it.ginvault.edizioni.dominio.Canale;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 
 /**
  * Corpi JSON delle richieste. Bean Validation (@Valid nel controller) controlla
@@ -29,6 +31,7 @@ public final class Richieste {
      * <pre>
      * {"formulazione": {"id": "7f1d...", "versione": 2},
      *  "botanicaDisponibileKg": 12,
+     *  "origineBotanica": "Alta Val Varaita (Alpi Cozie)",
      *  "quote": {"SOCI": 300, "BAR": 150, "ONLINE": 150}}
      * </pre>
      * Un canale sconosciuto nelle quote (es. "NEGOZIO") -> 400, JSON non leggibile.
@@ -41,6 +44,9 @@ public final class Richieste {
             @Positive(message = "i kg di botanica disponibili devono essere maggiori di zero")
             @Digits(integer = 5, fraction = 3, message = "al massimo 5 cifre intere e 3 decimali (il grammo)")
             BigDecimal botanicaDisponibileKg,
+            @NotBlank(message = "serve l'origine della botanica di stagione")
+            @Size(max = 100, message = "al massimo 100 caratteri")
+            String origineBotanica,
             @NotEmpty(message = "servono le quote per canale (SOCI, BAR, ONLINE)")
             Map<Canale, @NotNull(message = "la quota è obbligatoria")
                         @PositiveOrZero(message = "la quota non può essere negativa") Integer> quote) {

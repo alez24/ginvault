@@ -1,11 +1,12 @@
-# Configurazione del microservizio Produzione.
+# Configurazione del microservizio Produzione (piani di produzione delle
+# edizioni: consuma EdizioneCreata e ConsegnaRegistrata, pubblica ResaRicalcolata).
 #
 # Sintassi ${VARIABILE:default}: Spring usa la variabile d'ambiente se esiste,
 # altrimenti il valore dopo i due punti.
 #   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
 #     su localhost:5443, gateway su localhost:8080)
 #   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
-#     container (produzione-db:5432, gateway:8080)
+#     container (produzione-db:5432, gateway:8080, kafka:9092)
 
 spring:
   application:
@@ -20,12 +21,67 @@ spring:
 
   jpa:
     hibernate:
-      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity.
-      # Comodo in sviluppo; quando ci saranno le entità valuteremo Flyway.
+      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity (anche
+      # "outbox" ed "evento_elaborato").
       ddl-auto: update
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+    properties:
+      # Elenco dei piani con le consegne: le collezioni si caricano a blocchi
+      # di 50 invece che con una query per piano (il problema "N+1")
+      hibernate.default_batch_fetch_size: 50
+
+  kafka:
+    # In Compose e su Kubernetes: kafka:9092 (rete kafka-net / NetworkPolicy)
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+
+    # PUBBLICARE: il publisher dell'outbox (ResaRicalcolata su produzione.eventi)
+    # e il dead letter topic. Come in Magazzino.
+    producer:
+      client-id: produzione
+      # Chiave e valore come testo: il valore è il JSON della busta
+      # (docs/eventi.md), senza header __TypeId__ con nomi di classi Java
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Il broker conferma solo dopo aver scritto il messaggio
+      acks: all
+      properties:
+        # Niente doppioni causati dai tentativi interni del producer
+        enable.idempotence: true
+        # Con Kafka giù il publisher rinuncia dopo pochi secondi e riprova al
+        # giro successivo (vedi Magazzino)
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 4000
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+
+    # LEGGERE: edizioni.eventi e magazzino.eventi (ConsumerEventi)
+    consumer:
+      client-id: produzione
+      # Il consumer group: le partizioni di un topic si dividono tra le
+      # repliche di produzione, e Kafka ricorda per il gruppo fin dove si è letto
+      group-id: produzione
+      # Alla prima partenza (nessun offset salvato per il gruppo) si legge dal
+      # primo messaggio: le edizioni create prima di Produzione hanno il loro piano
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # L'offset lo salva Spring, solo DOPO che il messaggio è stato elaborato
+      # (e il database ha fatto commit), non un timer del client Kafka
+      enable-auto-commit: false
+      properties:
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+    listener:
+      # Offset salvato dopo ogni messaggio elaborato: se Produzione cade, al
+      # riavvio ricomincia dal primo non confermato (al più uno rielaborato,
+      # e lo scarta evento_elaborato)
+      ack-mode: record
+      # 3 consumer per topic, uno per partizione: i tentativi su una partizione
+      # non fermano le altre due
+      concurrency: 3
 
   security:
     oauth2:
@@ -47,6 +103,30 @@ spring:
 server:
   # Porta fissa per servizio (8083 = produzione), uguale in locale e in Docker
   port: 8083
+  # Il gateway toglie /api/produzione dal path e lo dice con X-Forwarded-Prefix
+  forward-headers-strategy: framework
+
+produzione:
+  outbox:
+    # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
+    intervallo-ms: 1000
+    # Quanti eventi al massimo per giro
+    lotto: 50
+    # Quanto aspettare la conferma di Kafka per un evento, oltre -> nuovo tentativo
+    attesa-conferma: 5s
+  consumer:
+    # Messaggio non elaborato (es. ConsegnaRegistrata prima della sua
+    # EdizioneCreata): nuovi tentativi dopo 1, 2, 4 e 8 secondi, poi il
+    # messaggio va in produzione.dlt (ConfigurazioneKafka)
+    tentativi: 4
+    attesa-iniziale: 1s
+    attesa-massima: 8s
+
+logging:
+  level:
+    # Come in Magazzino: PubblicatoreOutbox scrive già un WARN al primo invio
+    # fallito e poi uno ogni 30
+    org.springframework.kafka.support.LoggingProducerListener: off
 
 management:
   endpoints:

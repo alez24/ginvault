@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> configurazione NON segreta (indirizzi, nomi), come variabili
-#   2) Deployment  -> il pod con il container ginvault/edizioni:0.3
+#   2) Deployment  -> il pod con il container ginvault/edizioni:0.4
 #   3) Service     -> nome DNS stabile "edizioni" (lo usa il gateway)
 #
 # Le stesse variabili d'ambiente che docker-compose.yml passa al container:
@@ -35,6 +35,10 @@ data:
   # Edizioni chiama Ricette direttamente (Service "ricette", senza gateway) per
   # validare la formulazione quando si crea un'edizione
   RICETTE_URI: http://ricette:8082
+  # Pubblica EdizioneCreata su edizioni.eventi dalla tabella outbox: il Service
+  # headless di Kafka (kafka.yaml). Kafka non è nella readiness: con Kafka giù
+  # le edizioni si creano lo stesso e l'evento aspetta nell'outbox.
+  KAFKA_BOOTSTRAP: kafka:9092
   # Endpoint per le probe di Kubernetes: /health/liveness e /health/readiness.
   # Spring Boot li attiva da solo quando si accorge di girare su Kubernetes;
   # qui lo diciamo esplicitamente.
@@ -84,7 +88,7 @@ spec:
           # Immagine costruita DENTRO Minikube (minikube image build):
           # Never = non cercarla mai su un registry. Se manca: ErrImageNeverPull
           # 0.2 = storia di Marco: edizioni, tiratura, chiamata a Ricette
-          image: ginvault/edizioni:0.3
+          image: ginvault/edizioni:0.4
           imagePullPolicy: Never
           ports:
             - name: http
