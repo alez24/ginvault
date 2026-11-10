@@ -1,20 +1,17 @@
 # GinVault: stato dei lavori
 
-Aggiornato al 10 novembre 2026. Tutto quello che è stato fatto finora, in ordine,
+Aggiornato all'11 novembre 2026. Tutto quello che è stato fatto finora, in ordine,
 e il punto esatto in cui siamo arrivati.
 
 ## In breve: dove siamo
 
-- **Branch:** `storia-elena` (creato da `main` aggiornato, `ed2c054`).
-- **Storia di Elena, passi 1–6 committati** su `storia-elena`, **senza push**.
-  `AnnullaRiserva` (la compensazione di Produzione) e il passo 5 (Edizioni
-  consuma `ResaRicalcolata`) sono in `080310f`; il passo 6 (frontend per
-  Elena) e la correzione di Produzione sul lotto della consegna in `2c5b712`.
-- **Passo 7** (integrazione e demo) è nel commit con questo file:
-  `docs/demo-storia-elena.md`, README, `k8s/README.md`, immagini nuove sul
-  cluster. La storia di Elena è finita.
-- **Prossimo:** da decidere (vedi [Dopo la storia di Elena](#dopo-la-storia-di-elena-dal-piano-docspianomd)).
-  Il giro della demo dal browser sul cluster è ancora da fare.
+- **Branch:** `main`, allineato a `origin/main` (`3d00b6f`).
+- **Storia di Elena finita e unita in `main`:** i 7 passi, da `86fe672` a
+  `cbb04e5`, sono nella **PR #4**, unita il 10 novembre con il merge commit
+  `3d00b6f`. Il branch `storia-elena` è ancora su GitHub.
+- **Prossimo:** da decidere (vedi [Dopo la storia di Elena](#dopo-la-storia-di-elena-dal-piano-docspianomd)),
+  su un branch nuovo creato da `main`. Il giro della demo di Elena dal browser
+  sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
@@ -31,15 +28,16 @@ e il punto esatto in cui siamo arrivati.
 | `524e350` (PR #3) | 7 nov | **Storia di Giulia (solo frontend)**: area soci con dati finti (prenotazioni, tiratura da 600 a 540) |
 | `c9806ed` (PR #3) | 7 nov | Frontend in un container nginx, in Compose su `http://localhost` |
 | `dfa6bb9` (PR #3) | 7 nov | Frontend su Kubernetes: 2 repliche, Ingress per path, NetworkPolicy per front-end e gateway |
-| `86fe672` | 7 nov | **Elena, passo 1: Kafka** (vedi sotto) |
-| `830a03f` | 8 nov | **Elena, passo 2: Magazzino** (vedi sotto) |
-| `0298ebb` | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
-| `497fd93` | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
-| `080310f` | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
-| `2c5b712` | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
-| (il commit con questo file) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
+| `86fe672` (PR #4) | 7 nov | **Elena, passo 1: Kafka** (vedi sotto) |
+| `830a03f` (PR #4) | 8 nov | **Elena, passo 2: Magazzino** (vedi sotto) |
+| `0298ebb` (PR #4) | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
+| `497fd93` (PR #4) | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
+| `080310f` (PR #4) | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
+| `2c5b712` (PR #4) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
+| `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
 
-Le PR #1, #2 e #3 sono unite in `main` con merge commit.
+Le PR #1, #2, #3 e #4 sono unite in `main` con merge commit; quello della PR #4
+è `3d00b6f`.
 
 ## La storia di Elena
 
@@ -60,7 +58,9 @@ I sette passi:
 | 4+ | `AnnullaRiserva`: compensazione se il piano non si salva dopo la riserva | ✅ committato `080310f` |
 | 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `TiraturaAumentata` / `RicalcoloRifiutato` | ✅ committato `080310f` |
 | 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | ✅ committato `2c5b712` |
-| 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | ✅ committato |
+| 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | ✅ committato `cbb04e5` |
+
+Tutti e sette sono in `main` con la PR #4.
 
 ### Passo 1: Kafka (`86fe672`)
 
@@ -423,7 +423,7 @@ c'erano già. Il dettaglio è in
   integrare. Servirebbe che la consegna riservasse il lotto per l'edizione
   dell'ordine.
 
-### Passo 7: integrazione e demo (nel commit con questo file)
+### Passo 7: integrazione e demo (`cbb04e5`)
 
 - **Gateway e Compose:** niente da cambiare.
   - Le route `/api/magazzino/**` e `/api/produzione/**` c'erano dal primo
@@ -481,6 +481,8 @@ c'erano già. Il dettaglio è in
   per verificare, poi stop in attesa dell'ok.
 - **Niente commit finché non lo dici**, e niente push se non richiesto.
 - Nei commit e nelle PR nessuna riga "Co-Authored-By: Claude".
+- Le PR si aprono con la GitHub CLI (`gh`, installata il 10 novembre, login
+  come `alez24`) e si uniscono con merge commit.
 - **Il `.env` non si legge né si stampa.** I segreti li leggono Compose e
   `kubectl` (`crea-secret.ps1`), e si verificano dentro i container.
 - Si seguono le convenzioni di edizioni e ricette: resource server, test con
@@ -505,6 +507,7 @@ PowerShell, dalla cartella `ginvault`:
 # Stato del lavoro
 git status
 git log --oneline -5
+gh pr list --state all --limit 5
 
 # Test di un servizio senza giacenze-api (edizioni, ricette)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
