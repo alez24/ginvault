@@ -22,12 +22,22 @@ export const PAGINE = {
   home: { percorso: '/', etichetta: 'La distilleria' },
   formulazioni: { percorso: '/distilleria/formulazioni', etichetta: 'Formulazioni', ruoli: ['DISTILLATORE'] },
   edizioni: { percorso: '/distilleria/edizioni', etichetta: 'Edizioni', ruoli: ['DISTILLATORE'] },
+  piani: { percorso: '/distilleria/piani', etichetta: 'Produzione', ruoli: ['DISTILLATORE'] },
+  acquisti: { percorso: '/acquisti', etichetta: 'Acquisti', ruoli: ['RESP_ACQUISTI'] },
   soci: { percorso: '/soci', etichetta: 'Area soci', ruoli: ['SOCIO'] },
   profilo: { percorso: '/profilo', etichetta: 'Il mio profilo', ruoli: [] },
 } satisfies Record<string, Pagina>;
 
 /** Ordine delle voci nel menu. */
-const MENU: Pagina[] = [PAGINE.home, PAGINE.formulazioni, PAGINE.edizioni, PAGINE.soci, PAGINE.profilo];
+const MENU: Pagina[] = [
+  PAGINE.home,
+  PAGINE.formulazioni,
+  PAGINE.edizioni,
+  PAGINE.piani,
+  PAGINE.acquisti,
+  PAGINE.soci,
+  PAGINE.profilo,
+];
 
 export function accessibile(utente: Utente | null, pagina: Pagina): boolean {
   if (pagina.ruoli === undefined) {
@@ -60,7 +70,7 @@ export const RUOLI: Record<Ruolo, { nome: string; descrizione: string }> = {
   },
   RESP_ACQUISTI: {
     nome: 'Responsabile acquisti',
-    descrizione: 'Registra le consegne di botaniche e gestisce lotti e fornitori.',
+    descrizione: 'Ordina le botaniche ai fornitori, registra le consegne e segue lotti e fornitori.',
   },
   ADMIN: {
     nome: 'Amministratore',

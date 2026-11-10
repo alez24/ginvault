@@ -161,8 +161,17 @@ Il ricalcolo non chiama Ricette: ha già tutto quello che serve. In PowerShell:
 kubectl logs deployment/edizioni -n ginvault | Select-String TiraturaRidotta
 ```
 
-Mostra una riga `Evento TiraturaRidotta: edizione <id> da 600 a 540 bottiglie, nuove quote {SOCI=300, BAR=150, ONLINE=90}`.
-Con la storia di Elena l'evento andrà su Kafka verso Notifiche.
+Mostra una riga `Evento TiraturaRidotta <eventId> pubblicato al tentativo 1`:
+l'evento è passato dall'outbox al topic `edizioni.eventi` (lo leggerà
+Notifiche, nella storia di Giulia). Il messaggio, con la tiratura da 600 a
+540, le nuove quote e la causa `ricalcolo manuale del distillatore`:
+
+```powershell
+kubectl exec -n ginvault deploy/edizioni-db -- psql -U edizioni -d edizioni -c "select messaggio from outbox where tipo = 'TiraturaRidotta' order by creato_il desc limit 1"
+```
+
+Nella storia di Elena lo stesso ricalcolo arriva da solo, da Produzione
+(`ResaRicalcolata`), senza chiamare l'endpoint.
 
 ## 5. Ricette spento → 503
 
@@ -269,7 +278,7 @@ quindi le NetworkPolicy non lo bloccano.
 | Edizione con formulazione scelta e quote giuste | 201 + `Location` pubblica |
 | Stessa formulazione una seconda volta | 409 Formulazione già usata |
 | Versione diversa da quella scelta, quote che non sommano alla tiratura | 422 |
-| Ricalcolo da 12 a 10,8 kg | 200, ONLINE 150 → 90, evento `TiraturaRidotta` nel log |
+| Ricalcolo da 12 a 10,8 kg | 200, ONLINE 150 → 90, evento `TiraturaRidotta` su `edizioni.eventi` |
 | Edizione con Ricette spento | 503 + `Retry-After`, niente scritto in nessuno dei due database |
 | POST senza `X-XSRF-TOKEN` (ad esempio da `curl.exe` senza header) | 403 dal gateway |
 | Account senza ruolo DISTILLATORE | 403 dal servizio |

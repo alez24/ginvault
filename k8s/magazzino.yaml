@@ -1,0 +1,146 @@
+# =============================================================================
+# magazzino: il microservizio Spring Boot Magazzino (subdomain Approvvigionamento:
+# fornitori, ordini di acquisto, consegne, lotti di botaniche).
+#
+# Stessi tre oggetti di edizioni.yaml (lì sono spiegati in dettaglio):
+#   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
+#   2) Deployment  -> il pod con il container ginvault/magazzino:0.3
+#   3) Service     -> nome DNS stabile "magazzino", con DUE porte:
+#                     8084 http  per il gateway (/api/magazzino/**, MAGAZZINO_URI in gateway.yaml)
+#                     9084 grpc  per produzione (servizio Giacenze, MAGAZZINO_GRPC in produzione.yaml)
+#
+# La 9084 la può aprire solo produzione: networkpolicy-magazzino.yaml.
+#
+# Pubblica ConsegnaRegistrata su magazzino.eventi con la transactional outbox:
+# se Kafka è giù il pod resta Ready, le consegne si registrano e gli eventi
+# partono quando Kafka torna (docs/eventi.md).
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: magazzino-config
+  labels:
+    app.kubernetes.io/name: magazzino
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+data:
+  DB_HOST: magazzino-db
+  DB_PORT: "5432"
+  DB_NAME: magazzino
+  JWKS_URI: http://gateway:8080/.well-known/jwks.json
+  # Il Service headless di Kafka (kafka.yaml)
+  KAFKA_BOOTSTRAP: kafka:9092
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+  # Senza database Magazzino non può rispondere: la readiness include "db".
+  # Kafka invece NO: con Kafka giù magazzino lavora lo stesso (outbox), e
+  # toglierlo dal Service bloccherebbe Elena senza motivo.
+  MANAGEMENT_ENDPOINT_HEALTH_GROUP_READINESS_INCLUDE: readinessState,db
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: magazzino
+  labels:
+    app.kubernetes.io/name: magazzino
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: magazzino
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: magazzino
+        # Verifica i JWT: la NetworkPolicy del gateway lo lascia scaricare la JWKS
+        app.kubernetes.io/component: microservizio
+        app.kubernetes.io/part-of: ginvault
+        # Pubblica eventi: la NetworkPolicy di Kafka lo fa entrare
+        # (networkpolicy-kafka.yaml), come la rete kafka-net di Compose
+        ginvault/usa-kafka: "true"
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: magazzino
+          # Costruita con Docker Desktop e caricata nel nodo (serve il secondo
+          # build context giacenze-api, vedi k8s/README.md):
+          #   docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.3 magazzino
+          #   minikube image load ginvault/magazzino:0.3
+          # 0.3 = AnnullaRiserva (giacenze-api 0.2.0)
+          image: ginvault/magazzino:0.3
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8084
+            # Il server gRPC Giacenze (magazzino.grpc.porta)
+            - name: grpc
+              containerPort: 9084
+          envFrom:
+            - configMapRef:
+                name: magazzino-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: magazzino-db
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: magazzino-db
+                  key: POSTGRES_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: -XX:MaxRAMPercentage=50
+          startupProbe:
+            httpGet:
+              path: /health/liveness
+              port: http
+            periodSeconds: 3
+            failureThreshold: 40
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 768Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: magazzino
+  labels:
+    app.kubernetes.io/name: magazzino
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: magazzino
+  ports:
+    - name: http
+      port: 8084
+      targetPort: http
+    # gRPC = HTTP/2 in chiaro ("h2c"): appProtocol lo dichiara a chi legge il Service.
+    # Una connessione gRPC dura a lungo e resta sul pod scelto all'apertura:
+    # con più repliche servirebbe un bilanciamento per chiamata (Service
+    # headless + round_robin nel client). Qui c'è una replica sola.
+    - name: grpc
+      port: 9084
+      targetPort: grpc
+      appProtocol: kubernetes.io/h2c

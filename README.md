@@ -5,18 +5,27 @@ Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose
 e, in parte, su Kubernetes (Minikube).
 Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
-> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes e la storia di Marco.**
+> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes, la storia di Marco e
+> quella di Elena.**
 > Ogni servizio si avvia, ha `GET /health`, il proprio database e un endpoint di
-> prova protetto da ruolo. Ricette ed Edizioni hanno la logica di dominio:
-> formulazioni con prove di assaggio, edizioni validate da Ricette via REST,
-> tiratura e ricalcolo.
-> Il front-end React ha il back-office di Marco e l'area soci di Giulia (con dati
-> finti finché non ci sono le prenotazioni); è servito da nginx su
+> prova protetto da ruolo.
+> - Ricette ed Edizioni: formulazioni con prove di assaggio, edizioni validate da
+>   Ricette via REST, tiratura e ricalcolo.
+> - Magazzino e Produzione: ordini, consegne, lotti e piani di produzione.
+> - Tra i servizi: Kafka, con transactional outbox, consumer idempotenti, retry e
+>   dead letter, e gRPC (`Giacenze`). Una consegna ridotta arriva da sola fino
+>   alla tiratura dell'edizione: 600 → 540.
+>
+> Il front-end React ha il back-office di Marco (con il piano di produzione e
+> l'integrazione di un lotto), l'area acquisti di Elena e l'area soci di Giulia
+> (con dati finti finché non ci sono le prenotazioni); è servito da nginx su
 > `http://localhost` ([`frontend/README.md`](frontend/README.md)).
-> Su Minikube girano front-end, gateway, edizioni, ricette e i loro database
-> dietro un Ingress, con NetworkPolicy che isolano database, front-end e gateway
-> ([`k8s/README.md`](k8s/README.md)).
-> Mancano ancora Kafka tra i servizi, gRPC e gli altri servizi su Kubernetes.
+> Su Minikube gira tutto questo, Kafka compreso, dietro un Ingress, con
+> NetworkPolicy che isolano database, front-end, gateway, Kafka e la porta gRPC
+> ([`k8s/README.md`](k8s/README.md)). Le demo:
+> [storia di Marco](docs/demo-storia-marco.md),
+> [storia di Elena](docs/demo-storia-elena.md).
+> Manca ancora la storia di Giulia: prenotazioni e pagamenti, notifiche.
 
 ## Architettura
 
@@ -33,12 +42,18 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
                  └─────┬─────┘                  └─────────────────┘
                        │  (anche su :8080 dall'host, per curl e per il dev server di Vite)
    rete "backend"      │  /api/<servizio>/**  + Authorization: Bearer <JWT GinVault>
- ┌──────────┬──────────┼──────────┬──────────┬───────────┬───────────┐
- edizioni   ricette    produzione magazzino  pagamenti   notifiche   kafka
-  :8081      :8082      :8083      :8084      :8085       :8086      :9092
-   │          │          │          │          │         (NestJS)   (KRaft)
+ ┌──────────┬──────────┼──────────┬──────────┬───────────┐
+ edizioni   ricette    produzione magazzino  pagamenti   notifiche
+  :8081      :8082      :8083      :8084      :8085       :8086
+   │          │          │          │          │         (NestJS)
  edizioni-db ricette-db produzione-db magazzino-db pagamenti-db
    (ognuno su una rete privata condivisa SOLO con il proprio servizio)
+
+ rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione e magazzino
+   topic edizioni.eventi, magazzino.eventi, produzione.eventi (docs/eventi.md)
+
+ gRPC produzione ──▶ magazzino :9084  servizio Giacenze (Disponibilita, RiservaLotto,
+   AnnullaRiserva), deadline 2 s, JWT dell'utente nel metadata (docs/grpc.md)
 ```
 
 | Servizio    | Tecnologia                  | Porta | Database (porta in sviluppo) | `GET /prova` richiede |
@@ -48,7 +63,7 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 | edizioni    | Spring Boot 3.5 / Java 21   | 8081  | `edizioni-db` (5441)         | SOCIO                 |
 | ricette     | Spring Boot 3.5 / Java 21   | 8082  | `ricette-db` (5442)          | DISTILLATORE          |
 | produzione  | Spring Boot 3.5 / Java 21   | 8083  | `produzione-db` (5443)       | DISTILLATORE          |
-| magazzino   | Spring Boot 3.5 / Java 21   | 8084  | `magazzino-db` (5444)        | RESP_ACQUISTI         |
+| magazzino   | Spring Boot 3.5 / Java 21   | 8084 (gRPC 9084) | `magazzino-db` (5444) | RESP_ACQUISTI      |
 | pagamenti   | Spring Boot 3.5 / Java 21   | 8085  | `pagamenti-db` (5445)        | CLIENTE               |
 | notifiche   | NestJS 12 / Node 24         | 8086  | –                            | ADMIN                 |
 | kafka       | Apache Kafka 4.3 (KRaft)    | 9092  | –                            | –                     |
@@ -65,11 +80,12 @@ ginvault/
 │   ├── Dockerfile
 │   └── src/{main,test}/...
 ├── ricette/  produzione/  magazzino/  pagamenti/   # stessa struttura
+├── giacenze-api/                 # modulo Maven condiviso: il contratto gRPC (giacenze.proto)
 ├── gateway/                      # Spring Cloud Gateway: login, sessione, JWT
 ├── notifiche/                    # NestJS
 ├── k8s/                          # manifest Kubernetes (Minikube): vedi k8s/README.md
 ├── frontend/                     # React + Vite, servito da nginx: vedi frontend/README.md
-└── docs/piano.md
+└── docs/                         # piano.md, eventi.md (topic ed eventi), grpc.md, stato-lavori.md, demo
 ```
 
 ## Prerequisiti
@@ -136,12 +152,14 @@ quindi `--wait` termina quando tutto il sistema risponde.
 
 ### Su Kubernetes (Minikube)
 
-Front-end, gateway, edizioni, ricette e i loro database, esposti con un Ingress
-su `http://localhost`: le pagine vanno al front-end (2 repliche), `/api`,
-`/auth`, `/oauth2`, `/login` e `/logout` al gateway. Prerequisiti, avvio,
-spiegazione di ogni oggetto, la **Demo completa** (dal `minikube start` alla
-storia di Marco dal front-end) e le demo d'esame sono in
-[`k8s/README.md`](k8s/README.md).
+Front-end, gateway, edizioni, ricette, magazzino, produzione, i loro database e
+Kafka, esposti con un Ingress su `http://localhost`: le pagine vanno al
+front-end (2 repliche), `/api`, `/auth`, `/oauth2`, `/login` e `/logout` al
+gateway. Prerequisiti, avvio, spiegazione di ogni oggetto, la **Demo completa**
+(dal `minikube start` alla storia di Marco dal front-end) e le demo d'esame sono
+in [`k8s/README.md`](k8s/README.md). La storia di Elena, con gli eventi Kafka e
+le prove di idempotenza e outbox, è in
+[`docs/demo-storia-elena.md`](docs/demo-storia-elena.md).
 
 ## Sicurezza: come funziona
 
@@ -276,7 +294,12 @@ tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sem
 ```
 
 - **Creazione:** una quota per canale (SOCI, BAR, ONLINE), e la somma delle
-  quote deve essere uguale alla tiratura, altrimenti 422.
+  quote deve essere uguale alla tiratura, altrimenti 422. Serve anche
+  l'**origine** della botanica di stagione (`origineBotanica`, es. "Alta Val
+  Varaita (Alpi Cozie)"): l'edizione resta fedele a quella, e Produzione non
+  conta i lotti di un'altra origine. L'edizione creata pubblica
+  `EdizioneCreata` su `edizioni.eventi`, con la stessa transactional outbox
+  di Magazzino (vedi sotto).
 - **Ricalcolo:** `POST /edizioni/{id}/ricalcolo` (solo DISTILLATORE) con
   `{"botanicaDisponibileKg": 10.8}`. Se la tiratura scende:
   - si toglie prima da ONLINE, poi da BAR, **mai da SOCI**;
@@ -288,28 +311,226 @@ tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sem
   ora le crea solo `Edizione.prenota()` nei test. L'endpoint arriverà con la
   storia delle prenotazioni.
 
-**Scelta da discutere:** se la tiratura **sale** (es. arriva altra lavanda),
-oggi tutte le bottiglie in più vanno a ONLINE. Alternative: rimetterle prima
-dove erano state tolte (BAR, poi ONLINE), ripartirle in proporzione, oppure
-lasciarle "da assegnare" e farle decidere a Marco.
+Se la tiratura **sale** (lotto integrato, altra lavanda arrivata), le
+bottiglie in più vanno tutte a ONLINE, fino a 600.
 
-**Evento di dominio `TiraturaRidotta`** (id edizione, tiratura vecchia e
-nuova, quote nuove):
-- lo registra l'aggregato `Edizione` quando la tiratura scende;
-- Spring Data lo pubblica al `save()` (`@DomainEvents`);
-- dopo il commit lo riceve `InoltroTiratureRidotte` (`@TransactionalEventListener`),
-  che per ora lo scrive solo nel log, dentro il processo.
+**Il ricalcolo arriva da solo, da Produzione.** Edizioni consuma
+`ResaRicalcolata` da `produzione.eventi` (consumer group `edizioni`) e
+applica la stessa regola del ricalcolo manuale. Nessuna azione dopo la
+consegna di Elena:
 
-Con la storia di Elena passerà su **Kafka** verso **Notifiche**, che avviserà
-chi aveva prenotato. Per non perdere eventi se Kafka è giù, si potrà usare una
-*transactional outbox*.
+```
+produzione.eventi  ResaRicalcolata 10,8 kg ──▶ 600 → 540 ──▶ edizioni.eventi  TiraturaRidotta
+produzione.eventi  ResaRicalcolata 12 kg   ──▶ 540 → 600 ──▶ edizioni.eventi  TiraturaAumentata
+produzione.eventi  ResaRicalcolata 10,8 kg ──▶ ONLINE e BAR tutte prenotate:
+                                               l'edizione resta com'è ──▶ edizioni.eventi  RicalcoloRifiutato
+```
+
+- `RicalcoloRifiutato` dice perché (`QUOTE_NON_RIDUCIBILI` o
+  `BOTANICA_INSUFFICIENTE`, se i kg non bastano per una bottiglia), con la
+  spiegazione in italiano e le quote con le prenotate. Il messaggio è
+  elaborato lo stesso: un rifiuto non è un errore;
+- gli eventi di dominio (`TiraturaRidotta`, `TiraturaAumentata`,
+  `RicalcoloRifiutato`) li registra l'aggregato `Edizione`, Spring Data li
+  pubblica al `save()` (`@DomainEvents`) e `ScritturaOutbox` li scrive
+  nell'outbox **nello stesso commit** dell'edizione, come `EdizioneCreata`.
+  Hanno la `causa` (il motivo della resa) e l'`eventId` della resa;
+- anche il ricalcolo manuale di Marco pubblica `TiraturaRidotta` o
+  `TiraturaAumentata`; se non si può, resta un 409 per lui e non parte niente;
+- il consumer è **idempotente**, con **retry** (1, 2, 4, 8 s) e **dead
+  letter** `edizioni.dlt`, come quello di Produzione. Una resa per
+  un'edizione che non esiste va subito nel dead letter: l'edizione nasce
+  prima della resa, quindi non arriverà più.
+
+`TiraturaRidotta` la leggerà **Notifiche** (storia di Giulia), per avvisare
+chi aveva prenotato. Formato degli eventi in [docs/eventi.md](docs/eventi.md).
+
+```bash
+# Gli eventi di Edizioni in uscita e le rese già applicate
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select tipo, chiave, pubblicato_il, tentativi from outbox order by creato_il"
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select event_id, tipo, esito, partizione, posizione, elaborato_il from evento_elaborato order by elaborato_il"
+```
+
+## Magazzino: approvvigionamento e transactional outbox
+
+Il subdomain **Approvvigionamento**: Elena (RESP_ACQUISTI) ordina le botaniche
+ai fornitori e registra le consegne. Dal gateway: `/api/magazzino/...`.
+
+| Endpoint | Ruolo | Cosa fa |
+|---|---|---|
+| `POST /ordini` | RESP_ACQUISTI | ordine APERTO: fornitore, botanica, kg, consegna attesa, edizione |
+| `POST /ordini/{id}/consegne` | RESP_ACQUISTI | registra la consegna, anche ridotta: chiude l'ordine, crea il lotto, aggiorna lo storico del fornitore. 201 + `Location` del lotto |
+| `GET /ordini`, `GET /ordini/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | ordini, con la consegna (`ridotta`, `kgMancanti`, `inRitardo`, `giorniDiRitardo`) |
+| `GET /lotti?botanica=lavanda`, `GET /lotti/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | lotti con origine, scadenza, esito qualità, `utilizzabile` |
+| `GET /fornitori`, `GET /fornitori/{id}` | RESP_ACQUISTI, DISTILLATORE, ADMIN | scheda del fornitore: riepilogo (puntuali, in ritardo, ridotte) e storico, dalla consegna più recente |
+
+Regole della consegna (aggregato `OrdineDiAcquisto`):
+- **una consegna per ordine**: quella che arriva chiude l'ordine, anche se
+  ridotta. Una seconda consegna → 409;
+- kg arrivati maggiori di zero e **non più di quelli ordinati** (422);
+- data di consegna non nel futuro, scadenza dopo la consegna (422);
+- *ridotta* = arrivati meno kg degli ordinati; *in ritardo* = consegnata dopo
+  la data attesa. La consegna di Elena è tutte e due: 10,8 kg su 12, sei
+  giorni dopo il 31 luglio;
+- l'**origine** del lotto è quella del fornitore: non si scrive a mano, quindi
+  non ha errori di battitura. È il dato che Produzione confronterà con
+  l'origine richiesta dall'edizione;
+- la `nota` della consegna (es. "pioggia durante la fioritura") finisce nello
+  storico del fornitore.
+
+All'avvio `DatiIniziali` crea, se mancano, i due fornitori della storia
+(Raccoglitori dell'Alta Val Varaita e Campi GinVault) e il **lotto dei campi**:
+2 kg di lavanda di origine diversa, quello che Elena proporrà e Marco rifiuterà.
+Id fissi, in `DatiIniziali.java`.
+
+**Transactional outbox.** Registrare la consegna e pubblicare
+`ConsegnaRegistrata` su Kafka sono due scritture su due sistemi diversi. Se
+fossero separate, un crash o Kafka spento in mezzo lascerebbe una consegna
+senza evento (l'edizione non scende mai a 540) o un evento senza consegna.
+Per questo:
+
+1. nella **stessa transazione** della consegna, `ScritturaOutbox`
+   (`@TransactionalEventListener(phase = BEFORE_COMMIT)`) scrive l'evento,
+   già in JSON, nella tabella `outbox` del database di magazzino. Commit di
+   tutto o di niente: se la riga non si può scrivere, salta anche la consegna;
+2. `PubblicatoreOutbox`, ogni secondo, prende le righe non pubblicate in ordine
+   di `numero`, le manda su Kafka e aspetta la conferma (`acks=all`). Poi
+   segna `pubblicato_il`;
+3. se Kafka non risponde, la riga resta lì con `tentativi` e `ultimo_errore`,
+   e il giro si ferma per non cambiare l'ordine degli eventi. Al giro dopo si
+   riprova, finché Kafka torna. La richiesta HTTP di Elena non aspetta mai Kafka;
+4. garanzia **almeno una volta**: se la conferma si perde, lo stesso evento
+   (stesso `eventId`) può partire due volte. Il consumer di Produzione scarta
+   gli `eventId` già elaborati (vedi sotto).
+
+Un blocco *advisory* di PostgreSQL (`pg_try_advisory_xact_lock`) fa lavorare
+un solo publisher alla volta anche con più repliche di magazzino.
+
+```bash
+# La tabella outbox: cosa è partito, cosa aspetta e perché
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select numero, tipo, chiave, tentativi, pubblicato_il, ultimo_errore from outbox order by numero"
+# Il contenuto di un evento (la busta JSON di docs/eventi.md)
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select jsonb_pretty(messaggio::jsonb) from outbox order by numero desc limit 1"
+```
+
+Prova senza front-end, dalla console del browser dopo il login con un utente in
+`RUOLI_RESP_ACQUISTI` (la funzione `api` è in
+[docs/demo-storia-marco.md](docs/demo-storia-marco.md#1-login-e-console-del-browser)):
+
+```js
+const fornitore = 'f0000000-0000-4000-8000-000000000001';   // Alta Val Varaita
+const ordine = await api('POST', '/api/magazzino/ordini', {
+  fornitoreId: fornitore, botanica: 'lavanda', kgOrdinati: 12,
+  consegnaAttesa: '2026-07-31', edizioneId: crypto.randomUUID() });
+await api('POST', `/api/magazzino/ordini/${ordine.id}/consegne`, {
+  kgArrivati: 10.8, consegnataIl: '2026-08-06', scadenza: '2027-08-31',
+  esitoQualita: 'CONFORME', nota: 'pioggia durante la fioritura' });
+await api('GET', `/api/magazzino/fornitori/${fornitore}`);
+await api('GET', '/api/magazzino/lotti?botanica=lavanda');
+```
+
+Con un `edizioneId` inventato, come qui, Produzione non trova il piano: dopo i
+tentativi la consegna finisce in `produzione.dlt` (vedi
+[Produzione](#produzione-piani-consumer-idempotenti-e-dead-letter)). Con
+l'id di un'edizione vera il piano scende a 10,8 kg.
+
+Per vedere l'outbox al lavoro: `docker compose stop kafka`, registra un'altra
+consegna (risponde 201 lo stesso), guarda la riga in attesa con `tentativi`
+che sale, poi `docker compose start kafka`: dopo qualche secondo la riga ha
+`pubblicato_il` e il messaggio è nel topic. Su Kubernetes la stessa prova è in
+[k8s/README.md](k8s/README.md#transactional-outbox-con-kafka-spento).
+
+## Produzione: piani, consumer idempotenti e dead letter
+
+Produzione non ha moduli da compilare: i suoi **piani di produzione** nascono
+e cambiano con gli eventi. L'unica azione a mano è di Marco: integrare un
+lotto del magazzino, via gRPC. Dal gateway: `/api/produzione/...`.
+
+```
+edizioni.eventi   EdizioneCreata      ──▶ nuovo piano: 12 kg di lavanda, Alta Val Varaita, 20 g, 600 bottiglie
+magazzino.eventi  ConsegnaRegistrata  ──▶ piano a 10,8 kg (540 bottiglie)
+                                      ──▶ produzione.eventi  ResaRicalcolata (kgDisponibili 10,8)
+                                          ──▶ Edizioni: 600 → 540, TiraturaRidotta
+```
+
+| Endpoint | Ruolo | Cosa fa |
+|---|---|---|
+| `GET /piani`, `GET /piani?edizione={id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i piani, dal più recente (o quello di un'edizione) |
+| `GET /piani/{id}` | DISTILLATORE, RESP_ACQUISTI, ADMIN | un piano: kg previsti, disponibili e mancanti, `bottiglieProducibili`, le consegne con i kg utilizzabili e il motivo, i lotti integrati |
+| `GET /piani/{id}/lotti` | DISTILLATORE, RESP_ACQUISTI, ADMIN | i lotti della botanica in magazzino (gRPC `Disponibilita`), con `stessaOrigine`, senza quelli arrivati con le consegne del piano |
+| `POST /piani/{id}/integrazioni` | DISTILLATORE, ADMIN | `{"lottoId", "kg"}`: integra un lotto proposto da Elena. 201, oppure 409 con il motivo (`ORIGINE_DIVERSA`: "origine diversa: l'edizione deve restare fedele alla sua origine"), 503 se il magazzino non risponde in 2 secondi |
+
+Regole del piano (aggregato `PianoDiProduzione`):
+- conta solo la **botanica di stagione** dell'edizione: le altre consegne si ignorano;
+- i kg di una consegna sono **utilizzabili** solo se il lotto è CONFORME e ha
+  l'**origine richiesta** dall'edizione; altrimenti zero;
+- `disponibili = min(previsti, max(0, previsti − Σ ordinati con l'origine richiesta) + Σ utilizzabili)`.
+  Produzione vede un ordine solo quando arriva la consegna: gli ordini ancora
+  aperti sono nei kg previsti non coperti. Esempi:
+  - la consegna di Elena dà `0 + 10,8 = 10,8`;
+  - due ordini da 6 kg, uno consegnato: `6 + 6 = 12`;
+  - 2 kg dai campi (altra origine) non tolgono niente;
+  - un riordino dall'Alta Val Varaita riporta a 12;
+- ogni ordine conta una volta; `ResaRicalcolata` parte solo se il valore cambia;
+- un **lotto integrato** deve avere l'origine richiesta e non superare i kg
+  mancanti. I suoi kg, riservati in magazzino con `RiservaLotto`, si sommano
+  agli utilizzabili: `10,8 + 1,2 = 12`;
+- il **lotto arrivato con una consegna del piano** non si integra
+  (`LOTTO_DELLA_CONSEGNA`): i suoi kg sono già contati. Se la consegna arriva
+  dopo l'integrazione del suo lotto, quel lotto conta una volta sola.
+
+### gRPC con il Magazzino
+
+La partnership Produzione → Magazzino è l'unica chiamata sincrona tra i due
+(dettagli in [docs/grpc.md](docs/grpc.md)):
+
+- il contratto è il modulo condiviso [`giacenze-api`](giacenze-api), con
+  `giacenze.proto`;
+- Magazzino espone il servizio `Giacenze` sulla porta 9084;
+- Produzione lo chiama con una deadline di 2 secondi e inoltra il JWT di Marco
+  nel metadata;
+- la regola dell'origine si applica **prima** della riserva: il lotto dei
+  campi è rifiutato senza toccare il magazzino;
+- se il piano non si salva dopo la riserva, Produzione la annulla con
+  `AnnullaRiserva` (compensazione best effort, con log);
+- su Kubernetes solo produzione può aprire la 9084 (NetworkPolicy);
+- **in Compose la porta 9084 è protetta solo dal JWT.** Non è pubblicata
+  sull'host, ma le reti di Compose non filtrano per porta: ogni container
+  della rete `backend` può collegarsi, e senza un JWT con il ruolo giusto
+  riceve `UNAUTHENTICATED` o `PERMISSION_DENIED`.
+
+```bash
+# Le riserve in magazzino e le integrazioni nei piani
+docker compose exec magazzino-db psql -U magazzino -d magazzino -c "select lotto_id, piano_id, kg, riservata_da, riservata_il from lotto_riserva"
+docker compose exec produzione-db psql -U produzione -d produzione -c "select piano_id, lotto_id, origine, kg, motivo from piano_integrazione"
+```
+
+I consumer (dettagli in [docs/eventi.md](docs/eventi.md#consumer-idempotenza-retry-e-dead-letter)):
+- **idempotenti**: in una transazione sola si controlla la tabella
+  `evento_elaborato`, si applica l'evento, si scrive l'outbox e l'`eventId`.
+  Lo stesso evento rimandato si scarta;
+- **retry con backoff**: 1, 2, 4, 8 secondi. Serve per esempio se la
+  consegna arriva prima dell'edizione (i due topic non hanno un ordine tra loro);
+- **dead letter topic** `produzione.dlt`: ci va il messaggio dopo i tentativi,
+  o subito se riprovare non serve (JSON illeggibile, versione non supportata).
+  Gli header dicono da dove veniva e perché è stato scartato;
+- due listener, uno per topic, 3 consumer ciascuno: i tentativi su
+  `magazzino.eventi` non fermano la lettura di `edizioni.eventi`.
+
+```bash
+# Piani e consegne applicate
+docker compose exec produzione-db psql -U produzione -d produzione -c "select edizione_id, botanica, kg_previsti, kg_disponibili from piano_di_produzione"
+docker compose exec produzione-db psql -U produzione -d produzione -c "select ordine_id, kg_ordinati, kg_arrivati, kg_utilizzabili, motivo from piano_consegna"
+# Gli eventi già elaborati (la difesa contro i doppioni)
+docker compose exec produzione-db psql -U produzione -d produzione -c "select event_id, tipo, topic, partizione, posizione, elaborato_il from evento_elaborato order by elaborato_il"
+```
 
 ## Test
 
 Ogni servizio Spring ha test di sicurezza (401/403/200, token scaduto, firma
 falsa, issuer sbagliato). Il gateway ha test sul flusso BFF: JWT inoltrato,
 header falsi rimossi, pagina di login, JWKS, ruoli.
-Ricette ed Edizioni hanno anche:
+Ricette, Edizioni, Magazzino e Produzione hanno anche:
 - test di dominio;
 - test web (`@WebMvcTest`);
 - test di integrazione con un PostgreSQL vero, avviato da
@@ -317,6 +538,49 @@ Ricette ed Edizioni hanno anche:
 
 In Edizioni la parte di Ricette la fa [WireMock](https://wiremock.org/): un
 server HTTP vero, con cui si provano 404, 409, timeout e il JWT inoltrato.
+
+Magazzino usa anche un **Kafka vero** (`apache/kafka:4.3.0`, come in Compose).
+Il test di integrazione legge il topic con un consumer e verifica chiave, busta
+JSON e partizione. Poi prova l'outbox:
+- con il container di Kafka **in pausa** la consegna risponde 201, e la riga
+  resta in attesa con i tentativi falliti;
+- quando Kafka riprende, l'evento parte da solo;
+- se la riga di outbox non si può scrivere (un trigger di prova la rifiuta),
+  non si salva nemmeno la consegna.
+
+Anche Edizioni ha Kafka nei test: `EdizioneCreata` arriva su `edizioni.eventi`
+dall'outbox. `ResaRicalcolataTest` fa la parte di Produzione scrivendo su
+`produzione.eventi`, e verifica:
+- la consegna di Elena (10,8 kg) porta l'edizione a 540 e `TiraturaRidotta`
+  esce su `edizioni.eventi`; il lotto integrato (12 kg) la riporta a 600 con
+  `TiraturaAumentata`;
+- con ONLINE e BAR tutte prenotate parte `RicalcoloRifiutato` e l'edizione
+  non cambia;
+- la stessa resa rimandata si scarta; il database che rifiuta per un momento
+  fa riprovare; un messaggio illeggibile e una resa per un'edizione che non
+  esiste vanno subito in `edizioni.dlt`.
+
+Produzione fa la parte di Edizioni e Magazzino scrivendo sui loro topic, e
+verifica:
+- la catena: `EdizioneCreata` → piano da 12 kg; `ConsegnaRegistrata` da 10,8 →
+  piano a 10,8 e `ResaRicalcolata` su `produzione.eventi`;
+- **idempotenza**: lo stesso messaggio rimandato, e un messaggio con lo stesso
+  `eventId` ma un altro ordine, non cambiano niente. Il test aspetta che il
+  consumer group abbia superato il loro offset, poi controlla il piano;
+- **retry**: una consegna arrivata prima della sua edizione passa al nuovo tentativo;
+- **dead letter**: un messaggio non JSON e uno in versione 2 ci vanno subito,
+  e la consegna buona dopo di loro passa; una consegna per un'edizione che non
+  esiste ci va dopo i tentativi, nella stessa partizione, con gli header
+  `kafka_dlt-*`.
+
+Il gRPC tra Produzione e Magazzino si prova da tutte e due le parti:
+- `GiacenzeGrpcTest` (magazzino) avvia il server vero su una porta libera e
+  lo chiama con un client come quello di Produzione;
+- `IntegrazioneLottiTest` (produzione) usa un magazzino finto con lo stesso
+  contratto, su una porta vera. Prova il rifiuto per origine diversa, la
+  deadline di 2 secondi, il magazzino lento o spento (503), il JWT inoltrato
+  e la compensazione: se il piano non si salva, la riserva si annulla con
+  `AnnullaRiserva`.
 
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
@@ -326,6 +590,9 @@ container di Testcontainers.
 ```bash
 # PowerShell, dalla cartella ginvault (sostituire "edizioni" con il servizio voluto)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+
+# Magazzino e produzione dipendono da giacenze-api: si monta tutto il repository e lo si installa prima
+docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /repo maven:3.9-eclipse-temurin-21 sh -c 'mvn -B -q -f giacenze-api/pom.xml install && mvn -B -f magazzino/pom.xml test && mvn -B -f produzione/pom.xml test'
 ```
 
 Il volume `ginvault-m2` conserva le dipendenze Maven tra un'esecuzione e l'altra.
@@ -360,9 +627,22 @@ aprire con il *Database tool* di IntelliJ.
 # Stato del quorum KRaft (il nodo 1 è leader e unico votante)
 docker compose exec kafka /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 describe --status
 
-# Elenco dei topic
-docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+# I topic, con partizioni e leader (li crea il servizio kafka-topic, che poi termina)
+docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
+docker compose logs kafka-topic
+
+# I messaggi di un topic, con chiave e partizione (Ctrl+C per uscire)
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic magazzino.eventi --from-beginning --formatter-property print.key=true --formatter-property print.partition=true
+
+# Il consumer group di Produzione: chi legge quale partizione, offset e lag
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
+# Il dead letter topic, con gli header che dicono perché (Ctrl+C per uscire)
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
 ```
+
+Topic, chiavi e formato JSON degli eventi sono in [`docs/eventi.md`](docs/eventi.md).
+I topic esistono solo se li crea `kafka-topic`: la creazione automatica è spenta,
+e un nome sbagliato fa fallire il produttore invece di creare un topic nuovo.
 
 > **Git Bash su Windows:** i percorsi che iniziano con `/` (es. `/opt/kafka/...`)
 > vengono convertiti in percorsi Windows. Anteporre `MSYS_NO_PATHCONV=1` al
@@ -375,6 +655,9 @@ docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server loca
 docker compose exec ricette sh -c "nc -z -w 2 edizioni-db 5432"     # → nc: bad address 'edizioni-db'
 # nginx (front-end) vede solo il gateway: i servizi non sono sulla sua rete
 docker compose exec frontend sh -c "nc -z -w 2 edizioni 8081"       # → nc: bad address 'edizioni'
+# Kafka lo vedono solo i servizi che usano gli eventi (rete kafka-net)
+docker compose exec ricette sh -c "nc -z -w 2 kafka 9092"           # → nc: bad address 'kafka'
+docker compose exec edizioni sh -c "nc -z -w 2 kafka 9092 && echo raggiungibile"   # → raggiungibile
 # Un servizio chiamato senza passare dal gateway (quindi senza JWT) rifiuta la richiesta
 docker compose exec gateway sh -c "wget -S -qO /dev/null http://edizioni:8081/me"   # → 401
 ```
@@ -382,7 +665,9 @@ docker compose exec gateway sh -c "wget -S -qO /dev/null http://edizioni:8081/me
 ## Sviluppo in IntelliJ
 
 Ogni servizio è un progetto Maven a sé. Per aprirlo: tasto destro su
-`<servizio>/pom.xml` → *Add as Maven Project*.
+`<servizio>/pom.xml` → *Add as Maven Project*. Per magazzino e produzione va
+aggiunto anche `giacenze-api/pom.xml`, e installato una volta (*Maven* →
+`giacenze-api` → *Lifecycle* → `install`) prima di compilarli.
 
 Un servizio avviato da IntelliJ usa i default di `application.yml`:
 - il suo DB su `localhost:544x`, esposto da `docker-compose.override.yml`;
@@ -402,6 +687,19 @@ avviato in IntelliJ.
   `VerificaJwtService`, e da controllare l'header `Origin`.
 - **Aumento di tiratura tutto su ONLINE:** scelta provvisoria, da discutere (vedi
   [Edizione: tiratura, quote e ricalcolo](#edizione-tiratura-quote-e-ricalcolo)).
+- **Outbox (magazzino, edizioni, produzione) ed eventi elaborati:**
+  - le righe pubblicate restano nella tabella `outbox`, e quelle di
+    `evento_elaborato` in Produzione. Andranno cancellate dopo qualche giorno
+    (Kafka tiene i messaggi 7), con un job periodico;
+  - un evento che non può partire mai (per esempio un topic che non esiste)
+    blocca quelli dopo di lui, per non cambiarne l'ordine. Si vede da
+    `tentativi` e `ultimo_errore` nella tabella `outbox`.
+- **gRPC Produzione → Magazzino** (vedi [docs/grpc.md](docs/grpc.md#limiti-noti)):
+  - se il piano non si salva dopo la riserva e anche `AnnullaRiserva`
+    fallisce, i kg restano riservati finché Marco non ripete la richiesta
+    (idempotente). C'è un log ERROR, ma nessun job che riprova da solo;
+  - il bilanciamento è per connessione, e va bene con una replica;
+  - in Compose la porta 9084 non è filtrata per porta: la protegge solo il JWT.
 - **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
   [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
   Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.

@@ -30,14 +30,20 @@ public record Tiratura(@Column(name = "tiratura", nullable = false) int bottigli
      * @throws EdizioneNonValida se con quei kg non si riempie nemmeno una bottiglia
      */
     public static Tiratura da(BigDecimal kgDisponibili, BigDecimal grammiPerBottiglia) {
-        BigDecimal possibili = kgDisponibili.movePointRight(3)          // kg -> grammi
-                .divide(grammiPerBottiglia, 0, RoundingMode.DOWN);       // bottiglie intere
-        if (possibili.signum() == 0) {
+        int possibili = bottigliePossibili(kgDisponibili, grammiPerBottiglia);
+        if (possibili == 0) {
             throw new EdizioneNonValida("Con " + kgDisponibili.stripTrailingZeros().toPlainString()
                     + " kg di botanica di stagione non si riempie nemmeno una bottiglia: ne servono "
                     + grammiPerBottiglia.stripTrailingZeros().toPlainString() + " g per bottiglia");
         }
-        return new Tiratura(possibili.min(BigDecimal.valueOf(MASSIMA)).intValueExact());
+        return new Tiratura(possibili);
+    }
+
+    /** min(600, grammi / grammi per bottiglia), per difetto: anche 0, a differenza di una Tiratura. */
+    public static int bottigliePossibili(BigDecimal kgDisponibili, BigDecimal grammiPerBottiglia) {
+        BigDecimal possibili = kgDisponibili.movePointRight(3)          // kg -> grammi
+                .divide(grammiPerBottiglia, 0, RoundingMode.DOWN);       // bottiglie intere
+        return possibili.max(BigDecimal.ZERO).min(BigDecimal.valueOf(MASSIMA)).intValueExact();
     }
 
     public boolean minoreDi(Tiratura altra) {

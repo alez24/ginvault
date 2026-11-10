@@ -1,0 +1,55 @@
+# =============================================================================
+# NetworkPolicy: chi può collegarsi a Kafka.
+#
+# Con Docker Compose Kafka sta su una rete sua, kafka-net, condivisa solo con
+# i servizi che pubblicano o consumano eventi. Qui lo stesso isolamento lo dà
+# una label: entrano sulla 9092 solo i pod con
+#
+#     ginvault/usa-kafka: "true"
+#
+# cioè il Job che crea i topic e, nei passi successivi, i servizi che usano
+# Kafka (magazzino, produzione, edizioni). Il gateway, il front-end, ricette e
+# i database non la hanno: per loro Kafka non risponde.
+#
+# Una label dedicata e non "component: microservizio" (quella della policy del
+# gateway): ricette è un microservizio ma non usa Kafka, e non deve
+# raggiungerlo. Ogni pod riceve solo gli accessi che gli servono.
+#
+# La porta 9093 (controller KRaft) la usa solo Kafka stesso: il broker parla
+# con il suo controller attraverso il nome kafka-0.kafka, cioè il proprio IP.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-solo-da-chi-usa-kafka
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: broker
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  policyTypes:
+    - Ingress
+  ingress:
+    # 1) I client: Job dei topic e servizi con la label
+    - from:
+        - podSelector:
+            matchLabels:
+              ginvault/usa-kafka: "true"
+      ports:
+        - protocol: TCP
+          port: 9092
+    # 2) Kafka con se stesso: il broker verso il controller (e, con più nodi,
+    #    i broker tra loro)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kafka
+      ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 9093

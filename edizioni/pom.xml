@@ -70,6 +70,15 @@
             <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
         </dependency>
 
+        <!--
+            Spring for Apache Kafka: il KafkaTemplate con cui il publisher dell'outbox
+            manda EdizioneCreata su edizioni.eventi. Versione gestita dal parent.
+        -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
         <!-- Test: JUnit 5, AssertJ, MockMvc... -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -83,9 +92,9 @@
         </dependency>
 
         <!--
-            Testcontainers: nei test di integrazione avvia un PostgreSQL VERO in un
-            container Docker usa-e-getta (serve Docker in esecuzione).
-            @ServiceConnection collega da solo il datasource al container.
+            Testcontainers: nei test di integrazione avvia un PostgreSQL e un Kafka
+            VERI in container Docker usa-e-getta (serve Docker in esecuzione).
+            @ServiceConnection collega da soli datasource e Kafka ai container.
             Versioni gestite dal parent di Spring Boot.
         -->
         <dependency>
@@ -101,6 +110,18 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Awaitility: "aspetta finché l'evento è su Kafka" senza sleep fissi -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
 

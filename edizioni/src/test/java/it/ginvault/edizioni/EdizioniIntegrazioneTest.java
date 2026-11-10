@@ -12,6 +12,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -19,9 +20,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.ResponseDefinitionBuilder;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -30,19 +35,24 @@ import com.jayway.jsonpath.JsonPath;
 import it.ginvault.edizioni.dominio.TiraturaRidotta;
 import it.ginvault.edizioni.sicurezza.GatewayDiProva;
 
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.system.CapturedOutput;
-import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.event.ApplicationEvents;
@@ -51,8 +61,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.KafkaContainer;
 
 /**
  * Edizioni dall'inizio alla fine: creazione validata da Ricette via REST e
@@ -62,18 +71,50 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  *    con il JSON di Ricette (FormulazioneVista) o con errori e ritardi.
  * Si verificano le risposte a Marco, le chiamate fatte a Ricette (con il suo
  * JWT inoltrato), cosa finisce, o non finisce, nel database e l'evento
- * TiraturaRidotta (registrato con @RecordApplicationEvents, log catturato).
+ * TiraturaRidotta (registrato con @RecordApplicationEvents e scritto nell'outbox).
+ * Con un Kafka vero: EdizioneCreata passa dall'outbox a edizioni.eventi, e
+ * un'edizione non creata non lascia eventi.
  */
-@SpringBootTest
+@SpringBootTest(properties = "edizioni.outbox.intervallo-ms=200")
 @AutoConfigureMockMvc
-@Testcontainers
 @RecordApplicationEvents
-@ExtendWith(OutputCaptureExtension.class)
 class EdizioniIntegrazioneTest {
 
-    @Container
-    @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine");
+    private static final String TOPIC = "edizioni.eventi";
+    private static final String ORIGINE = "Alta Val Varaita (Alpi Cozie)";
+
+    /**
+     * Container come bean: Spring li ferma DOPO il publisher dell'outbox e il
+     * producer Kafka (con @Container si fermerebbero a fine classe, mentre il
+     * contesto in cache, con il suo publisher, resta vivo fino alla fine dei test).
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    static class ConfigurazioneDiProva {
+
+        @Bean
+        @ServiceConnection
+        PostgreSQLContainer<?> postgres() {
+            return new PostgreSQLContainer<>("postgres:17-alpine");
+        }
+
+        @Bean
+        @ServiceConnection
+        KafkaContainer kafka() {
+            return new KafkaContainer("apache/kafka:4.3.0");
+        }
+
+        /** Il topic come lo crea il Job kafka-topic: 3 partizioni. */
+        @Bean
+        NewTopic edizioniEventi() {
+            return TopicBuilder.name(TOPIC).partitions(3).replicas(1).build();
+        }
+
+        /** Quello che legge il consumer delle rese (provato in ResaRicalcolataTest): qui resta vuoto. */
+        @Bean
+        NewTopic produzioneEventi() {
+            return TopicBuilder.name("produzione.eventi").partitions(3).replicas(1).build();
+        }
+    }
 
     private static final GatewayDiProva GATEWAY = new GatewayDiProva();
     private static final WireMockServer RICETTE = new WireMockServer(WireMockConfiguration.options().dynamicPort());
@@ -102,6 +143,12 @@ class EdizioniIntegrazioneTest {
 
     @Autowired
     private JdbcTemplate jdbc;
+
+    @Autowired
+    private KafkaContainer kafka;
+
+    @Autowired
+    private ObjectMapper json;
 
     /** Gli eventi pubblicati durante il test in corso. */
     @Autowired
@@ -154,6 +201,48 @@ class EdizioniIntegrazioneTest {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + GATEWAY.token("ADMIN")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.quote.SOCI").value(300));
+    }
+
+    @Test
+    void lEdizioneCreataArrivaSuKafkaDallOutbox() throws Exception {
+        String edizione = edizioneDa600Bottiglie();
+
+        // Nell'outbox una riga, con chiave = id dell'edizione, poi pubblicata
+        UUID eventId = jdbc.queryForObject("select event_id from outbox where chiave = ? and tipo = 'EdizioneCreata'",
+                UUID.class, edizione);
+        await().atMost(Duration.ofSeconds(20)).until(() -> jdbc.queryForObject(
+                "select pubblicato_il is not null from outbox where event_id = ?", Boolean.class, eventId));
+
+        ConsumerRecord<String, String> messaggio = leggiDaKafka(eventId).getFirst();
+        assertThat(messaggio.key()).isEqualTo(edizione);
+        assertThat(messaggio.headers().lastHeader("__TypeId__")).isNull();
+        JsonNode busta = json.readTree(messaggio.value());
+        assertThat(busta.path("tipo").asText()).isEqualTo("EdizioneCreata");
+        assertThat(busta.path("versione").asInt()).isEqualTo(1);
+        JsonNode payload = busta.path("payload");
+        assertThat(payload.path("edizioneId").asText()).isEqualTo(edizione);
+        assertThat(payload.path("formulazione").path("id").asText()).isEqualTo(formulazione.toString());
+        assertThat(payload.path("formulazione").path("versione").asInt()).isEqualTo(2);
+        assertThat(payload.path("botanicaDiStagione").asText()).isEqualTo("lavanda");
+        assertThat(payload.path("grammiPerBottiglia").decimalValue()).isEqualByComparingTo("20");
+        assertThat(payload.path("origineBotanica").asText()).isEqualTo(ORIGINE);
+        assertThat(payload.path("kgPrevisti").decimalValue()).isEqualByComparingTo("12");
+        assertThat(payload.path("tiratura").asInt()).isEqualTo(600);
+        assertThat(payload.path("quote").path("SOCI").asInt()).isEqualTo(300);
+    }
+
+    @Test
+    void senzaOrigineRisponde400ERicetteNonVieneChiamato() throws Exception {
+        String senzaOrigine = nuovaEdizioneJson(2).replace("\"origineBotanica\": \"" + ORIGINE + "\",", "");
+
+        mvc.perform(MockMvcRequestBuilders.post("/edizioni")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + JWT_DI_MARCO)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(senzaOrigine))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.campi[0].campo").value("origineBotanica"));
+
+        RICETTE.verify(0, anyRequestedFor(anyUrl()));
     }
 
     @Test
@@ -288,7 +377,7 @@ class EdizioniIntegrazioneTest {
     // ---------------------------------------------------------------- ricalcolo
 
     @Test
-    void laLavandaArrivaScarsaEDa600SiScendeA540SenzaChiamareRicette(CapturedOutput log) throws Exception {
+    void laLavandaArrivaScarsaEDa600SiScendeA540SenzaChiamareRicette() throws Exception {
         String edizione = edizioneDa600Bottiglie();
         RICETTE.resetAll();   // da qui Ricette non serve: i grammi per bottiglia sono nell'Edizione
 
@@ -305,14 +394,19 @@ class EdizioniIntegrazioneTest {
                 .isEqualTo(540);
         assertThat(jdbc.queryForObject("select bottiglie from quota where edizione_id = ? and canale = 'ONLINE'",
                 Integer.class, id)).isEqualTo(90);
-        // Evento di dominio pubblicato (in-process) e loggato dopo il commit
+        // Evento di dominio pubblicato (in-process) e scritto nell'outbox nello stesso commit
         assertThat(eventi.stream(TiraturaRidotta.class)).singleElement().satisfies(evento -> {
             assertThat(evento.edizioneId()).isEqualTo(id);
             assertThat(evento.tiraturaVecchia()).isEqualTo(600);
             assertThat(evento.tiraturaNuova()).isEqualTo(540);
+            assertThat(evento.causa()).isEqualTo("ricalcolo manuale del distillatore");
         });
-        assertThat(log).contains("Evento TiraturaRidotta: edizione " + edizione
-                + " da 600 a 540 bottiglie, nuove quote {SOCI=300, BAR=150, ONLINE=90}");
+        JsonNode busta = json.readTree(jdbc.queryForObject(
+                "select messaggio from outbox where tipo = 'TiraturaRidotta' and chiave = ?", String.class, edizione));
+        assertThat(busta.at("/payload/tiraturaPrima").asInt()).isEqualTo(600);
+        assertThat(busta.at("/payload/tiratura").asInt()).isEqualTo(540);
+        assertThat(busta.at("/payload/quote/ONLINE").asInt()).isEqualTo(90);
+        assertThat(busta.at("/payload/resaRicalcolataId").isNull()).isTrue();
     }
 
     @Test
@@ -327,6 +421,9 @@ class EdizioniIntegrazioneTest {
         assertThat(jdbc.queryForObject("select tiratura from edizione where id = ?", Integer.class,
                 UUID.fromString(edizione))).isEqualTo(600);
         assertThat(eventi.stream(TiraturaRidotta.class)).isEmpty();
+        // Il 409 del ricalcolo manuale non è un RicalcoloRifiutato: quello nasce solo dalle rese di Produzione
+        assertThat(jdbc.queryForObject("select count(*) from outbox where chiave = ? and tipo <> 'EdizioneCreata'",
+                Integer.class, edizione)).isZero();
     }
 
     // ---------------------------------------------------------------- elenco
@@ -394,7 +491,7 @@ class EdizioniIntegrazioneTest {
     private String nuovaEdizioneJson(int versione) {
         return """
                 {"formulazione": {"id": "%s", "versione": %d},
-                 "botanicaDisponibileKg": 12,
+                 "botanicaDisponibileKg": 12, "origineBotanica": "Alta Val Varaita (Alpi Cozie)",
                  "quote": {"SOCI": 300, "BAR": 150, "ONLINE": 150}}
                 """.formatted(formulazione, versione);
     }
@@ -410,6 +507,33 @@ class EdizioniIntegrazioneTest {
     private void nessunUtilizzoENessunaEdizione() {
         RICETTE.verify(0, postRequestedFor(urlEqualTo("/formulazioni/" + formulazione + "/utilizzo")));
         assertThat(edizioniCon(formulazione)).isZero();
+        // ...e nessun EdizioneCreata nell'outbox: un'edizione non creata non si annuncia
+        assertThat(jdbc.queryForObject("select count(*) from outbox where tipo = 'EdizioneCreata'"
+                + " and messaggio::jsonb -> 'payload' -> 'formulazione' ->> 'id' = ?", Integer.class,
+                formulazione.toString())).isZero();
+    }
+
+    /** Legge edizioni.eventi dall'inizio, con un consumer group nuovo, finché trova l'evento. */
+    private List<ConsumerRecord<String, String>> leggiDaKafka(UUID eventId) {
+        Map<String, Object> configurazione = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
+                ConsumerConfig.GROUP_ID_CONFIG, "test-" + UUID.randomUUID(),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        List<ConsumerRecord<String, String>> trovati = new ArrayList<>();
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(configurazione)) {
+            consumer.subscribe(List.of(TOPIC));
+            await().atMost(Duration.ofSeconds(20)).pollInSameThread().until(() -> {
+                consumer.poll(Duration.ofMillis(500)).forEach(messaggio -> {
+                    if (messaggio.value().contains(eventId.toString())) {
+                        trovati.add(messaggio);
+                    }
+                });
+                return !trovati.isEmpty();
+            });
+        }
+        return trovati;
     }
 
     private int edizioniCon(UUID formulazioneId) {

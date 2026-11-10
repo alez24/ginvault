@@ -1,0 +1,306 @@
+# =============================================================================
+# kafka: il broker degli eventi di GinVault, Kafka 4.3 in modalità KRaft.
+#
+# Tre oggetti:
+#   1) Service headless -> nome DNS stabile del pod: kafka-0.kafka
+#   2) StatefulSet      -> UN pod, kafka-0, con il suo disco (PVC)
+#   3) Job              -> crea i topic e termina
+#
+# Stessa configurazione di docker-compose.yml (un nodo che fa da broker e da
+# controller, niente ZooKeeper), con tre differenze dovute a Kubernetes:
+# indirizzo annunciato ai client, probe TCP e limiti di memoria.
+# Il contratto degli eventi (topic, chiavi, formato JSON) è in docs/eventi.md.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1) Service HEADLESS (clusterIP: None). Un Service normale ha un suo IP e
+#    smista le connessioni tra i pod; uno headless non ha IP: il nome DNS
+#    "kafka" risponde direttamente con l'IP del pod, e ogni pod dello
+#    StatefulSet ha anche un nome suo: kafka-0.kafka.ginvault.svc.cluster.local.
+#    A Kafka serve proprio questo: il client si collega a "kafka:9092", il
+#    broker gli risponde "per questa partizione parla con kafka-0.kafka..." e il
+#    client deve poter raggiungere QUEL broker, non uno qualsiasi.
+#
+#    publishNotReadyAddresses: il nome del pod esiste nel DNS anche prima che
+#    il pod sia Ready. Kafka, all'avvio, deve collegarsi al proprio controller
+#    con quel nome: senza, aspetterebbe di essere Ready per diventare Ready.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: broker
+    app.kubernetes.io/part-of: ginvault
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: client
+      port: 9092
+      targetPort: client
+    - name: controller
+      port: 9093
+      targetPort: controller
+
+---
+# -----------------------------------------------------------------------------
+# 2) StatefulSet. A differenza di un Deployment:
+#    - i pod hanno un nome stabile e ordinato (kafka-0, kafka-1...) invece di un
+#      suffisso casuale: è il nome con cui il broker si annuncia ai client;
+#    - ogni pod ha il SUO PersistentVolumeClaim, creato da volumeClaimTemplates
+#      (dati-kafka-0): se il pod viene ricreato, ritrova lo stesso disco, con i
+#      topic e i messaggi;
+#    - cancellare lo StatefulSet NON cancella i PVC: i dati restano finché non
+#      si cancella il PVC a mano.
+#    Una sola replica: con più broker servirebbero node id diversi per ogni pod
+#    e un quorum di controller (3 nodi), troppo per gli 8 GB di Minikube.
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/component: broker
+    app.kubernetes.io/part-of: ginvault
+spec:
+  # Il Service headless che dà il nome DNS ai pod (kafka-0.kafka)
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/component: broker
+        app.kubernetes.io/part-of: ginvault
+    spec:
+      # Qui serve davvero: l'immagine trasforma ogni variabile KAFKA_* in una
+      # riga di configurazione, e Kubernetes inietterebbe KAFKA_PORT,
+      # KAFKA_SERVICE_HOST... per il Service "kafka"
+      enableServiceLinks: false
+
+      # Allo stop Kafka chiude i file e passa la guida delle partizioni: gli
+      # servono più dei 30 s di default
+      terminationGracePeriodSeconds: 60
+
+      # L'immagine gira come "appuser", un nome e non un numero: per
+      # runAsNonRoot il kubelet vuole l'uid esplicito (1000 = appuser).
+      # fsGroup: i file del volume appartengono al gruppo 1000.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: kafka
+          image: apache/kafka:4.3.0     # stessa immagine di docker-compose.yml
+          ports:
+            - name: client
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+          env:
+            # Nome del pod e namespace, letti da Kubernetes ("downward API"),
+            # per comporre l'indirizzo annunciato più sotto con $(...)
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+            # --- KRaft: un nodo che fa da broker e da controller ---
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: broker,controller
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: 1@kafka-0.kafka.$(POD_NAMESPACE).svc.cluster.local:9093
+
+            # --- Listener ---
+            - name: KAFKA_LISTENERS
+              value: PLAINTEXT://:9092,CONTROLLER://:9093
+            # Con Compose era "kafka:9092"; qui il nome del POD, che non cambia
+            # anche se il pod viene ricreato con un altro IP
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: PLAINTEXT://$(POD_NAME).kafka.$(POD_NAMESPACE).svc.cluster.local:9092
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+            # --- Un solo nodo: i topic interni con una replica ---
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+
+            # --- Topic solo dal Job, con 3 partizioni (vedi docker-compose.yml) ---
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+
+            # --- Memoria: heap al massimo 512 MB (il default è 1 GB fisso) ---
+            - name: KAFKA_HEAP_OPTS
+              value: -Xmx512m
+
+            # --- Storage ---
+            # Una SOTTOcartella del volume: Kafka tratta ogni cartella che trova
+            # come una partizione, e alcuni dischi contengono già "lost+found"
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data/kraft-logs
+            - name: CLUSTER_ID
+              value: KW4Oo2dGSAeJoAiERBOALA
+          volumeMounts:
+            - name: dati
+              mountPath: /var/lib/kafka/data
+
+          # Probe TCP sulla porta dei client: è aperta quando il broker accetta
+          # connessioni. Il controllo di Compose (kafka-broker-api-versions.sh)
+          # avvia una JVM a ogni esecuzione: qui conterebbe nel limite di
+          # memoria del container, ogni 10 secondi.
+          startupProbe:
+            tcpSocket:
+              port: client
+            periodSeconds: 5
+            failureThreshold: 36        # fino a 3 minuti per partire
+          readinessProbe:
+            tcpSocket:
+              port: client
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: client
+            periodSeconds: 20
+            failureThreshold: 3
+
+          # Heap 512 MB + memoria della JVM fuori dall'heap (classi, thread,
+          # buffer di rete). Nessun limite di CPU, come per gli altri pod.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 640Mi
+            limits:
+              memory: 1Gi
+
+          # L'immagine scrive la configurazione in /opt/kafka/config all'avvio:
+          # niente readOnlyRootFilesystem, ma nessun privilegio
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+  # Un PVC per ogni pod: kafka-0 -> dati-kafka-0 (1 GiB, StorageClass standard)
+  volumeClaimTemplates:
+    - metadata:
+        name: dati
+        labels:
+          app.kubernetes.io/name: kafka
+          app.kubernetes.io/component: broker
+          app.kubernetes.io/part-of: ginvault
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+
+---
+# -----------------------------------------------------------------------------
+# 3) Job: un pod che esegue un compito e TERMINA (stato Completed), invece di
+#    restare acceso come quelli di un Deployment. Crea i tre topic con 3
+#    partizioni; --if-not-exists lo rende ripetibile: i topic che esistono già
+#    non vengono toccati.
+#
+#    ttlSecondsAfterFinished: un'ora dopo la fine Kubernetes cancella il Job (e
+#    il suo pod). Il "kubectl apply -k k8s/" successivo lo ricrea e il controllo
+#    si ripete. Serve anche perché il pod di un Job non si può modificare: con
+#    il Job ancora presente, un cambiamento qui sotto farebbe fallire l'apply
+#    (rimedio: kubectl delete job kafka-topic -n ginvault).
+#
+#    La label ginvault/usa-kafka lascia passare il pod dalla NetworkPolicy di
+#    Kafka (networkpolicy-kafka.yaml).
+# -----------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topic
+  labels:
+    app.kubernetes.io/name: kafka-topic
+    app.kubernetes.io/component: job
+    app.kubernetes.io/part-of: ginvault
+spec:
+  ttlSecondsAfterFinished: 3600
+  # Se il comando fallisce, al massimo 4 nuovi tentativi (con attesa crescente)
+  backoffLimit: 4
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka-topic
+        app.kubernetes.io/component: job
+        app.kubernetes.io/part-of: ginvault
+        ginvault/usa-kafka: "true"
+    spec:
+      # Never: un tentativo fallito resta visibile come pod in Error, e il Job
+      # ne crea un altro
+      restartPolicy: Never
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: crea-topic
+          image: apache/kafka:4.3.0
+          env:
+            - name: TOPIC
+              # produzione.dlt ed edizioni.dlt: i dead letter topic di Produzione e di Edizioni (docs/eventi.md)
+              value: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+            - name: PARTIZIONI
+              value: "3"
+            - name: KAFKA_HEAP_OPTS
+              value: -Xmx128m
+          # Il Job parte insieme al broker: prima aspetta che risponda (fino a
+          # circa 3 minuti), poi crea i topic e ne stampa la descrizione
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              K=/opt/kafka/bin/kafka-topics.sh
+              for i in $(seq 1 60); do
+                $K --bootstrap-server kafka:9092 --list > /dev/null 2>&1 && break
+                echo "Kafka non risponde ancora, riprovo tra 3 s"
+                sleep 3
+              done
+              for t in $TOPIC; do
+                $K --bootstrap-server kafka:9092 --create --if-not-exists \
+                  --topic "$t" --partitions "$PARTIZIONI" --replication-factor 1
+              done
+              $K --bootstrap-server kafka:9092 --describe
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

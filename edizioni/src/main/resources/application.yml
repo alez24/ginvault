@@ -5,7 +5,7 @@
 #   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
 #     su localhost:5441, gateway su localhost:8080)
 #   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
-#     container (edizioni-db:5432, gateway:8080)
+#     container (edizioni-db:5432, gateway:8080, kafka:9092)
 
 spring:
   application:
@@ -30,6 +30,54 @@ spring:
       # Elenco delle edizioni: le quote si caricano a blocchi di 50 edizioni
       # invece che con una query per edizione (il problema "N+1").
       hibernate.default_batch_fetch_size: 50
+
+  # Kafka:
+  #  - PUBBLICARE: EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
+  #    RicalcoloRifiutato su edizioni.eventi, dalla tabella outbox come in
+  #    Magazzino: se Kafka è giù l'evento aspetta nella tabella (PubblicatoreOutbox);
+  #  - LEGGERE: ResaRicalcolata da produzione.eventi (ConsumerEventi), con
+  #    consumer idempotente, retry e dead letter edizioni.dlt come in Produzione.
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+    producer:
+      client-id: edizioni
+      # Chiave e valore come testo: il valore è il JSON della busta, già scritto
+      # dall'outbox (nessun header __TypeId__, docs/eventi.md)
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        # Con Kafka giù il publisher rinuncia dopo pochi secondi e riprova al giro dopo
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 4000
+        # Dopo un riavvio di kafka-0 (IP nuovo) non aspettare 30 s sul vecchio indirizzo
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+    consumer:
+      client-id: edizioni
+      # Il consumer group: le partizioni di produzione.eventi si dividono tra le
+      # repliche di edizioni, e Kafka ricorda per il gruppo fin dove si è letto
+      group-id: edizioni
+      # Alla prima partenza (nessun offset salvato per il gruppo) si legge dal
+      # primo messaggio: nessuna resa pubblicata prima di Edizioni va persa
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # L'offset lo salva Spring, solo DOPO che il messaggio è stato elaborato
+      # (e il database ha fatto commit)
+      enable-auto-commit: false
+      properties:
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+    listener:
+      # Offset salvato dopo ogni messaggio elaborato: dopo una caduta al più uno
+      # si rielabora, e lo scarta evento_elaborato
+      ack-mode: record
+      # 3 consumer, uno per partizione: i tentativi su una partizione non
+      # fermano le altre due
+      concurrency: 3
 
   security:
     oauth2:
@@ -68,6 +116,27 @@ ricette:
   # Sia per aprire la connessione sia per aspettare la risposta: oltre -> 503.
   # Il circuit breaker vero arriverà con Istio (configurazione della mesh).
   timeout: 2s
+
+edizioni:
+  consumer:
+    # Messaggio non elaborato (es. database occupato): nuovi tentativi dopo 1,
+    # 2, 4 e 8 secondi, poi il messaggio va in edizioni.dlt (ConfigurazioneKafka)
+    tentativi: 4
+    attesa-iniziale: 1s
+    attesa-massima: 8s
+  outbox:
+    # Ogni quanti millisecondi il publisher guarda se ci sono eventi da mandare
+    intervallo-ms: 1000
+    # Quanti eventi al massimo per giro
+    lotto: 50
+    # Quanto aspettare la conferma di Kafka per un evento, oltre -> nuovo tentativo
+    attesa-conferma: 5s
+
+logging:
+  level:
+    # Il WARN di PubblicatoreOutbox basta (al primo tentativo fallito, poi ogni
+    # 30): senza questa riga Spring Kafka scriverebbe un ERROR a ogni invio fallito
+    org.springframework.kafka.support.LoggingProducerListener: off
 
 management:
   endpoints:

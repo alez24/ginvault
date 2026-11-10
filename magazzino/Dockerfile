@@ -7,6 +7,17 @@
 
 # ---------- Stage 1: build ----------
 FROM maven:3.9-eclipse-temurin-21 AS build
+
+# Il contratto gRPC condiviso (modulo giacenze-api) sta FUORI da questa
+# cartella: arriva da un secondo "build context" con nome, giacenze-api.
+#   docker build --build-context giacenze-api=giacenze-api -t ... magazzino
+#   Compose: additional_contexts in docker-compose.yml
+# Si installa nel repository Maven della cache, dove lo trova la build sotto.
+WORKDIR /giacenze-api
+COPY --from=giacenze-api pom.xml .
+COPY --from=giacenze-api src ./src
+RUN --mount=type=cache,target=/root/.m2 mvn -B install
+
 WORKDIR /workspace
 
 COPY pom.xml .
@@ -31,8 +42,9 @@ COPY --from=build /workspace/target/*.jar app.jar
 
 USER spring
 
-# Solo documentazione: la porta su cui ascolta l'app (server.port)
-EXPOSE 8084
+# Solo documentazione: le porte su cui ascolta l'app
+# (server.port per HTTP, magazzino.grpc.porta per gRPC)
+EXPOSE 8084 9084
 
 # Forma "exec" (array JSON): java è il processo PID 1 e riceve direttamente
 # i segnali di stop (SIGTERM) -> spegnimento pulito con docker stop

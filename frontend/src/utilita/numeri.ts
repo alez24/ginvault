@@ -38,8 +38,57 @@ export function differenza(valore: number): string {
   return valore > 0 ? `+${numero(valore)}` : `−${numero(-valore)}`;
 }
 
+/** Le date senza ora del magazzino ("2026-08-06"): si leggono e si scrivono in UTC, così non cambiano giorno col fuso. */
+const SOLO_GIORNO = /^\d{4}-\d{2}-\d{2}$/;
+const FORMATO_GIORNO_UTC = new Intl.DateTimeFormat('it-IT', {
+  day: 'numeric',
+  month: 'long',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
+
+/** "5 novembre 2026", da un istante ("2026-11-05T10:00:00Z") o da un giorno ("2026-11-05"). */
 export function data(iso: string): string {
-  return FORMATO_DATA.format(new Date(iso));
+  return SOLO_GIORNO.test(iso) ? FORMATO_GIORNO_UTC.format(new Date(`${iso}T00:00:00Z`)) : FORMATO_DATA.format(new Date(iso));
+}
+
+/** Oggi a Roma, come lo conta il magazzino: "2026-11-10". */
+export function oggi(adesso: Date = new Date()): string {
+  const parti = new Intl.DateTimeFormat('it-IT', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Europe/Rome',
+  }).formatToParts(adesso);
+  const parte = (tipo: Intl.DateTimeFormatPartTypes) => parti.find((p) => p.type === tipo)?.value ?? '';
+  return `${parte('year')}-${parte('month')}-${parte('day')}`;
+}
+
+/** Un giorno spostato di qualche giorno: ("2026-08-06", 1) -> "2026-08-07". */
+export function giornoDopo(giorno: string, giorni: number): string {
+  const d = new Date(`${giorno}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + giorni);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Giorni da un giorno all'altro: ("2026-07-31", "2026-08-06") -> 6. Negativo se il secondo viene prima. */
+export function giorniTra(da: string, a: string): number {
+  return Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${da}T00:00:00Z`)) / 86_400_000);
+}
+
+/** È un giorno vero nel formato "AAAA-MM-GG" (niente 31 febbraio). */
+export function giornoValido(testo: string): boolean {
+  return SOLO_GIORNO.test(testo) && new Date(`${testo}T00:00:00Z`).toISOString().startsWith(testo);
+}
+
+/** "10,8 kg". */
+export function kg(valore: number): string {
+  return `${numero(valore)} kg`;
+}
+
+/** "6 giorni", "1 giorno". */
+export function giorni(n: number): string {
+  return n === 1 ? '1 giorno' : `${numero(n)} giorni`;
 }
 
 /** La data con l'articolo: "il 5 novembre 2026", ma "l’8 ottobre" e "l’11 marzo". */

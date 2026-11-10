@@ -61,7 +61,7 @@ class EdizioniControllerTest {
 
     private static final String NUOVA_EDIZIONE = """
             {"formulazione": {"id": "7f1d2c3e-0000-4000-8000-000000000001", "versione": 2},
-             "botanicaDisponibileKg": 12,
+             "botanicaDisponibileKg": 12, "origineBotanica": "Alta Val Varaita (Alpi Cozie)",
              "quote": {"SOCI": 300, "BAR": 150, "ONLINE": 150}}
             """;
 
@@ -103,7 +103,8 @@ class EdizioniControllerTest {
 
     @Test
     void creazioneComeDistillatoreRisponde201ConLocation() throws Exception {
-        when(servizio.crea(eq(FORMULAZIONE), eq(2), any(), anyMap())).thenReturn(vista());
+        when(servizio.crea(eq(FORMULAZIONE), eq(2), any(), eq("Alta Val Varaita (Alpi Cozie)"), anyMap()))
+                .thenReturn(vista());
 
         mvc.perform(come("DISTILLATORE", post("/edizioni").contentType(MediaType.APPLICATION_JSON).content(NUOVA_EDIZIONE)))
                 .andExpect(status().isCreated())
@@ -226,6 +227,7 @@ class EdizioniControllerTest {
                 .andExpect(jsonPath("$.campi[?(@.campo == 'formulazione.id')]").exists())
                 .andExpect(jsonPath("$.campi[?(@.campo == 'formulazione.versione')]").exists())
                 .andExpect(jsonPath("$.campi[?(@.campo == 'botanicaDisponibileKg')]").exists())
+                .andExpect(jsonPath("$.campi[?(@.campo == 'origineBotanica')]").exists())
                 .andExpect(jsonPath("$.campi[?(@.campo =~ /quote.*SOCI.*/)]").exists());
         verifyNoInteractions(servizio);
     }
@@ -243,7 +245,7 @@ class EdizioniControllerTest {
 
     @Test
     void formulazioneNonUtilizzabileRisponde422() throws Exception {
-        when(servizio.crea(any(), anyInt(), any(), anyMap()))
+        when(servizio.crea(any(), anyInt(), any(), any(), anyMap()))
                 .thenThrow(new FormulazioneNonUtilizzabile("La formulazione X non è ancora stata scelta dal panel"));
 
         mvc.perform(come("DISTILLATORE", post("/edizioni").contentType(MediaType.APPLICATION_JSON).content(NUOVA_EDIZIONE)))
@@ -254,7 +256,7 @@ class EdizioniControllerTest {
 
     @Test
     void formulazioneGiaUsataRisponde409() throws Exception {
-        when(servizio.crea(any(), anyInt(), any(), anyMap()))
+        when(servizio.crea(any(), anyInt(), any(), any(), anyMap()))
                 .thenThrow(new FormulazioneGiaUsata("una formulazione usata non si riusa mai"));
 
         mvc.perform(come("DISTILLATORE", post("/edizioni").contentType(MediaType.APPLICATION_JSON).content(NUOVA_EDIZIONE)))
@@ -264,7 +266,7 @@ class EdizioniControllerTest {
 
     @Test
     void ricetteNonDisponibileRisponde503ConMessaggioChiaroESenzaStackTrace() throws Exception {
-        when(servizio.crea(any(), anyInt(), any(), anyMap()))
+        when(servizio.crea(any(), anyInt(), any(), any(), anyMap()))
                 .thenThrow(new CatalogoRicetteNonDisponibile("Ricette non risponde (spento, irraggiungibile o più lento di 2 secondi)"));
 
         mvc.perform(come("DISTILLATORE", post("/edizioni").contentType(MediaType.APPLICATION_JSON).content(NUOVA_EDIZIONE)))
@@ -297,7 +299,7 @@ class EdizioniControllerTest {
 
     private static EdizioneVista vista(String kg, int tiratura, int online) {
         return new EdizioneVista(EDIZIONE, new RiferimentoFormulazione(FORMULAZIONE, 2), "lavanda",
-                new BigDecimal("20.00"), new BigDecimal(kg), tiratura,
+                new BigDecimal("20.00"), new BigDecimal(kg), "Alta Val Varaita (Alpi Cozie)", tiratura,
                 Map.of(Canale.SOCI, 300, Canale.BAR, 150, Canale.ONLINE, online),
                 Map.of(Canale.SOCI, 0, Canale.BAR, 0, Canale.ONLINE, 0), Instant.now());
     }

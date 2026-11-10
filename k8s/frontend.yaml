@@ -2,7 +2,7 @@
 # frontend: l'app React servita da nginx (frontend/Dockerfile).
 #
 # Due oggetti:
-#   1) Deployment  -> 2 pod con ginvault/frontend:0.1
+#   1) Deployment  -> 2 pod con ginvault/frontend:0.3
 #   2) Service     -> nome DNS stabile "frontend": lo usa l'Ingress per "/"
 #
 # Niente ConfigMap né Secret: l'immagine contiene solo file statici e la
@@ -59,7 +59,7 @@ spec:
         - name: frontend
           # Immagine costruita DENTRO Minikube (minikube image build):
           # imagePullPolicy Never = non cercarla su Docker Hub
-          image: ginvault/frontend:0.1
+          image: ginvault/frontend:0.3
           imagePullPolicy: Never
           ports:
             - name: http

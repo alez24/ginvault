@@ -1,6 +1,7 @@
 /* Come presentare gli errori delle API: i campi del 400 e cosa può fare l'utente. */
 import { NOMI_CANALI, type Canale } from './edizioni';
 import type { ErroreApi } from './http';
+import type { MotivoRifiuto } from './produzione';
 
 export interface CampoNonValido {
   campo: string;
@@ -31,7 +32,22 @@ const NOMI: Record<string, string> = {
   'formulazione.id': 'Formulazione',
   'formulazione.versione': 'Versione della formulazione',
   botanicaDisponibileKg: 'Kg di botanica disponibili',
+  origineBotanica: 'Origine della botanica',
   quote: 'Quote',
+  // magazzino
+  fornitoreId: 'Fornitore',
+  botanica: 'Botanica',
+  kgOrdinati: 'Kg ordinati',
+  consegnaAttesa: 'Consegna attesa',
+  edizioneId: 'Edizione',
+  kgArrivati: 'Kg arrivati',
+  consegnataIl: 'Giorno della consegna',
+  scadenza: 'Scadenza del lotto',
+  esitoQualita: 'Controllo qualità',
+  nota: 'Nota',
+  // produzione
+  lottoId: 'Lotto',
+  kg: 'Kg da integrare',
 };
 
 /** Il nome di un campo come lo legge una persona: "dosi[1].grammiPerBottiglia" -> "Dose 2, grammi per bottiglia". */
@@ -67,4 +83,37 @@ export function rimedio(errore: ErroreApi): Rimedio {
     return 'ricarica';
   }
   return undefined;
+}
+
+const MOTIVI: MotivoRifiuto[] = [
+  'LOTTO_NON_DISPONIBILE',
+  'ALTRA_BOTANICA',
+  'ORIGINE_DIVERSA',
+  'LOTTO_GIA_INTEGRATO',
+  'LOTTO_DELLA_CONSEGNA',
+  'KG_NON_VALIDI',
+  'PIANO_COMPLETO',
+  'KG_ECCESSIVI',
+  'RISERVA_RIFIUTATA',
+];
+
+/** Il 409 di POST /piani/{id}/integrazioni: il motivo e, per l'origine diversa, le due origini. */
+export interface RifiutoIntegrazione {
+  motivo: MotivoRifiuto;
+  origineRichiesta?: string;
+  origineLotto?: string;
+}
+
+/** undefined se l'errore non è un rifiuto con motivo (per esempio 503: il magazzino non risponde). */
+export function rifiutoIntegrazione(errore: ErroreApi): RifiutoIntegrazione | undefined {
+  const motivo = errore.problema?.motivo;
+  if (errore.stato !== 409 || typeof motivo !== 'string' || !MOTIVI.includes(motivo as MotivoRifiuto)) {
+    return undefined;
+  }
+  const testo = (valore: unknown) => (typeof valore === 'string' && valore.trim() !== '' ? valore : undefined);
+  return {
+    motivo: motivo as MotivoRifiuto,
+    origineRichiesta: testo(errore.problema?.origineRichiesta),
+    origineLotto: testo(errore.problema?.origineLotto),
+  };
 }

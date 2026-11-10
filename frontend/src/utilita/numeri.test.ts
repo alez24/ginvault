@@ -4,9 +4,16 @@ import {
   bottiglie,
   cifre,
   differenza,
+  data,
   edizioneDellaStagione,
   giornoConNome,
+  giornoDopo,
+  giorni,
+  giorniTra,
+  giornoValido,
   ilGiorno,
+  kg,
+  oggi,
   leggiNumero,
   maiuscola,
   numero,
@@ -103,3 +110,38 @@ describe('appuntamenti del club, con l’ora di Roma', () => {
   });
 });
 
+
+describe('giorni senza ora (le date del magazzino)', () => {
+  it('"2026-08-06" resta il 6 agosto in qualsiasi fuso', () => {
+    expect(data('2026-08-06')).toBe('6 agosto 2026');
+    expect(ilGiorno('2026-08-06')).toBe('il 6 agosto 2026');
+    expect(ilGiorno('2026-07-31')).toBe('il 31 luglio 2026');
+  });
+
+  it('oggi è il giorno di Roma, come per il magazzino', () => {
+    // 23:30 UTC del 10 novembre: a Roma è già l’11
+    expect(oggi(new Date('2026-11-10T23:30:00Z'))).toBe('2026-11-11');
+    expect(oggi(new Date('2026-08-06T09:00:00Z'))).toBe('2026-08-06');
+  });
+
+  it('giorni tra due date, e giorni dopo', () => {
+    expect(giorniTra('2026-07-31', '2026-08-06')).toBe(6);
+    expect(giorniTra('2026-08-06', '2026-07-31')).toBe(-6);
+    expect(giornoDopo('2026-07-31', 1)).toBe('2026-08-01');
+    // il cambio dell’ora legale non conta
+    expect(giorniTra('2026-10-24', '2026-10-26')).toBe(2);
+  });
+
+  it('solo date vere nel formato AAAA-MM-GG', () => {
+    expect(giornoValido('2026-08-06')).toBe(true);
+    expect(giornoValido('2026-02-30')).toBe(false);
+    expect(giornoValido('6/8/2026')).toBe(false);
+    expect(giornoValido('')).toBe(false);
+  });
+
+  it('kg e giorni da leggere', () => {
+    expect(kg(10.8)).toBe('10,8 kg');
+    expect(giorni(1)).toBe('1 giorno');
+    expect(giorni(6)).toBe('6 giorni');
+  });
+});

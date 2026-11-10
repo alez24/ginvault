@@ -1075,3 +1075,473 @@
     margin-left: 0.35rem;
   }
 }
+
+/* =============================================================================
+   Area acquisti e piani di produzione (storia di Elena). Stesse schede e stessi
+   colori del back-office. L'elemento proprio di queste pagine è la misura dei kg:
+   una barra piena per quello che c'è, tratteggiata per quello che manca, come
+   le bottiglie in contorno del ricalcolo.
+   ============================================================================= */
+
+/* ------------------------------------------------------------------ etichette di stato */
+
+.etichette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+}
+
+.carta > .etichette {
+  margin-bottom: 0.9rem;
+}
+
+.stato--aperto::before {
+  border-color: var(--cielo-profondo);
+  background: var(--cielo-profondo);
+}
+
+.stato--consegnato::before,
+.stato--conforme::before {
+  border-color: var(--salvia-scura);
+  background: var(--salvia-scura);
+}
+
+.stato--ridotta::before,
+.stato--diversa::before,
+.stato--non_conforme::before {
+  border-color: var(--ottone);
+  background: var(--ottone);
+}
+
+.stato--ridotta,
+.stato--diversa,
+.stato--non_conforme {
+  color: var(--ottone-scuro);
+}
+
+/* In ritardo: solo il contorno, il pallino è vuoto */
+.stato--ritardo::before {
+  border-color: var(--ottone-scuro);
+}
+
+/* Un lotto che non si usa più (non conforme o scaduto) si fa da parte */
+.carta--spenta {
+  background: color-mix(in srgb, var(--avorio) 45%, var(--bianco));
+  box-shadow: inset 0 0 0 1px var(--filetto);
+}
+
+.carta--spenta .carta__titolo,
+.carta--spenta .carta__botanica {
+  color: var(--testo-2);
+}
+
+/* ------------------------------------------------------------------ gruppi di ordini */
+
+.gruppo + .gruppo {
+  margin-top: 2.75rem;
+}
+
+.gruppo__titolo {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  font-size: clamp(1.7rem, 1.4rem + 1vw, 2.2rem);
+}
+
+.gruppo__quanti {
+  color: var(--ottone-scuro);
+  font-size: 0.7em;
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------------ la misura dei kg */
+
+.misura {
+  margin: 0.2rem 0 1rem;
+}
+
+/* Lo sfondo della barra è quello che manca: righe d'ottone sottili sulla neve */
+.misura__barra {
+  display: flex;
+  height: 0.85rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--ottone) 38%, transparent) 0 2px,
+      transparent 2px 6px
+    ),
+    var(--neve);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ottone) 55%, transparent);
+}
+
+.misura__parte {
+  flex: none;
+  height: 100%;
+  transform-origin: left center;
+  animation: misura-riempi 0.9s var(--dolce) both;
+}
+
+.misura__parte--pieno {
+  background: var(--abete);
+}
+
+.misura__parte--integrato {
+  background: var(--salvia-scura);
+}
+
+.misura__parte--atteso {
+  background: var(--cielo);
+}
+
+/* Un filo di neve tra una parte e l'altra */
+.misura__parte + .misura__parte {
+  box-shadow: inset 2px 0 0 var(--bianco);
+}
+
+@keyframes misura-riempi {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .misura__parte {
+    animation: none;
+  }
+}
+
+.misura__legenda {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 1.1rem;
+  margin: 0.55rem 0 0;
+  color: var(--testo-2);
+  font-size: 0.88rem;
+}
+
+.misura__voce {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.misura__voce::before {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  content: '';
+}
+
+.misura__voce--pieno::before {
+  background: var(--abete);
+}
+
+.misura__voce--integrato::before {
+  background: var(--salvia-scura);
+}
+
+.misura__voce--atteso::before {
+  background: var(--cielo);
+}
+
+.misura__voce--vuoto {
+  color: var(--ottone-scuro);
+  font-weight: 600;
+}
+
+.misura__voce--vuoto::before {
+  background: repeating-linear-gradient(-45deg, var(--ottone) 0 2px, transparent 2px 4px);
+  box-shadow: inset 0 0 0 1px var(--ottone);
+}
+
+.misura__totale {
+  margin-left: auto;
+  font-family: var(--font-titoli);
+  font-size: 1rem;
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------------ avvisi e campi */
+
+/* Una cosa andata a buon fine ma da notare: la consegna ridotta */
+.avviso--attenzione {
+  border-left-color: var(--ottone);
+  background: color-mix(in srgb, var(--ottone) 7%, var(--bianco));
+}
+
+.avviso--attenzione .avviso__titolo {
+  color: var(--ottone-scuro);
+  font-family: var(--font-titoli);
+  font-size: 1.35rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.campo__avviso {
+  margin: 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--ottone-scuro);
+  color: var(--ottone-scuro);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.campo__facoltativo {
+  color: var(--testo-2);
+  font-weight: 400;
+}
+
+.campo__input--data {
+  max-width: 13rem;
+}
+
+select.campo__input {
+  cursor: pointer;
+}
+
+.campo__input--testo {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.campi-in-fila {
+  display: grid;
+  gap: 1.35rem;
+}
+
+@media (min-width: 34rem) {
+  .campi-in-fila {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.pulsante-testo--sinistra {
+  justify-self: start;
+  margin-top: 0.2rem;
+  font-size: 0.95rem;
+}
+
+.attesa--breve {
+  padding-block: 0.5rem;
+}
+
+/* ------------------------------------------------------------------ scelte (radio in riquadri) */
+
+.scelte {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.scelta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--filetto);
+  border-radius: var(--raggio);
+  background: var(--bianco);
+  cursor: pointer;
+  transition:
+    border-color 0.3s var(--dolce),
+    box-shadow 0.3s var(--dolce);
+}
+
+.scelta:hover {
+  border-color: var(--bordo-campo);
+}
+
+.scelta:has(input:checked) {
+  border-color: var(--abete);
+  box-shadow: inset 0 0 0 1px var(--abete);
+}
+
+.scelta:has(input:focus-visible) {
+  outline: 2px solid var(--abete);
+  outline-offset: 2px;
+}
+
+.scelta input {
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0.25rem 0 0;
+  accent-color: var(--abete);
+}
+
+.scelta > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.scelta__nome {
+  font-family: var(--font-titoli);
+  font-size: 1.2rem;
+  line-height: 1.25;
+}
+
+.scelta__aiuto {
+  color: var(--testo-2);
+  font-size: 0.92rem;
+}
+
+.scelta .stato {
+  margin-top: 0.2rem;
+}
+
+/* Un lotto di un'altra origine si può scegliere (il rifiuto lo spiega Produzione), ma si vede subito */
+.scelta--diversa {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--ottone) 60%, var(--filetto));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scelta {
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------------------ righe, citazioni, filtri secondari */
+
+.righe {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.riga {
+  padding-block: 0.85rem;
+  border-bottom: 1px solid var(--filetto);
+}
+
+.riga:first-child {
+  padding-top: 0.2rem;
+}
+
+.riga__titolo {
+  margin-bottom: 0.15rem;
+  font-family: var(--font-titoli);
+  font-size: 1.25rem;
+}
+
+.riga__dati {
+  margin: 0;
+  color: var(--testo-2);
+  font-size: 0.95rem;
+}
+
+.citazione {
+  margin: 1rem 0 0;
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.2rem;
+  font-style: italic;
+}
+
+.filtri--secondari {
+  margin-top: 0.25rem;
+  font-size: 0.92rem;
+}
+
+.filtri--secondari .filtri__voce {
+  padding-block: 0.4rem 0.35rem;
+}
+
+/* ------------------------------------------------------------------ lo storico del fornitore */
+
+/* Una linea verticale d'ottone; le consegne ridotte o in ritardo hanno il pallino pieno */
+.storico {
+  position: relative;
+  max-width: 44rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storico::before {
+  position: absolute;
+  top: 0.6rem;
+  bottom: 0.6rem;
+  left: 0.4rem;
+  border-left: 1px solid var(--linea);
+  content: '';
+}
+
+.storico__voce {
+  position: relative;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0 0 1.75rem 2rem;
+}
+
+.storico__voce::before {
+  position: absolute;
+  top: 0.45rem;
+  left: 0;
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 1px solid var(--ottone);
+  border-radius: 50%;
+  background: var(--neve);
+  content: '';
+}
+
+.storico__voce--segnata::before {
+  background: var(--ottone);
+}
+
+.storico__data {
+  margin: 0;
+  color: var(--testo-2);
+  font-size: 0.92rem;
+}
+
+.storico__giorno {
+  color: var(--abete);
+  font-family: var(--font-titoli);
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.storico__titolo {
+  margin: 0;
+  font-size: 1.45rem;
+}
+
+.storico__titolo a {
+  color: var(--inchiostro);
+  text-decoration-color: var(--linea);
+}
+
+.storico__esito {
+  margin: 0;
+  color: var(--testo-2);
+}
+
+.storico .citazione {
+  margin-top: 0.35rem;
+  font-size: 1.1rem;
+}
+
+@media (min-width: 40rem) {
+  .storico::before {
+    left: 9.4rem;
+  }
+
+  .storico__voce {
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: 0 2.5rem;
+    padding-left: 0;
+  }
+
+  .storico__voce::before {
+    left: 9rem;
+  }
+
+  .storico__data {
+    padding-top: 0.15rem;
+    text-align: right;
+  }
+}

@@ -9,14 +9,18 @@ import it.ginvault.edizioni.dominio.Canale;
 import it.ginvault.edizioni.dominio.CatalogoRicette;
 import it.ginvault.edizioni.dominio.Edizione;
 import it.ginvault.edizioni.dominio.EdizioneRepository;
+import it.ginvault.edizioni.dominio.EsitoRicalcolo;
 import it.ginvault.edizioni.dominio.FormulazioneGiaUsata;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
+import it.ginvault.edizioni.dominio.ResaDiProduzione;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Servizio applicativo delle edizioni: un metodo per caso d'uso.
@@ -26,10 +30,13 @@ public class ServizioEdizioni {
 
     private final CatalogoRicette catalogo;
     private final EdizioneRepository repository;
+    private final TransactionTemplate transazione;
 
-    public ServizioEdizioni(CatalogoRicette catalogo, EdizioneRepository repository) {
+    public ServizioEdizioni(CatalogoRicette catalogo, EdizioneRepository repository,
+                            PlatformTransactionManager transazioni) {
         this.catalogo = catalogo;
         this.repository = repository;
+        this.transazione = new TransactionTemplate(transazioni);
     }
 
     /**
@@ -41,37 +48,43 @@ public class ServizioEdizioni {
      *     tornano, ci si ferma qui e la formulazione resta libera     (422)
      *  3. POST /utilizzo su Ricette: la formulazione diventa USATA da questa
      *     edizione                       (409 se un'altra edizione l'ha presa)
-     *  4. solo se il passo 3 va a buon fine, l'edizione si salva
+     *  4. solo se il passo 3 va a buon fine, l'edizione si salva, e con lei
+     *     l'evento EdizioneCreata nella tabella outbox: una transazione breve,
+     *     solo attorno al salvataggio
      *
      * Ricette spento o in timeout al passo 1 o 3 -> 503 e nessuna edizione.
      *
-     * NON TRANSAZIONALE. Le due chiamate a Ricette e il salvataggio qui non sono
+     * NON TRANSAZIONALE nel suo insieme. Le due chiamate a Ricette e il salvataggio qui non sono
      * un'unica transazione: Ricette può segnare la formulazione USATA e poi il
      * salvataggio di Edizioni fallire (database giù, vincolo unique). In quel
      * caso la formulazione resta "usata" da un'edizione che non esiste, e va
      * sistemata a mano. Il metodo volutamente NON è @Transactional: una
      * transazione del database non annullerebbe comunque la POST già fatta a
      * Ricette, e terrebbe occupata una connessione mentre si aspetta la rete.
+     * La transazione c'è solo al passo 4 (TransactionTemplate): serve perché
+     * edizione e riga di outbox entrino nello stesso commit.
      * Con Kafka questo diventerà una SAGA: Edizioni salva l'edizione e pubblica
      * l'evento EdizioneCreata; Ricette la segna USATA e, se non può, risponde con
      * un evento che fa annullare l'edizione (azione di compensazione).
      */
     public EdizioneVista crea(UUID formulazioneId, int versione, BigDecimal botanicaDisponibileKg,
-                              Map<Canale, Integer> quote) {
+                              String origineBotanica, Map<Canale, Integer> quote) {
         // 1. lettura da Ricette (attraverso l'Anti-Corruption Layer)
         FormulazioneInCatalogo formulazione = catalogo.trova(formulazioneId)
                 .orElseThrow(() -> new FormulazioneNonUtilizzabile(
                         "La formulazione " + formulazioneId + " non esiste in Ricette"));
 
         // 2. regole di dominio, ancora tutto in memoria
-        Edizione edizione = Edizione.nuova(formulazione, versione, botanicaDisponibileKg, quote);
+        Edizione edizione = Edizione.nuova(formulazione, versione, botanicaDisponibileKg, origineBotanica, quote);
 
         // 3. da qui la formulazione non si riusa più
         catalogo.segnaUsata(edizione.formulazione(), edizione.id());
 
-        // 4. salvataggio, con il vincolo unique come rete di sicurezza
+        // 4. salvataggio, con il vincolo unique come rete di sicurezza. Nella
+        //    transazione Spring Data pubblica EdizioneCreata e ScritturaOutbox lo
+        //    scrive nell'outbox prima del commit
         try {
-            repository.saveAndFlush(edizione);
+            transazione.executeWithoutResult(stato -> repository.saveAndFlush(edizione));
         } catch (DataIntegrityViolationException doppione) {
             throw new FormulazioneGiaUsata("Esiste già un'edizione con la formulazione " + formulazioneId
                     + " (versione " + versione + "): una formulazione usata non si riusa mai");
@@ -91,6 +104,23 @@ public class ServizioEdizioni {
         // Spring Data pubblica gli eventi di dominio dell'aggregato (@DomainEvents)
         repository.save(edizione);
         return EdizioneVista.di(edizione);
+    }
+
+    /**
+     * La resa ricalcolata da Produzione (consumer di produzione.eventi):
+     * l'Edizione la applica con le regole del ricalcolo, oppure la rifiuta e
+     * registra RicalcoloRifiutato. Gira nella transazione del consumer:
+     * edizione, riga di outbox ed evento_elaborato entrano nello stesso commit.
+     *
+     * @throws EdizioneNonTrovata l'edizione non c'è: riprovare non serve (dead letter)
+     */
+    @Transactional
+    public EsitoRicalcolo applicaResa(UUID id, ResaDiProduzione resa) {
+        Edizione edizione = repository.findById(id).orElseThrow(() -> new EdizioneNonTrovata(id));
+        EsitoRicalcolo esito = edizione.applicaResa(resa);
+        // Anche se l'edizione non cambia (rifiuto): save() pubblica RicalcoloRifiutato
+        repository.save(edizione);
+        return esito;
     }
 
     @Transactional(readOnly = true)
