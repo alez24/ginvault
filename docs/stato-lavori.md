@@ -6,16 +6,17 @@ e il punto esatto in cui siamo arrivati.
 ## In breve: dove siamo
 
 - **Branch:** `storia-elena` (creato da `main` aggiornato, `ed2c054`).
-- **Storia di Elena, passi 1–5 committati** su `storia-elena`, **senza push**.
+- **Storia di Elena, passi 1–6 committati** su `storia-elena`, **senza push**.
   `AnnullaRiserva` (la compensazione di Produzione) e il passo 5 (Edizioni
-  consuma `ResaRicalcolata`) sono in `080310f`.
-- **Passo 6** (frontend per Elena) e la correzione di Produzione sul lotto
-  della consegna sono nel commit con questo file.
-- **Prossimo:** il passo 7, integrazione e demo.
-- Sul cluster girano `edizioni:0.5`, `magazzino:0.3` e `produzione:0.3`. Il
-  front-end del cluster è ancora `frontend:0.2`, senza le pagine del passo 6, e
-  `produzione:0.3` non ha ancora la correzione: le nuove immagini arrivano nel
-  passo 7.
+  consuma `ResaRicalcolata`) sono in `080310f`; il passo 6 (frontend per
+  Elena) e la correzione di Produzione sul lotto della consegna in `2c5b712`.
+- **Passo 7** (integrazione e demo) è nel commit con questo file:
+  `docs/demo-storia-elena.md`, README, `k8s/README.md`, immagini nuove sul
+  cluster. La storia di Elena è finita.
+- **Prossimo:** da decidere (vedi [Dopo la storia di Elena](#dopo-la-storia-di-elena-dal-piano-docspianomd)).
+  Il giro della demo dal browser sul cluster è ancora da fare.
+- Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
+  `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
@@ -35,7 +36,8 @@ e il punto esatto in cui siamo arrivati.
 | `0298ebb` | 10 nov | **Elena, passo 3: Produzione** (vedi sotto) |
 | `497fd93` | 10 nov | **Elena, passo 4: gRPC Produzione ↔ Magazzino** (vedi sotto) |
 | `080310f` | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
-| (il commit con questo file) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
+| `2c5b712` | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
+| (il commit con questo file) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
 
 Le PR #1, #2 e #3 sono unite in `main` con merge commit.
 
@@ -57,8 +59,8 @@ I sette passi:
 | 4 | gRPC Produzione ↔ Magazzino: `Giacenze`, integrazione di un lotto, 409 per origine diversa, 503 | ✅ committato `497fd93` |
 | 4+ | `AnnullaRiserva`: compensazione se il piano non si salva dopo la riserva | ✅ committato `080310f` |
 | 5 | Edizioni consuma `ResaRicalcolata` → `TiraturaRidotta` / `TiraturaAumentata` / `RicalcoloRifiutato` | ✅ committato `080310f` |
-| 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | ✅ committato |
-| 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | da fare |
+| 6 | Frontend per Elena (area acquisti) e integrazione del lotto per il distillatore | ✅ committato `2c5b712` |
+| 7 | Gateway, compose, K8s, README, `docs/demo-storia-elena.md` | ✅ committato |
 
 ### Passo 1: Kafka (`86fe672`)
 
@@ -373,7 +375,7 @@ Dettagli in [docs/eventi.md](eventi.md#il-consumer-di-edizioni).
   aveva già la label `ginvault/usa-kafka`), quindi niente test busybox. La
   catena 600 → 540 sul cluster si vedrà nella demo del passo 7.
 
-### Passo 6: frontend per Elena (nel commit con questo file)
+### Passo 6: frontend per Elena (`2c5b712`)
 
 Il frontend, la documentazione e una correzione di Produzione (in fondo). Le
 pagine usano le API vere di Magazzino e Produzione; le route del gateway
@@ -421,16 +423,57 @@ c'erano già. Il dettaglio è in
   integrare. Servirebbe che la consegna riservasse il lotto per l'edizione
   dell'ordine.
 
-### Prossimo passo (7)
+### Passo 7: integrazione e demo (nel commit con questo file)
 
-- gateway, compose, K8s e README. Ci sono anche:
-  - le immagini `frontend:0.3`, con le pagine del passo 6, e `produzione:0.4`,
-    con la correzione;
-  - il riquadro «Stato» in cima al `README.md`, ancora fermo alla storia di
-    Marco.
-- `docs/demo-storia-elena.md`, con la catena 600 → 540 senza azioni manuali,
-  il rifiuto del lotto dei campi, i messaggi nei topic, la prova
-  dell'idempotenza e la prova dell'outbox con Kafka spento.
+- **Gateway e Compose:** niente da cambiare.
+  - Le route `/api/magazzino/**` e `/api/produzione/**` c'erano dal primo
+    commit, con `StripPrefix=2`.
+  - In Compose i due servizi avevano già JWKS, Kafka, gRPC e healthcheck.
+- **Kubernetes:**
+  - immagini nuove: `produzione:0.4` (`docker build --build-context
+    giacenze-api=giacenze-api` + `minikube image load`) e `frontend:0.3`
+    (`minikube image build`);
+  - i tag aggiornati in `k8s/produzione.yaml`, `k8s/frontend.yaml`,
+    `k8s/README.md` e `frontend/README.md`;
+  - `kubectl apply -k k8s/`: rollout di produzione e frontend, Job
+    `kafka-topic` ricreato, kafka-0 non è ripartito;
+  - nessuna NetworkPolicy cambiata, quindi niente test busybox.
+- **`docs/demo-storia-elena.md`:** la storia dal front-end, in nove passi.
+  - Marco crea l'edizione (600). Elena ordina 12 kg e registra 10,8. La catena
+    porta l'edizione a 540. Il lotto dei campi viene rifiutato con
+    `ORIGINE_DIVERSA`.
+  - I messaggi dei tre topic con `kafka-console-consumer`, con partizione,
+    offset e chiave.
+  - L'idempotenza: produzione spento, offset del gruppo `produzione` indietro
+    di uno solo su `magazzino.eventi:1`, riavvio, e nel log `già elaborato,
+    scartato`. Nessun messaggio scritto nei topic veri.
+  - L'outbox: Kafka spento (`scale statefulset kafka --replicas=0`), Elena
+    riordina 1,2 kg e registra la consegna (201), la riga aspetta con i
+    tentativi. Kafka torna, l'evento parte, l'edizione torna a 600 con
+    `TiraturaAumentata`.
+  - La stessa storia dalla console del browser, i comandi equivalenti per
+    Compose, il riepilogo dei casi.
+- **README:** il riquadro «Stato» e la sezione Kubernetes aggiornati, con i
+  link alle due demo. In `k8s/README.md` i rimandi alla demo di Elena.
+- **Verificato (10 nov):**
+  - **la storia intera, con le immagini del cluster, in uno stack Compose a
+    parte** (`-p ginvault-prova`). Al posto del gateway c'era una JWKS di prova
+    con token firmati in locale, solo nello scratchpad:
+    - piano creato 1,2 s dopo `EdizioneCreata`;
+    - edizione a 540 (ONLINE 90) 2,1 s dopo la consegna;
+    - `GET …/lotti` con il solo lotto dei campi;
+    - 409 `ORIGINE_DIVERSA` con le due origini;
+    - i messaggi nei topic come nella demo;
+    - la `ConsegnaRegistrata` riletta e scartata;
+    - con Kafka spento la consegna risponde 201, poi l'evento parte al
+      tentativo 6, 5 s dopo il ritorno di Kafka. Piano a 12 kg, edizione a 600;
+  - **su Minikube, senza login:**
+    - `/api/{edizioni,ricette,produzione,magazzino}/health` 200 dal gateway;
+    - `/api/magazzino/ordini` e `/api/produzione/piani` 401;
+    - i gruppi `produzione` (6 consumer) ed `edizioni` (3);
+    - le tabelle e le colonne usate nelle query della demo.
+  - **Non verificato:** il giro dal browser sul cluster. Richiede il login
+    OAuth con un account che abbia DISTILLATORE e RESP_ACQUISTI.
 
 ## Regole di lavoro concordate
 

@@ -120,11 +120,11 @@ minikube image build -t ginvault/ricette:0.2  .\ricette
 #    minikube image build non sa passare. Si costruiscono con Docker Desktop
 #    e si caricano nel nodo.
 docker build --build-context giacenze-api=giacenze-api -t ginvault/magazzino:0.3 magazzino
-docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.3 produzione
+docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.4 produzione
 minikube image load ginvault/magazzino:0.3
-minikube image load ginvault/produzione:0.3
+minikube image load ginvault/produzione:0.4
 minikube image build -t ginvault/gateway:0.3  .\gateway
-minikube image build -t ginvault/frontend:0.2 .\frontend   # npm ci, test e build di Vite dentro l'immagine
+minikube image build -t ginvault/frontend:0.3 .\frontend   # npm ci, test e build di Vite dentro l'immagine
 
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
@@ -158,6 +158,8 @@ E nel browser, sempre con `localhost` e mai con `127.0.0.1`:
 La storia di Marco dal front-end è nella [Demo completa](#demo-completa); con
 le chiamate REST dalla console del browser è in
 [`docs/demo-storia-marco.md`](../docs/demo-storia-marco.md).
+La storia di Elena, con i messaggi nei topic e le prove di idempotenza e
+outbox, è in [`docs/demo-storia-elena.md`](../docs/demo-storia-elena.md).
 
 **Dopo un riavvio del PC:** Docker Desktop → `minikube start` → `minikube tunnel`
 (da amministratore). Oggetti e dati del DB restano; il gateway riparte senza
@@ -264,7 +266,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 | | edizioni-db | edizioni | gateway | frontend |
 |---|---|---|---|---|
-| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.5` | `ginvault/gateway:0.3` | `ginvault/frontend:0.2` (nginx) |
+| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.5` | `ginvault/gateway:0.3` | `ginvault/frontend:0.3` (nginx) |
 | Repliche | 1 | 1 (scalabile: è stateless) | 1 (sessione e chiave in memoria) | 2 (solo file statici) |
 | Strategia | `Recreate` (mai due Postgres sullo stesso volume) | `RollingUpdate` | `RollingUpdate` | `RollingUpdate`, `maxSurge 1`, `maxUnavailable 0` |
 | startupProbe | `pg_isready`, fino a 60 s | `/health/liveness`, fino a 2 min | `/health/liveness`, fino a 2 min | nessuna: nginx parte in un attimo |
@@ -274,7 +276,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 ricette e ricette-db sono come edizioni ed edizioni-db (`ginvault/ricette:0.2`),
 e così magazzino e magazzino-db (`ginvault/magazzino:0.3`), produzione e
-produzione-db (`ginvault/produzione:0.3`). La readiness di edizioni, magazzino e
+produzione-db (`ginvault/produzione:0.4`). La readiness di edizioni, magazzino e
 produzione include il database ma **non Kafka**: con Kafka giù i servizi
 lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer di
 produzione si ricollegano da soli.
@@ -700,7 +702,7 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.2, gateway:0.3, edizioni:0.5, ricette:0.2, magazzino:0.3, produzione:0.3
+minikube image ls | Select-String ginvault    # frontend:0.3, gateway:0.3, edizioni:0.5, ricette:0.2, magazzino:0.3, produzione:0.4
 ```
 
 Per un'immagine che manca, il suo `minikube image build` (per magazzino e
@@ -784,6 +786,11 @@ a metà.
    kubectl rollout status deployment/ricette -n ginvault    # aspetta che sia Ready
    ```
 5. **Riprova**: l'edizione viene creata.
+
+**6+. La storia di Elena**, con lo stesso cluster: Marco crea l'edizione,
+Elena ordina 12 kg e ne registra 10,8, e l'edizione scende a 540 con gli
+eventi Kafka. Servono i ruoli DISTILLATORE e RESP_ACQUISTI (anche sullo stesso
+account). I passi sono in [`docs/demo-storia-elena.md`](../docs/demo-storia-elena.md).
 
 **7. Fine.** **Esci** nel menu; Ctrl+C nel PowerShell del tunnel;
 `minikube stop` (oggetti e dati restano per la prossima volta).

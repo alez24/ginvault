@@ -5,19 +5,27 @@ Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose
 e, in parte, su Kubernetes (Minikube).
 Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
-> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes e la storia di Marco.**
+> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes, la storia di Marco e
+> quella di Elena.**
 > Ogni servizio si avvia, ha `GET /health`, il proprio database e un endpoint di
-> prova protetto da ruolo. Ricette ed Edizioni hanno la logica di dominio:
-> formulazioni con prove di assaggio, edizioni validate da Ricette via REST,
-> tiratura e ricalcolo.
+> prova protetto da ruolo.
+> - Ricette ed Edizioni: formulazioni con prove di assaggio, edizioni validate da
+>   Ricette via REST, tiratura e ricalcolo.
+> - Magazzino e Produzione: ordini, consegne, lotti e piani di produzione.
+> - Tra i servizi: Kafka, con transactional outbox, consumer idempotenti, retry e
+>   dead letter, e gRPC (`Giacenze`). Una consegna ridotta arriva da sola fino
+>   alla tiratura dell'edizione: 600 → 540.
+>
 > Il front-end React ha il back-office di Marco (con il piano di produzione e
 > l'integrazione di un lotto), l'area acquisti di Elena e l'area soci di Giulia
 > (con dati finti finché non ci sono le prenotazioni); è servito da nginx su
 > `http://localhost` ([`frontend/README.md`](frontend/README.md)).
-> Su Minikube girano front-end, gateway, edizioni, ricette e i loro database
-> dietro un Ingress, con NetworkPolicy che isolano database, front-end e gateway
-> ([`k8s/README.md`](k8s/README.md)).
-> Mancano ancora Kafka tra i servizi, gRPC e gli altri servizi su Kubernetes.
+> Su Minikube gira tutto questo, Kafka compreso, dietro un Ingress, con
+> NetworkPolicy che isolano database, front-end, gateway, Kafka e la porta gRPC
+> ([`k8s/README.md`](k8s/README.md)). Le demo:
+> [storia di Marco](docs/demo-storia-marco.md),
+> [storia di Elena](docs/demo-storia-elena.md).
+> Manca ancora la storia di Giulia: prenotazioni e pagamenti, notifiche.
 
 ## Architettura
 
@@ -144,12 +152,14 @@ quindi `--wait` termina quando tutto il sistema risponde.
 
 ### Su Kubernetes (Minikube)
 
-Front-end, gateway, edizioni, ricette e i loro database, esposti con un Ingress
-su `http://localhost`: le pagine vanno al front-end (2 repliche), `/api`,
-`/auth`, `/oauth2`, `/login` e `/logout` al gateway. Prerequisiti, avvio,
-spiegazione di ogni oggetto, la **Demo completa** (dal `minikube start` alla
-storia di Marco dal front-end) e le demo d'esame sono in
-[`k8s/README.md`](k8s/README.md).
+Front-end, gateway, edizioni, ricette, magazzino, produzione, i loro database e
+Kafka, esposti con un Ingress su `http://localhost`: le pagine vanno al
+front-end (2 repliche), `/api`, `/auth`, `/oauth2`, `/login` e `/logout` al
+gateway. Prerequisiti, avvio, spiegazione di ogni oggetto, la **Demo completa**
+(dal `minikube start` alla storia di Marco dal front-end) e le demo d'esame sono
+in [`k8s/README.md`](k8s/README.md). La storia di Elena, con gli eventi Kafka e
+le prove di idempotenza e outbox, è in
+[`docs/demo-storia-elena.md`](docs/demo-storia-elena.md).
 
 ## Sicurezza: come funziona
 
