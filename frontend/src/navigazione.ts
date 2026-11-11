@@ -62,7 +62,7 @@ export const RUOLI: Record<Ruolo, { nome: string; descrizione: string }> = {
   },
   CLIENTE: {
     nome: 'Cliente',
-    descrizione: 'Prenota la quota online dopo la prelazione ed entra in lista d’attesa.',
+    descrizione: 'Prenota la quota online dopo la prelazione (al massimo 6 bottiglie).',
   },
   DISTILLATORE: {
     nome: 'Distillatore',

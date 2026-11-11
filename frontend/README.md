@@ -249,33 +249,45 @@ Per Marco (DISTILLATORE) c'è la voce **Produzione**:
 
 ## Area soci (storia di Giulia)
 
-Pagine per il ruolo SOCIO. Le prenotazioni non esistono ancora nei servizi: per ora
-i dati sono finti, in un modulo a parte, già nella forma delle risposte vere.
+Pagine per il ruolo SOCIO, con i dati veri di Edizioni e gli avvisi di Notifiche.
 
 | Pagina | Cosa si vede |
 |---|---|
-| `/soci` | gli avvisi del club («La tiratura è scesa da 600 a 540, la tua prenotazione è confermata»), le prenotazioni con lo stato e i numeri delle bottiglie, le regole della prelazione |
-| `/soci/edizioni/{id}` | l'edizione vista dal socio: l'avviso, le bottiglie n. 112 e 113 con il cartellino, il ritiro alla masterclass d'agosto, la tracciabilità (formulazione → lavanda → controllo qualità), le quote da 600 a 540 |
+| `/soci` | gli avvisi del club non letti (in diretta), le prenotazioni con lo stato, la scadenza e i numeri delle bottiglie, le edizioni che si possono ancora prenotare, le regole del club (dalle regole di vendita di Edizioni) |
+| `/soci/edizioni/{id}` | l'edizione vista dal socio: prenota, paga con una carta di prova, aspetta l'esito; poi le bottiglie numerate con il cartellino, il ritiro, la tracciabilità (ricetta e botanica) e la tiratura con le quote che calano |
 
-- **Dati finti.** [`src/mock/soci.ts`](src/mock/soci.ts) racconta l'edizione d'estate
-  2026 (la cronologia è in testa al file): 12 kg di lavanda annunciati, 10,8 arrivati,
-  tiratura da 600 a 540, cala solo la vendita online. Le risposte arrivano dopo 250 ms,
-  come dalla rete, e un'edizione che non c'è risponde 404, come farà il servizio. I test
-  ([`src/mock/soci.test.ts`](src/mock/soci.test.ts)) controllano che i dati rispettino
-  le regole del dominio: tiratura, quote, al massimo 2 bottiglie per socio, numeri
-  dentro la tiratura, tracciabilità in ordine.
-- **Come sostituirli.** Le pagine importano solo [`src/api/soci.ts`](src/api/soci.ts):
-  i tipi (`Prenotazione`, `EdizioneSoci`, `Notifica`, `Tappa`…) e l'oggetto `soci`, con
-  `area()` ed `edizione(id)`. Quando Edizioni esporrà le prenotazioni si sostituisce
-  `datiFinti` con le chiamate `api('GET', …)` in quel file e si cancella `src/mock/`:
-  pagine e tipi restano uguali.
-- **Avvisi.** Oggi arrivano con `area()`. Poi li manderà il servizio Notifiche
-  (NestJS), via WebSocket, leggendo `TiraturaRidotta` che Edizioni pubblica già su
-  `edizioni.eventi`: la forma di
-  `Notifica` (evento, titolo, testo, edizione) è già quella. Nella pagina dell'edizione
-  l'avviso si ricava dai dati: tiratura sotto quella annunciata e prenotazione confermata.
+- **Prenotare.** In prelazione dalla quota dei soci, al massimo 2 bottiglie a 45 €;
+  dopo dalla quota online, al massimo 6 a 52 €. La regola è la stessa di Edizioni
+  (`possibilita` in [`src/api/soci.ts`](src/api/soci.ts)): il modulo offre solo quante
+  se ne possono ancora prenotare, ma decide comunque il servizio (409 con il motivo).
+- **Pagare.** Stripe è in modalità test: si sceglie una delle carte di prova che
+  Edizioni accetta (`metodiDiPagamento` delle regole), `pm_card_visa` o
+  `pm_card_chargeDeclined`. La POST risponde 202: il pagamento è una SAGA e l'esito
+  arriva dopo. Intanto la pagina mostra «Pagamento in corso» e rilegge la prenotazione
+  ogni 2 secondi (ogni 10 dopo il primo minuto), finché diventa confermata (con i
+  numeri, es. 112 e 113) o annullata (carta rifiutata o tempo finito, con il perché).
+  `fase()` decide cosa mostrare: da pagare, in pagamento, tempo finito, confermata,
+  annullata. Il conto alla rovescia usa `useAdesso`.
+- **Avvisi in diretta.** [`src/sessione/Avvisi.tsx`](src/sessione/Avvisi.tsx)
+  avvolge tutte le route `/soci`: un solo WebSocket su `/api/notifiche/avvisi` (il
+  gateway aggiunge il JWT, come per le API), aperto finché si resta nell'area soci.
+  - A ogni `connesso` rilegge l'elenco con `GET /api/notifiche/notifiche`: così
+    arrivano anche le notifiche nate mentre il WebSocket era chiuso.
+  - Una `notifica` si aggiunge una volta sola (per id) e fa rileggere la pagina
+    aperta, se riguarda la sua edizione: la tiratura scesa da 600 a 540 compare
+    senza ricaricare.
+  - Chiusura 4001 (JWT scaduto, dopo 5 minuti): si riapre subito. 4401 (sessione
+    finita): non si riapre. Il resto: dopo 1, 2, 5, 10 secondi, poi ogni 30.
+  - Chiudere un avviso lo segna come letto (`POST .../{id}/letta`).
+  - Le regole sono funzioni pure in [`src/api/notifiche.ts`](src/api/notifiche.ts),
+    provate senza browser.
+- **Tracciabilità** dai dati dell'edizione: la versione della ricetta e i grammi per
+  bottiglia, la provenienza e i kg della botanica rispetto a quelli annunciati. Le
+  dosi non ci sono: le ricette le vedono solo distillatore e amministratore.
+- **La lista d'attesa non c'è** (decisione dell'11 novembre).
 - **Movimento.** Le quote partono da quelle annunciate e calano quando arrivano sullo
-  schermo; con «riduci movimento» si vede subito il risultato.
+  schermo; con «riduci movimento» si vede subito il risultato. Il pallino del
+  pagamento in corso respira, e si ferma con «riduci movimento».
 
 ## Stile
 
@@ -362,7 +374,7 @@ verticale sul telefono.
 | Comando | Cosa fa |
 |---|---|
 | `npm run dev` | Dev server su http://localhost:5173, con il proxy verso il gateway |
-| `npm test` | Test con Vitest: CSRF ed errori di `api` (con i motivi del rifiuto di un'integrazione), menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, regole di ordine, consegna e integrazione con i dati di Elena, numeri e date all'italiana, schede dell'area acquisti, dati finti dell'area soci |
+| `npm test` | Test con Vitest: CSRF ed errori di `api` (con i motivi del rifiuto di un'integrazione), menu per ruolo, ritorno dopo il login, regole di tiratura e ricalcolo, controllo delle dosi, regole di ordine, consegna e integrazione con i dati di Elena, numeri, date, euro e scadenze all'italiana, schede dell'area acquisti, fasi e limiti delle prenotazioni dei soci, messaggi e stato degli avvisi in diretta |
 | `npm run build` | Controllo dei tipi (`tsc -b`) e build di produzione in `dist/` |
 
 ## Struttura
@@ -373,9 +385,10 @@ nginx/                  default.conf (pagine, cache, proxy verso il gateway) e
                         intestazioni.conf (Content-Security-Policy e altre intestazioni)
 src/
   api/                  http.ts (CSRF, JSON, ErroreApi), ricette.ts, edizioni.ts, magazzino.ts,
-                        produzione.ts, errori.ts, soci.ts (tipi e dati dell'area soci)
-  mock/                 soci.ts: i dati finti dell'area soci, finché non ci sono le prenotazioni
-  sessione/             utente da /auth/me, login, logout, pagina da riaprire dopo il login
+                        produzione.ts, errori.ts, soci.ts (prenotazioni e pagamento),
+                        notifiche.ts (avvisi: REST, messaggi del WebSocket, ricollegamento)
+  sessione/             utente da /auth/me, login, logout, pagina da riaprire dopo il login,
+                        Avvisi.tsx (il WebSocket degli avvisi per l'area soci)
   navigazione.ts        pagine e ruoli: un solo posto per menu e route protette
   componenti/           intestazione, layout, avvisi, route protetta, errori, editor delle dosi,
                         bottiglie delle quote, ricette con i puntini, Bottiglia (foto e
@@ -390,7 +403,8 @@ src/
   pagine/soci/          area soci ed edizione vista dal socio
   pagine/distilleria/   formulazioni, edizioni e piani di produzione (back-office del distillatore)
   pagine/acquisti/      ordini, consegne, lotti e fornitori (area acquisti)
-  utilita/              numeri all'italiana, regole per le anteprime, useCaricamento
+  utilita/              numeri all'italiana, regole per le anteprime, useCaricamento,
+                        useAdesso (l'ora che avanza, per le scadenze)
   stile.css             palette, tipografia, intestazione, montagne, home, accesso, piè di
                         pagina (si parte dal telefono)
   stile-distilleria.css fascia avorio, indicatori, schede, ricette, moduli e bottiglie del

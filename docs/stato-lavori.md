@@ -11,9 +11,10 @@ e il punto esatto in cui siamo arrivati.
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
 - **In corso: la storia di Giulia**, in 7 passi (vedi
-  [La storia di Giulia](#la-storia-di-giulia)). I passi 1, 2 e 3 sono nei
-  commit `8443fb6`, `dab4cda` e `926e959`; il passo 4 (Notifiche) è fatto e
-  aspetta l'ok per il commit.
+  [La storia di Giulia](#la-storia-di-giulia)). I passi da 1 a 4 sono nei
+  commit `8443fb6`, `dab4cda`, `926e959` e `7b1edf3`; il passo 5 (front-end)
+  è nel commit successivo. I passi 5, 6 e 7 si fanno di fila, senza fermarsi
+  (richiesta dell'11 novembre), con un commit locale per passo.
 - Il giro della demo di Elena dal browser sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
@@ -42,6 +43,7 @@ e il punto esatto in cui siamo arrivati.
 | `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
 | `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
 | `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
+| `7b1edf3` | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -60,8 +62,8 @@ I sette passi, sul branch `storia-giulia`:
 | 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ `8443fb6` |
 | 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ `dab4cda` |
 | 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ `926e959` |
-| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ fatto, da committare |
-| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | da fare |
+| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ `7b1edf3` |
+| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ commit dopo `7b1edf3` |
 | 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | da fare |
 | 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | da fare |
 
@@ -262,7 +264,7 @@ Le scelte dell'utente (11 novembre):
   - **Non fatto:** il giro con Pagamenti e lo Stripe vero (serve la riga del
     `.env`, vedi passo 2) e l'immagine per il cluster (passo 6).
 
-### Passo 4: Notifiche (da committare)
+### Passo 4: Notifiche (`7b1edf3`)
 
 - **Cosa fa:** Notifiche (NestJS) legge `edizioni.eventi` e `pagamenti.esiti`
   nel gruppo `notifiche`, salva gli avvisi nel suo PostgreSQL (`notifiche-db`)
@@ -338,6 +340,52 @@ Le scelte dell'utente (11 novembre):
     - Compose di nuovo spento.
   - **Non fatto:** il giro dal browser con il gateway (passo 5) e il cluster
     (passo 6, compreso `notifiche.dlt` nel Job `kafka-topic`).
+
+### Passo 5: il front-end dell'area soci
+
+- **Dati veri:** l'area soci legge Edizioni (`/api/edizioni/prenotazioni`,
+  `/edizioni`, `/regole-di-vendita`) e Notifiche. `src/mock/soci.ts` e il suo
+  test sono cancellati.
+- **`/soci`:**
+  - gli avvisi non letti, in diretta; chiuderne uno lo segna come letto, e con
+    più di uno c'è «Segna tutti come letti»;
+  - le prenotazioni, con lo stato (da pagare, confermata, annullata), la
+    scadenza («entro le 10:15, tra 14 minuti»), i numeri e il ritiro;
+  - «Da prenotare»: le edizioni in cui chi guarda può ancora prenotare;
+  - le regole del club, dai numeri di Edizioni.
+- **`/soci/edizioni/{id}`:**
+  - il modulo per prenotare: quante bottiglie, fino a quante se ne possono
+    ancora prenotare; la regola di `Edizione.prenota` è copiata in
+    `possibilita()`, ma decide il servizio;
+  - il pagamento: il menu delle carte di prova (`pm_card_visa`,
+    `pm_card_chargeDeclined`), il totale e il conto alla rovescia;
+  - dopo la POST (202) «Pagamento in corso». La pagina rilegge a ogni avviso
+    dell'edizione, e da sola ogni 2 secondi (ogni 10 dopo il primo minuto),
+    finché la prenotazione è confermata o annullata;
+  - l'esito: i numeri delle bottiglie, oppure il perché dell'annullamento e
+    l'eventuale rimborso;
+  - poi le bottiglie con il cartellino, il ritiro, la tracciabilità e la
+    tiratura da 600 a 540 con le quote che calano.
+- **Avvisi in diretta** (`src/sessione/Avvisi.tsx`): un WebSocket per tutta
+  l'area soci.
+  - A ogni `connesso` rilegge l'elenco REST.
+  - Le notifiche si aggiungono senza doppioni.
+  - Ricollegamento: subito dopo 4001, mai dopo 4401, altrimenti dopo 1, 2, 5
+    e 10 secondi, poi ogni 30.
+  - Il proxy di Vite ha `ws: true`. nginx l'upgrade lo faceva già.
+- **Tracciabilità:** solo dai dati dell'edizione: la versione della ricetta, i
+  grammi, la provenienza e i kg rispetto a quelli annunciati.
+  - Le dosi non ci sono: Ricette le mostra solo a DISTILLATORE e ADMIN.
+  - Il controllo qualità non c'è: l'imbottigliamento non esiste.
+- **Lista d'attesa tolta:** dalla descrizione del ruolo CLIENTE, dal piano
+  (ruoli e class diagram) e dalle pagine.
+- **Verificato (11 nov):**
+  - `npm test`: 106 test verdi. Nuovi: `api/soci.test.ts` (fasi, limiti per
+    canale, quota esaurita, numeri, carte) e `api/notifiche.test.ts`
+    (messaggi, ricollegamento, stato degli avvisi), più gli euro e le scadenze
+    in `numeri.test.ts`;
+  - `npm run build`: tipi e build a posto;
+  - il giro nel browser, con il login OAuth, è nella demo del passo 7.
 
 ## La storia di Elena
 

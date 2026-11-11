@@ -22,7 +22,8 @@ export default defineConfig({
     proxy: {
       // API e identità. L'header Host resta localhost:5173, quindi i link costruiti
       // dai servizi (es. Location dopo una POST) puntano al dev server.
-      '/api': { target: gateway },
+      // ws: true inoltra anche il WebSocket degli avvisi (/api/notifiche/avvisi).
+      '/api': { target: gateway, ws: true },
       '/auth': { target: gateway },
       '/logout': { target: gateway },
       // Login OAuth2. Qui invece l'Host diventa quello del gateway (changeOrigin):

@@ -24,6 +24,11 @@ function edizione(modifiche: Partial<Edizione> = {}): Edizione {
     quote: { SOCI: 300, BAR: 150, ONLINE: 150 },
     prenotate: { SOCI: 0, BAR: 0, ONLINE: 0 },
     creataIl: '2026-06-01T10:00:00Z',
+    stato: 'IN_VENDITA',
+    prelazioneFinoAl: '2026-06-08T10:00:00Z',
+    tiraturaAnnunciata: 600,
+    botanicaAnnunciataKg: 12,
+    quoteAnnunciate: { SOCI: 300, BAR: 150, ONLINE: 150 },
     ...modifiche,
   };
 }

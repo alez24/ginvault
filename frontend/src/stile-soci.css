@@ -147,18 +147,39 @@
   background: var(--salvia-scura);
 }
 
-.stato--numerata {
-  color: var(--abete);
-}
-
-.stato--numerata::before {
-  border-color: var(--abete);
-  background: var(--abete);
-}
-
-.stato--ritirata::before {
+/* Annullata: il pallino vuoto e barrato */
+.stato--annullata::before {
   border-color: var(--testo-2);
-  background: var(--testo-2);
+  background: linear-gradient(135deg, transparent 45%, var(--testo-2) 45% 55%, transparent 55%);
+}
+
+/* Un'edizione ancora da prenotare */
+.stato--aperta {
+  color: var(--ottone-scuro);
+}
+
+.stato--aperta::before {
+  border-color: var(--ottone);
+  background: var(--ottone);
+}
+
+/* Le prenotazioni annullate restano nell'elenco, ma passano in secondo piano */
+.prenotazione--annullata .prenotazione__figura {
+  opacity: 0.45;
+}
+
+.prenotazione--annullata .carta__titolo {
+  color: var(--testo-2);
+}
+
+.soci__comandi-avvisi {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0;
+}
+
+.soci__sezione--aperte {
+  margin-top: clamp(2.5rem, 6vw, 3.5rem);
 }
 
 /* ------------------------------------------------------------------ area soci: le regole del club */
@@ -347,6 +368,73 @@
 
   .vetrina__testo {
     padding-bottom: clamp(3rem, 6vw, 5rem);
+  }
+}
+
+/* ------------------------------------------------------------------ edizione: prenotare e pagare */
+
+.azione-soci {
+  padding-block: clamp(2.5rem, 6vw, 4.25rem) clamp(1.5rem, 4vw, 2.5rem);
+}
+
+.azione-soci__griglia {
+  display: grid;
+  gap: 1.25rem;
+  max-width: 46rem;
+}
+
+.azione-soci__scheda h2 {
+  margin-bottom: 0;
+  font-size: clamp(1.6rem, 3vw, 2rem);
+}
+
+.azione-soci__scheda > p:last-child {
+  margin-bottom: 0;
+}
+
+.azione-soci__nota {
+  max-width: var(--larghezza-testo);
+  margin: 0;
+  color: var(--testo-2);
+}
+
+/* Quante bottiglie: riquadri in fila, a capo sul telefono */
+.scelte--in-fila {
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+}
+
+/* Il pagamento è partito: un pallino d'ottone respira finché arriva l'esito */
+.pagamento-in-corso h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.pagamento-in-corso h2::before {
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--ottone);
+  animation: respiro 1.6s var(--dolce) infinite alternate;
+  content: '';
+}
+
+@keyframes respiro {
+  from {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pagamento-in-corso h2::before {
+    animation: none;
   }
 }
 
@@ -547,17 +635,6 @@
 
 .tappa__scheda > p {
   margin-bottom: 0;
-}
-
-.tappa__sottotitolo {
-  margin: 1.1rem 0 0.2rem;
-  color: var(--testo-2);
-  font-size: 0.88rem;
-}
-
-.tappa__scheda .ricetta__nome,
-.tappa__scheda .ricetta__valore {
-  font-size: 1.1rem;
 }
 
 .tappa__dati {

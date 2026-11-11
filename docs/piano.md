@@ -128,7 +128,7 @@ precisare dopo la lezione dedicata). Meglio quattro plus solidi che sette fragil
 | Ruolo | Può fare (esempi) |
 |---|---|
 | SOCIO | prenotare durante la prelazione (max 2 bottiglie), vedere le proprie prenotazioni e la tracciabilità |
-| CLIENTE | prenotare la quota online dopo la prelazione, entrare in lista d'attesa |
+| CLIENTE | prenotare la quota online dopo la prelazione (al massimo 6 bottiglie) |
 | DISTILLATORE | registrare formulazioni, annunciare edizioni, registrare rese e imbottigliamenti |
 | RESP_ACQUISTI | registrare consegne (anche ridotte), gestire i lotti di botaniche e lo storico fornitori |
 | ADMIN | gestione utenti e ruoli |
@@ -152,7 +152,7 @@ CLIENTE dopo; `POST /magazzino/consegne` solo a RESP_ACQUISTI.
 
 | Diagramma | Cosa mostra |
 |---|---|
-| Class diagram | Aggregato Edizione (Edizione, Quota, Prenotazione, ListaAttesa + VO); al massimo Lotto di gin |
+| Class diagram | Aggregato Edizione (Edizione, Quota, Prenotazione + VO); al massimo Lotto di gin |
 | Sequence diagram (REST) | Annuncio di un'edizione: Edizioni → Ricette, validazione della formulazione |
 | Collaboration diagram (asincrono) | La catena del raccolto scarso (sezione 3) |
 | State machine | Prenotazione: IN_ATTESA_PAGAMENTO → CONFERMATA (i numeri di bottiglia si assegnano alla conferma) → RITIRATA (più avanti), oppure ANNULLATA (compensazione SAGA: carta rifiutata o tempo finito; un pagamento arrivato dopo si rimborsa); Edizione: IN_SVILUPPO → IN_PRELAZIONE → IN_VENDITA → ESAURITA |

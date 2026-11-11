@@ -21,6 +21,7 @@ import { NonTrovata } from './pagine/NonTrovata';
 import { Profilo } from './pagine/Profilo';
 import { AreaSoci } from './pagine/soci/AreaSoci';
 import { EdizioneSoci } from './pagine/soci/EdizioneSoci';
+import { AvvisiInDiretta } from './sessione/Avvisi';
 
 /** Le route. Chi può aprire cosa è deciso in navigazione.ts (PAGINE). */
 export function App() {
@@ -98,7 +99,10 @@ export function App() {
           path={PAGINE.soci.percorso}
           element={
             <Protetta pagina={PAGINE.soci}>
-              <Outlet />
+              {/* Un solo WebSocket per tutta l'area soci: resta aperto passando da una pagina all'altra */}
+              <AvvisiInDiretta>
+                <Outlet />
+              </AvvisiInDiretta>
             </Protetta>
           }
         >
