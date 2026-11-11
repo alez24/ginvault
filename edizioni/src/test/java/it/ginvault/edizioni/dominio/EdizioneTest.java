@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.UUID;
@@ -25,6 +26,7 @@ class EdizioneTest {
     private static final UUID FORMULAZIONE = UUID.fromString("7f1d2c3e-0000-4000-8000-000000000001");
     private static final Map<Canale, Integer> QUOTE_600 = quote(300, 150, 150);
     private static final String ORIGINE = "Alta Val Varaita (Alpi Cozie)";
+    private static final Duration PRELAZIONE = Duration.ofDays(7);
 
     // ---------------------------------------------------------------- creazione
 
@@ -48,7 +50,7 @@ class EdizioneTest {
     @Test
     void allaNascitaRegistraEdizioneCreataConLOrigine() {
         Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), "  Alta Val Varaita   (Alpi Cozie) ",
-                QUOTE_600);
+                QUOTE_600, PRELAZIONE);
 
         assertThat(estate.origineBotanica()).isEqualTo(ORIGINE);   // spazi in più tolti
         assertThat(estate.eventi()).singleElement().isInstanceOfSatisfying(EdizioneCreata.class, evento -> {
@@ -65,22 +67,22 @@ class EdizioneTest {
 
     @Test
     void senzaOrigineNonNasceLEdizione() {
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), " ", QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), " ", QUOTE_600, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("origine");
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), "x".repeat(101), QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), "x".repeat(101), QUOTE_600, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("100 caratteri");
     }
 
     @Test
     void laSommaDelleQuoteDeveEssereUgualeAllaTiratura() {
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote(300, 150, 140)))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote(300, 150, 140), PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("La somma delle quote (590)")
                 .hasMessageContaining("600 bottiglie (12 kg di lavanda a 20 g per bottiglia");
         // con 10,8 kg le stesse quote da 600 sono troppe: la tiratura è 540
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("540 bottiglie");
     }
@@ -90,14 +92,14 @@ class EdizioneTest {
         FormulazioneInCatalogo inProva = new FormulazioneInCatalogo(FORMULAZIONE, Stato.DA_SCEGLIERE, null, "lavanda",
                 null, null);
 
-        assertThatThrownBy(() -> Edizione.nuova(inProva, 2, new BigDecimal("12"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(inProva, 2, new BigDecimal("12"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(FormulazioneNonUtilizzabile.class)
                 .hasMessageContaining("non è ancora stata scelta dal panel");
     }
 
     @Test
     void serveLaVersioneSceltaDalPanelNonUnAltra() {
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 1, new BigDecimal("12"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 1, new BigDecimal("12"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(FormulazioneNonUtilizzabile.class)
                 .hasMessageContaining("La versione 1 non è quella scelta dal panel (2)");
     }
@@ -108,7 +110,7 @@ class EdizioneTest {
         FormulazioneInCatalogo usata = new FormulazioneInCatalogo(FORMULAZIONE, Stato.USATA, 2, "lavanda",
                 new BigDecimal("20"), altraEdizione);
 
-        assertThatThrownBy(() -> Edizione.nuova(usata, 2, new BigDecimal("12"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(usata, 2, new BigDecimal("12"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(FormulazioneGiaUsata.class)
                 .hasMessageContaining(altraEdizione.toString())
                 .hasMessageContaining("non si riusa mai");
@@ -116,7 +118,7 @@ class EdizioneTest {
 
     @Test
     void senzaIGrammiDellaBotanicaDiStagioneNonSiCalcolaLaTiratura() {
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, null), 2, new BigDecimal("12"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, null), 2, new BigDecimal("12"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(FormulazioneNonUtilizzabile.class)
                 .hasMessageContaining("non indica i grammi di Lavanda");
     }
@@ -127,27 +129,27 @@ class EdizioneTest {
         senzaOnline.put(Canale.SOCI, 300);
         senzaOnline.put(Canale.BAR, 300);
 
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, senzaOnline))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, senzaOnline, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class)
                 .hasMessageContaining("manca ONLINE");
     }
 
     @Test
     void quoteNonNegativeEKgPositiviAlGrammo() {
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote(300, -1, 301)))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote(300, -1, 301), PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class).hasMessageContaining("BAR");
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, BigDecimal.ZERO, ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, BigDecimal.ZERO, ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class);
-        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8005"), ORIGINE, QUOTE_600))
+        assertThatThrownBy(() -> Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8005"), ORIGINE, QUOTE_600, PRELAZIONE))
                 .isInstanceOf(EdizioneNonValida.class).hasMessageContaining("al grammo");
-        assertThat(Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, quote(300, 150, 90))
+        assertThat(Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, quote(300, 150, 90), PRELAZIONE)
                 .botanicaDisponibileKg()).isEqualByComparingTo("10.800");
     }
 
     @Test
     void leQuoteDellEdizioneNonSiModificanoDaFuori() {
         Map<Canale, Integer> quote = new EnumMap<>(QUOTE_600);
-        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote);
+        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, quote, PRELAZIONE);
 
         quote.put(Canale.ONLINE, 0);
 
@@ -209,8 +211,8 @@ class EdizioneTest {
     @Test
     void nessunaQuotaScendeSottoLeBottigliePrenotate() {
         Edizione estate = estate();
-        estate.prenota(Canale.ONLINE, 140);
-        estate.prenota(Canale.BAR, 140);
+        estate.occupa(Canale.ONLINE, 140);
+        estate.occupa(Canale.BAR, 140);
 
         // 10,8 kg: ne vanno tolte 60, ma libere ce ne sono solo 10 + 10
         assertThatThrownBy(() -> estate.ricalcola(new BigDecimal("10.8")))
@@ -227,7 +229,7 @@ class EdizioneTest {
     @Test
     void seOnlineEPrenotatoSiPassaABar() {
         Edizione estate = estate();
-        estate.prenota(Canale.ONLINE, 120);
+        estate.occupa(Canale.ONLINE, 120);
 
         estate.ricalcola(new BigDecimal("10.8"));   // 60 da togliere: 30 da ONLINE (le libere), 30 da BAR
 
@@ -241,7 +243,7 @@ class EdizioneTest {
 
     @Test
     void laTiraturaNonSuperaMai600() {
-        Edizione abbondante = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("20"), ORIGINE, QUOTE_600);
+        Edizione abbondante = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("20"), ORIGINE, QUOTE_600, PRELAZIONE);
         assertThat(abbondante.tiratura()).isEqualTo(new Tiratura(600));   // 20 kg basterebbero per 1000
 
         Edizione estate = estate();
@@ -254,7 +256,7 @@ class EdizioneTest {
 
     @Test
     void seLaTiraturaSaleLeBottiglieInPiuVannoTutteAOnline() {
-        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, quote(300, 150, 90));
+        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("10.8"), ORIGINE, quote(300, 150, 90), PRELAZIONE);
         estate.eventiPubblicati();   // EdizioneCreata già pubblicato, come dopo il primo save()
 
         estate.ricalcola(new BigDecimal("12"));
@@ -333,8 +335,8 @@ class EdizioneTest {
     @Test
     void unaResaCheScenderebbeSottoLePrenotateERifiutataELEdizioneNonCambia() {
         Edizione estate = estate();
-        estate.prenota(Canale.ONLINE, 100);
-        estate.prenota(Canale.BAR, 150);
+        estate.occupa(Canale.ONLINE, 100);
+        estate.occupa(Canale.BAR, 150);
         ResaDiProduzione resa = resa("10.8", "consegna ridotta: 10,8 su 12 kg");
 
         EsitoRicalcolo esito = estate.applicaResa(resa);
@@ -387,9 +389,9 @@ class EdizioneTest {
     @Test
     void nonSiPrenotanoPiuBottiglieDiQuelleLibere() {
         Edizione estate = estate();
-        estate.prenota(Canale.BAR, 100);
+        estate.occupa(Canale.BAR, 100);
 
-        assertThatThrownBy(() -> estate.prenota(Canale.BAR, 51))
+        assertThatThrownBy(() -> estate.occupa(Canale.BAR, 51))
                 .isInstanceOf(QuotaEsaurita.class)
                 .hasMessageContaining("restano 50 bottiglie libere");
         assertThat(estate.quote().get(Canale.BAR)).isEqualTo(new Quota(150, 100));
@@ -402,7 +404,7 @@ class EdizioneTest {
      * Già "salvata": EdizioneCreata è stato pubblicato, restano solo gli eventi nuovi.
      */
     private static Edizione estate() {
-        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, QUOTE_600);
+        Edizione estate = Edizione.nuova(scelta(2, "20"), 2, new BigDecimal("12"), ORIGINE, QUOTE_600, PRELAZIONE);
         estate.eventiPubblicati();
         return estate;
     }

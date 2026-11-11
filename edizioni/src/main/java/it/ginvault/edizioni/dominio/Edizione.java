@@ -2,7 +2,10 @@ package it.ginvault.edizioni.dominio;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumMap;
@@ -65,6 +68,17 @@ import org.springframework.data.domain.DomainEvents;
  * Rete di sicurezza: vincolo UNIQUE su (formulazione_id, formulazione_versione).
  * Anche se Ricette sbagliasse (o il suo database venisse ricreato), nel
  * database di Edizioni la stessa formulazione non può finire in due edizioni.
+ *
+ * Vendita (storia di Giulia):
+ *  - l'edizione nasce IN_PRELAZIONE, per la durata decisa dal Club (7 giorni):
+ *    prenotano solo i soci, dalla quota SOCI, al massimo 2 bottiglie a testa;
+ *  - dopo, o quando il distillatore apre la vendita in anticipo, soci e
+ *    clienti prenotano dalla quota ONLINE, al massimo 6 bottiglie a testa;
+ *  - una prenotazione toglie subito le bottiglie dalla quota (prenotate), e
+ *    nessuna quota ha più prenotate che bottiglie;
+ *  - lo stato (StatoEdizione) non si salva: si calcola dall'orologio e dalle quote.
+ * Dell'annuncio restano tiratura, kg e quote annunciati: dopo un raccolto
+ * scarso i soci vedono "da 600 a 540".
  */
 @Entity
 @Table(name = "edizione", uniqueConstraints = @UniqueConstraint(
@@ -79,6 +93,10 @@ public class Edizione {
 
     /** La causa negli eventi di un ricalcolo chiesto a mano (POST /edizioni/{id}/ricalcolo). */
     public static final String RICALCOLO_MANUALE = "ricalcolo manuale del distillatore";
+
+    /** Date e ore nei messaggi per soci e clienti: "15 luglio 2026 alle 10:24", ora di Roma. */
+    private static final DateTimeFormatter DATA_E_ORA = DateTimeFormatter
+            .ofPattern("d MMMM yyyy 'alle' HH:mm", Locale.ITALIAN).withZone(ZoneId.of("Europe/Rome"));
 
     @Id
     private UUID id;
@@ -116,6 +134,30 @@ public class Edizione {
     @Column(name = "creata_il", nullable = false, updatable = false)
     private Instant creataIl;
 
+    /**
+     * Fino a quando prenotano solo i soci. Obbligatoria per ogni edizione nuova;
+     * vuota solo per quelle create prima della prelazione, che sono già in vendita
+     * (ddl-auto non può aggiungere una colonna NOT NULL a una tabella con righe).
+     */
+    @Column(name = "prelazione_fino_al")
+    private Instant prelazioneFinoAl;
+
+    /** La tiratura dell'annuncio, che i ricalcoli non toccano; vuota per le edizioni di prima. */
+    @Column(name = "tiratura_annunciata")
+    private Integer tiraturaAnnunciata;
+
+    /** I kg di botanica dell'annuncio; vuoti per le edizioni di prima. */
+    @Column(name = "botanica_annunciata_kg", precision = 8, scale = 3)
+    private BigDecimal botanicaAnnunciataKg;
+
+    /** Le bottiglie per canale dell'annuncio, nella tabella quota_annunciata; nessuna riga per le edizioni di prima. */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "quota_annunciata", joinColumns = @JoinColumn(name = "edizione_id", nullable = false))
+    @MapKeyEnumerated(EnumType.STRING)
+    @MapKeyColumn(name = "canale", length = 10)
+    @Column(name = "bottiglie", nullable = false)
+    private Map<Canale, Integer> quoteAnnunciate = new EnumMap<>(Canale.class);
+
     /** Blocco ottimistico; null = edizione nuova, mai salvata. */
     @Version
     private Long revisione;
@@ -130,7 +172,7 @@ public class Edizione {
 
     private Edizione(RiferimentoFormulazione formulazione, String botanicaDiStagione, BigDecimal grammiPerBottiglia,
                      BigDecimal botanicaDisponibileKg, String origineBotanica, Tiratura tiratura,
-                     Map<Canale, Integer> bottiglie) {
+                     Map<Canale, Integer> bottiglie, Duration durataPrelazione) {
         this.id = UUID.randomUUID();
         this.formulazione = formulazione;
         this.botanicaDiStagione = botanicaDiStagione;
@@ -140,6 +182,10 @@ public class Edizione {
         this.tiratura = tiratura;
         bottiglie.forEach((canale, numero) -> this.quote.put(canale, Quota.di(numero)));
         this.creataIl = Instant.now();
+        this.prelazioneFinoAl = creataIl.plus(durataPrelazione);
+        this.tiraturaAnnunciata = tiratura.bottiglie();
+        this.botanicaAnnunciataKg = botanicaDisponibileKg;
+        this.quoteAnnunciate.putAll(bottiglie);
     }
 
     /**
@@ -151,10 +197,11 @@ public class Edizione {
      * @param versioneRichiesta la versione indicata dal distillatore: deve essere quella scelta
      * @param origineBotanica   da dove deve venire la botanica di stagione
      * @param quote             bottiglie per canale: la somma deve essere uguale alla tiratura
+     * @param durataPrelazione  quanto dura la prelazione dei soci (la decide il Club)
      */
     public static Edizione nuova(FormulazioneInCatalogo formulazione, int versioneRichiesta,
                                  BigDecimal botanicaDisponibileKg, String origineBotanica,
-                                 Map<Canale, Integer> quote) {
+                                 Map<Canale, Integer> quote, Duration durataPrelazione) {
         RiferimentoFormulazione riferimento = formulazione.riferimentoPer(versioneRichiesta);
         String botanica = formulazione.botanicaDiStagione().trim().toLowerCase(Locale.ROOT);
         BigDecimal grammi = formulazione.grammiPerBottiglia().setScale(2, RoundingMode.HALF_UP);
@@ -162,7 +209,11 @@ public class Edizione {
         String origine = verificaOrigine(origineBotanica);
         Tiratura tiratura = Tiratura.da(kg, grammi);
         Map<Canale, Integer> bottiglie = verificaQuote(quote, tiratura, kg, botanica, grammi);
-        Edizione edizione = new Edizione(riferimento, botanica, grammi, kg, origine, tiratura, bottiglie);
+        if (durataPrelazione == null || durataPrelazione.isNegative()) {
+            throw new IllegalArgumentException("Durata della prelazione non valida: " + durataPrelazione);
+        }
+        Edizione edizione = new Edizione(riferimento, botanica, grammi, kg, origine, tiratura, bottiglie,
+                durataPrelazione);
         edizione.eventi.add(new EdizioneCreata(edizione.id, riferimento, botanica, grammi, origine, kg,
                 tiratura.bottiglie(), edizione.bottigliePerCanale(), edizione.creataIl));
         return edizione;
@@ -248,22 +299,113 @@ public class Edizione {
         }
     }
 
+    // ---------------------------------------------------------------- vendita
+
     /**
-     * Prenota bottiglie di un canale. Oggi la chiamano solo i test: l'endpoint
-     * delle prenotazioni arriverà con la storia delle prenotazioni.
+     * In che fase di vendita è l'edizione adesso: in prelazione fino alla sua
+     * fine, poi in vendita finché ONLINE ha bottiglie libere, poi esaurita.
+     */
+    public StatoEdizione stato(Instant adesso) {
+        if (inPrelazione(adesso)) {
+            return StatoEdizione.IN_PRELAZIONE;
+        }
+        return quote.get(Canale.ONLINE).libere() > 0 ? StatoEdizione.IN_VENDITA : StatoEdizione.ESAURITA;
+    }
+
+    /**
+     * Il distillatore chiude la prelazione in anticipo: da adesso prenotano
+     * soci e clienti, dalla quota ONLINE. Se la prelazione è già finita non
+     * cambia niente.
+     */
+    public void apriVendita(Instant adesso) {
+        if (inPrelazione(adesso)) {
+            prelazioneFinoAl = adesso;
+        }
+    }
+
+    /**
+     * Una persona prenota bottiglie dell'edizione. In prelazione solo i soci,
+     * dalla quota SOCI; dopo tutti, dalla quota ONLINE. Le bottiglie escono
+     * subito dalla quota: la prenotazione nasce in attesa di pagamento e va
+     * salvata insieme all'edizione, nella stessa transazione.
+     *
+     * Il limite per persona conta le prenotazioni non annullate dello stesso
+     * canale: chi ha già 2 bottiglie in prelazione non ne aggiunge altre.
+     * Perché il conto sia giusto anche con due richieste nello stesso istante,
+     * chi chiama legge l'edizione con il blocco (EdizioneRepository.findPerModifica).
+     *
+     * @param sueAltre le prenotazioni che la persona ha già per questa edizione
+     * @throws PrenotazioneNonPossibile in prelazione e non socio, o oltre il limite per persona (-> 409)
+     * @throws QuotaEsaurita            nella quota non ci sono abbastanza bottiglie libere (-> 409)
+     * @throws EdizioneNonValida        meno di una bottiglia (-> 422)
+     */
+    public Prenotazione prenota(Acquirente acquirente, int bottiglie, List<Prenotazione> sueAltre,
+                                RegoleDiVendita regole, Instant adesso) {
+        if (bottiglie < 1) {
+            throw new EdizioneNonValida("Si prenota almeno una bottiglia");
+        }
+        boolean prelazione = inPrelazione(adesso);
+        if (prelazione && !acquirente.socio()) {
+            throw new PrenotazioneNonPossibile(PrenotazioneNonPossibile.Motivo.PRELAZIONE_DEI_SOCI,
+                    "Fino al " + DATA_E_ORA.format(prelazioneFinoAl) + " l'edizione è in prelazione: la prenotano"
+                            + " solo i soci del club. Dopo si apre la vendita online.");
+        }
+        Canale canale = prelazione ? Canale.SOCI : Canale.ONLINE;
+        int massimo = prelazione ? regole.bottigliePerSocio() : regole.bottigliePerCliente();
+        int giàPrenotate = sueAltre.stream()
+                .filter(altra -> altra.edizioneId().equals(id) && altra.canale() == canale && altra.occupaBottiglie())
+                .mapToInt(Prenotazione::bottiglie)
+                .sum();
+        if (giàPrenotate + bottiglie > massimo) {
+            throw new PrenotazioneNonPossibile(PrenotazioneNonPossibile.Motivo.LIMITE_PER_PERSONA,
+                    oltreIlLimite(prelazione, massimo, giàPrenotate, bottiglie));
+        }
+        occupa(canale, bottiglie);
+        BigDecimal prezzo = prelazione ? regole.prezzoSoci() : regole.prezzoOnline();
+        return Prenotazione.nuova(id, acquirente.id(), canale, bottiglie, prezzo, adesso,
+                adesso.plus(regole.tempoPerPagare()));
+    }
+
+    /**
+     * Toglie bottiglie libere da una quota, con la sola regola della quota.
+     * Le prenotazioni di soci e clienti passano da prenota(), che controlla
+     * anche prelazione e limiti; questo metodo resta visibile solo nel
+     * pacchetto (e ai test).
      *
      * @throws QuotaEsaurita se nel canale non ci sono abbastanza bottiglie libere (-> 409)
      */
-    public void prenota(Canale canale, int bottiglie) {
+    void occupa(Canale canale, int bottiglie) {
         if (bottiglie < 1) {
             throw new EdizioneNonValida("Si prenota almeno una bottiglia");
         }
         Quota quota = quote.get(canale);
         if (bottiglie > quota.libere()) {
-            throw new QuotaEsaurita("Nel canale " + canale + " restano " + quota.libere()
-                    + " bottiglie libere: non se ne possono prenotare " + bottiglie);
+            String restano = quota.libere() == 1 ? "resta 1 bottiglia libera" : "restano " + quota.libere()
+                    + " bottiglie libere";
+            throw new QuotaEsaurita("Nel canale " + canale + " " + restano + ": non se ne possono prenotare "
+                    + bottiglie);
         }
         quote.put(canale, quota.conPrenotate(quota.prenotate() + bottiglie));
+    }
+
+    private boolean inPrelazione(Instant adesso) {
+        return prelazioneFinoAl != null && adesso.isBefore(prelazioneFinoAl);
+    }
+
+    private static String oltreIlLimite(boolean prelazione, int massimo, int giàPrenotate, int bottiglie) {
+        String regola = prelazione
+                ? "in prelazione ogni socio prenota al massimo " + bottiglie(massimo) + " di un'edizione"
+                : "online ogni persona prenota al massimo " + bottiglie(massimo) + " di un'edizione";
+        if (giàPrenotate == 0) {
+            return "Troppe bottiglie: " + regola + ", non " + bottiglie + ".";
+        }
+        int restano = massimo - giàPrenotate;
+        return "Hai già " + bottiglie(giàPrenotate) + " di questa edizione e " + regola
+                + (restano > 0 ? ": puoi aggiungerne ancora " + restano + "." : ": non puoi aggiungerne altre.");
+    }
+
+    private static String bottiglie(int numero) {
+        return numero == 1 ? "1 bottiglia" : numero + " bottiglie";
     }
 
     // ---------------------------------------------------------------- eventi di dominio
@@ -330,6 +472,28 @@ public class Edizione {
 
     public Instant creataIl() {
         return creataIl;
+    }
+
+    /** null solo per le edizioni create prima della prelazione (già in vendita). */
+    public Instant prelazioneFinoAl() {
+        return prelazioneFinoAl;
+    }
+
+    /** null solo per le edizioni create prima che si registrasse l'annuncio. */
+    public Integer tiraturaAnnunciata() {
+        return tiraturaAnnunciata;
+    }
+
+    /** null solo per le edizioni create prima che si registrasse l'annuncio. */
+    public BigDecimal botanicaAnnunciataKg() {
+        return botanicaAnnunciataKg;
+    }
+
+    /** Le bottiglie per canale dell'annuncio (SOCI, BAR, ONLINE); vuote per le edizioni di prima. */
+    public Map<Canale, Integer> quoteAnnunciate() {
+        EnumMap<Canale, Integer> copia = new EnumMap<>(Canale.class);
+        copia.putAll(quoteAnnunciate);
+        return Collections.unmodifiableMap(copia);
     }
 
     // ---------------------------------------------------------------- regole

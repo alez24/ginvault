@@ -118,6 +118,16 @@ ricette:
   timeout: 2s
 
 edizioni:
+  vendita:
+    # Le regole di vendita che non sono del Club (prelazione di 7 giorni e 2
+    # bottiglie per socio le decide il Club, infrastruttura/club). Prezzi in euro.
+    prezzo-soci: ${PREZZO_SOCI:45.00}
+    prezzo-online: ${PREZZO_ONLINE:52.00}
+    # Dopo la prelazione, quante bottiglie di un'edizione prenota al massimo una persona
+    bottiglie-per-cliente: 6
+    # Quanto resta valida una prenotazione non pagata: poi si annulla e le
+    # bottiglie tornano libere (la SAGA con Pagamenti)
+    tempo-per-pagare: ${TEMPO_PER_PAGARE:15m}
   consumer:
     # Messaggio non elaborato (es. database occupato): nuovi tentativi dopo 1,
     # 2, 4 e 8 secondi, poi il messaggio va in edizioni.dlt (ConfigurazioneKafka)

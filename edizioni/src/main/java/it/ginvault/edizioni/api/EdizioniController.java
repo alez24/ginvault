@@ -23,9 +23,11 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
  * API REST delle edizioni. Dal gateway: /api/edizioni/edizioni/...
  *
  * Autorizzazione (ruoli presi dal JWT del gateway):
- *  - creazione e ricalcolo: solo DISTILLATORE (è Marco che decide l'edizione)
- *  - lettura:   DISTILLATORE e ADMIN
+ *  - creazione, ricalcolo e apertura della vendita: solo DISTILLATORE (è
+ *    Marco che decide l'edizione)
+ *  - lettura: DISTILLATORE e ADMIN, e SOCIO e CLIENTE, che scelgono cosa prenotare
  * Chiunque altro riceve 403; senza JWT valido 401 (SecurityConfig).
+ * Le prenotazioni sono in PrenotazioniController.
  * Il ruolo si controlla PRIMA di chiamare Ricette: chi non è autorizzato non
  * genera traffico verso altri servizi.
  */
@@ -62,15 +64,26 @@ public class EdizioniController {
         return servizio.ricalcola(id, richiesta.botanicaDisponibileKg());
     }
 
+    /**
+     * Il distillatore chiude la prelazione in anticipo e apre la vendita online.
+     * 200 con l'edizione (stato IN_VENDITA, o ESAURITA se ONLINE non ha bottiglie
+     * libere); su un'edizione già in vendita non cambia niente.
+     */
+    @PostMapping("/{id}/vendita")
+    @PreAuthorize("hasRole('DISTILLATORE')")
+    public EdizioneVista apriVendita(@PathVariable UUID id) {
+        return servizio.apriVendita(id);
+    }
+
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN', 'SOCIO', 'CLIENTE')")
     public EdizioneVista trova(@PathVariable UUID id) {
         return servizio.trova(id);
     }
 
     /** Elenco delle edizioni, dalla più recente. */
     @GetMapping
-    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN')")
+    @PreAuthorize("hasAnyRole('DISTILLATORE', 'ADMIN', 'SOCIO', 'CLIENTE')")
     public List<EdizioneVista> elenco() {
         return servizio.elenco();
     }

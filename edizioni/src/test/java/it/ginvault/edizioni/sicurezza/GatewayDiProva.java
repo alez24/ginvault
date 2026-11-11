@@ -60,6 +60,11 @@ public final class GatewayDiProva {
         return firma(chiave, ISSUER, Instant.now().plus(Duration.ofMinutes(5)), ruoli);
     }
 
+    /** Token valido (5 minuti) di un utente qualsiasi: per le prove con più persone (es. prenotazioni). */
+    public String tokenPer(String sub, String... ruoli) {
+        return firma(chiave, ISSUER, sub, Instant.now().plus(Duration.ofMinutes(5)), ruoli);
+    }
+
     public String tokenScaduto(String... ruoli) {
         return firma(chiave, ISSUER, Instant.now().minus(Duration.ofHours(1)), ruoli);
     }
@@ -82,10 +87,14 @@ public final class GatewayDiProva {
     }
 
     private static String firma(RSAKey chiave, String issuer, Instant scadenza, String... ruoli) {
+        return firma(chiave, issuer, "github:42", scadenza, ruoli);
+    }
+
+    private static String firma(RSAKey chiave, String issuer, String sub, Instant scadenza, String... ruoli) {
         try {
             JWTClaimsSet claims = new JWTClaimsSet.Builder()
                     .issuer(issuer)
-                    .subject("github:42")
+                    .subject(sub)
                     .claim("name", "Mario Rossi")
                     .claim("roles", List.of(ruoli))
                     .issueTime(Date.from(scadenza.minus(Duration.ofMinutes(5))))

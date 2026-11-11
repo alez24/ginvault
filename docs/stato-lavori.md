@@ -5,13 +5,15 @@ e il punto esatto in cui siamo arrivati.
 
 ## In breve: dove siamo
 
-- **Branch:** `main`, allineato a `origin/main` (`3d00b6f`).
+- **Branch:** `storia-giulia`, creato l'11 novembre da `main` (`7af367a`).
 - **Storia di Elena finita e unita in `main`:** i 7 passi, da `86fe672` a
   `cbb04e5`, sono nella **PR #4**, unita il 10 novembre con il merge commit
-  `3d00b6f`. Il branch `storia-elena` è ancora su GitHub.
-- **Prossimo:** da decidere (vedi [Dopo la storia di Elena](#dopo-la-storia-di-elena-dal-piano-docspianomd)),
-  su un branch nuovo creato da `main`. Il giro della demo di Elena dal browser
-  sul cluster è ancora da fare.
+  `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
+  `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
+- **In corso: la storia di Giulia**, in 7 passi (vedi
+  [La storia di Giulia](#la-storia-di-giulia)). Il passo 1 è fatto e aspetta
+  l'ok per il commit.
+- Il giro della demo di Elena dal browser sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
@@ -35,9 +37,94 @@ e il punto esatto in cui siamo arrivati.
 | `080310f` (PR #4) | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
 | `2c5b712` (PR #4) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
 | `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
+| `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
 
-Le PR #1, #2, #3 e #4 sono unite in `main` con merge commit; quello della PR #4
-è `3d00b6f`.
+Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
+#4 è `3d00b6f`, quello della PR #5 è `7af367a`.
+
+## La storia di Giulia
+
+> Giulia è socia del club. Marco annuncia l'edizione d'estate e Giulia, in
+> prelazione, prenota 2 bottiglie e le paga con Stripe. Il raccolto scarso di
+> Elena porta la tiratura da 600 a 540: a Giulia arriva l'avviso in diretta, e
+> le sue bottiglie, la 112 e la 113, restano sue.
+
+I sette passi, sul branch `storia-giulia`:
+
+| # | Passo | Stato |
+|---|---|---|
+| 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ fatto, da committare |
+| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | da fare |
+| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | da fare |
+| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | da fare |
+| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | da fare |
+| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | da fare |
+| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | da fare |
+
+Le scelte dell'utente (11 novembre):
+
+- **Stripe:** account vero in modalità test. La chiave segreta è già nel
+  `.env` come `STRIPE_SECRET_KEY`, e non si legge.
+- **Pagamento lato server** con le carte di prova `pm_card_visa` (va a buon
+  fine) e `pm_card_chargeDeclined` (rifiutata), scelte da un menu.
+- **Numeri di bottiglia alla conferma:** progressivi per edizione, senza buchi
+  né doppioni anche con conferme simultanee, con un test di concorrenza. La
+  storia finisce con le bottiglie 112 e 113.
+- **Lista d'attesa fuori:** dall'area soci si toglie.
+
+### Passo 1: prelazione e prenotazioni (da committare)
+
+- **Stato dell'edizione** (`StatoEdizione`):
+  - `IN_PRELAZIONE` dall'annuncio, per 7 giorni: prenotano solo i soci;
+  - poi `IN_VENDITA`, e `ESAURITA` quando la quota ONLINE è tutta prenotata;
+  - non si salva: si calcola dall'orologio e dalle quote, così la prelazione
+    finisce da sola, senza un giro periodico;
+  - il distillatore può aprire la vendita prima (`POST /edizioni/{id}/vendita`),
+    utile anche in demo.
+- **L'annuncio resta:** tiratura, kg e quote annunciati (`tiratura_annunciata`,
+  `botanica_annunciata_kg`, tabella `quota_annunciata`). I ricalcoli non li
+  toccano: i soci vedranno «da 600 a 540». Nelle edizioni create prima sono
+  vuoti, e quelle edizioni risultano già in vendita.
+- **Club finto** (`ClubPreimpostato`, il mock del piano):
+  - 7 giorni di prelazione e al massimo 2 bottiglie per socio;
+  - il ritiro è una masterclass in distilleria, il primo sabato dopo almeno sei
+    settimane dall'annuncio, dalle 18 alle 20 (annuncio l'8 luglio → sabato
+    22 agosto).
+- **Prenotazione:** un aggregato a parte (tabella `prenotazione`), che si
+  riferisce all'edizione per id.
+  - Nasce solo da `Edizione.prenota`, in attesa di pagamento, con scadenza a
+    15 minuti. Le bottiglie escono subito dalla quota.
+  - In prelazione: solo i soci, dalla quota SOCI, a 45 €.
+  - Dopo: soci e clienti, dalla quota ONLINE, a 52 €, al massimo 6 a persona.
+  - Il limite per persona conta le prenotazioni non annullate dello stesso canale.
+- **Concorrenza:** chi prenota legge l'edizione con il blocco della riga
+  (`EdizioneRepository.findPerModifica`, `PESSIMISTIC_WRITE`). Le prenotazioni
+  della stessa edizione vanno in fila, e bottiglie libere e limite per persona
+  tornano anche con molte richieste insieme.
+- **API** (dal gateway, sotto `/api/edizioni`):
+  - `POST /edizioni/{id}/prenotazioni` per SOCIO e CLIENTE, corpo `{"bottiglie": 2}`;
+  - `GET /prenotazioni` e `GET /prenotazioni/{id}`: solo le proprie (404 per
+    quelle degli altri);
+  - `GET /regole-di-vendita` per tutti i ruoli;
+  - la lettura delle edizioni è aperta anche a SOCIO e CLIENTE;
+  - i rifiuti sono 409 con `motivo`: `PRELAZIONE_DEI_SOCI`,
+    `LIMITE_PER_PERSONA`, `QUOTA_ESAURITA`.
+- **Configurazione:** `edizioni.vendita.*` in `application.yml` (prezzi,
+  bottiglie per cliente, tempo per pagare). Compose e K8s non cambiano.
+- **Verificato (11 nov):** 114 test di edizioni verdi, 34 nuovi:
+  - `PrenotazioneTest` (dominio): prelazione, vendita online, limiti, quota
+    esaurita, annuncio conservato dopo il ricalcolo;
+  - `ClubPreimpostatoTest`: annuncio l'8 luglio → masterclass del 22 agosto alle
+    18 (+02:00), d'inverno +01:00;
+  - `PrenotazioniControllerTest`: ruoli, acquirente dal `sub` e dal ruolo SOCIO,
+    400, 409 con il motivo, 404;
+  - `PrenotazioniIntegrazioneTest` (PostgreSQL e Kafka veri): la storia di
+    Giulia via HTTP e due prove di concorrenza. 12 clienti insieme per 5
+    bottiglie online: 5 prenotazioni, 7 `QuotaEsaurita`, prenotate = 5. Lo
+    stesso socio con 4 richieste insieme: 2 riescono, 2 oltre il limite.
+  - Nel log SQL il blocco è `select ... from edizione ... for no key update`.
+  - **Non fatto:** immagine `edizioni:0.6` e cluster (si aggiornano con i
+    passi di Kubernetes e integrazione).
 
 ## La storia di Elena
 
@@ -527,10 +614,7 @@ PowerShell come amministratore, con Compose spento.
 
 ## Dopo la storia di Elena (dal piano, `docs/piano.md`)
 
-- **Storia di Giulia:**
-  - prenotazione con SAGA e Stripe;
-  - `TiraturaRidotta` consumata da Notifiche, con WebSocket;
-  - l'area soci con i dati veri al posto di quelli finti.
+- **Storia di Giulia:** in corso, vedi sopra.
 - **Kubernetes:** Istio e circuit breaker.
 - **Plus rimanenti:** repliche del consumer Kafka.
 - **Documentazione e prova generale:** diagrammi, presentazione, checklist.

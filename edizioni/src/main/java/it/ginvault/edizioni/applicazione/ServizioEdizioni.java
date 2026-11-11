@@ -1,6 +1,7 @@
 package it.ginvault.edizioni.applicazione;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -13,6 +14,7 @@ import it.ginvault.edizioni.dominio.EsitoRicalcolo;
 import it.ginvault.edizioni.dominio.FormulazioneGiaUsata;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
+import it.ginvault.edizioni.dominio.RegoleDiVendita;
 import it.ginvault.edizioni.dominio.ResaDiProduzione;
 
 import org.springframework.dao.DataIntegrityViolationException;
@@ -31,12 +33,16 @@ public class ServizioEdizioni {
     private final CatalogoRicette catalogo;
     private final EdizioneRepository repository;
     private final TransactionTemplate transazione;
+    private final RegoleDiVendita regole;
+    private final Clock orologio;
 
     public ServizioEdizioni(CatalogoRicette catalogo, EdizioneRepository repository,
-                            PlatformTransactionManager transazioni) {
+                            PlatformTransactionManager transazioni, RegoleDiVendita regole, Clock orologio) {
         this.catalogo = catalogo;
         this.repository = repository;
         this.transazione = new TransactionTemplate(transazioni);
+        this.regole = regole;
+        this.orologio = orologio;
     }
 
     /**
@@ -45,7 +51,8 @@ public class ServizioEdizioni {
      *  1. GET della formulazione su Ricette: deve esistere ed essere SCELTA,
      *     con la versione indicata                         (altrimenti 422 / 409)
      *  2. l'Edizione si costruisce IN MEMORIA, con tutte le sue regole: se non
-     *     tornano, ci si ferma qui e la formulazione resta libera     (422)
+     *     tornano, ci si ferma qui e la formulazione resta libera     (422).
+     *     Nasce in prelazione, per la durata decisa dal Club
      *  3. POST /utilizzo su Ricette: la formulazione diventa USATA da questa
      *     edizione                       (409 se un'altra edizione l'ha presa)
      *  4. solo se il passo 3 va a buon fine, l'edizione si salva, e con lei
@@ -75,7 +82,8 @@ public class ServizioEdizioni {
                         "La formulazione " + formulazioneId + " non esiste in Ricette"));
 
         // 2. regole di dominio, ancora tutto in memoria
-        Edizione edizione = Edizione.nuova(formulazione, versione, botanicaDisponibileKg, origineBotanica, quote);
+        Edizione edizione = Edizione.nuova(formulazione, versione, botanicaDisponibileKg, origineBotanica, quote,
+                regole.durataPrelazione());
 
         // 3. da qui la formulazione non si riusa più
         catalogo.segnaUsata(edizione.formulazione(), edizione.id());
@@ -89,7 +97,7 @@ public class ServizioEdizioni {
             throw new FormulazioneGiaUsata("Esiste già un'edizione con la formulazione " + formulazioneId
                     + " (versione " + versione + "): una formulazione usata non si riusa mai");
         }
-        return EdizioneVista.di(edizione);
+        return vista(edizione);
     }
 
     /**
@@ -103,7 +111,7 @@ public class ServizioEdizioni {
         // save() esplicito: per salvare basterebbe il dirty checking, ma è qui che
         // Spring Data pubblica gli eventi di dominio dell'aggregato (@DomainEvents)
         repository.save(edizione);
-        return EdizioneVista.di(edizione);
+        return vista(edizione);
     }
 
     /**
@@ -125,14 +133,32 @@ public class ServizioEdizioni {
 
     @Transactional(readOnly = true)
     public EdizioneVista trova(UUID id) {
-        return repository.findById(id).map(EdizioneVista::di).orElseThrow(() -> new EdizioneNonTrovata(id));
+        return repository.findById(id).map(this::vista).orElseThrow(() -> new EdizioneNonTrovata(id));
     }
 
     /** Elenco per il back-office, dalla più recente. Non chiama Ricette: legge solo il proprio database. */
     @Transactional(readOnly = true)
     public List<EdizioneVista> elenco() {
         return repository.findAll(Sort.by(Sort.Direction.DESC, "creataIl")).stream()
-                .map(EdizioneVista::di)
+                .map(this::vista)
                 .toList();
+    }
+
+    /**
+     * Il distillatore apre la vendita prima che la prelazione finisca da sola:
+     * da adesso soci e clienti prenotano dalla quota ONLINE. Su un'edizione già
+     * in vendita non cambia niente (si può ripetere). L'edizione si legge con il
+     * blocco, come per le prenotazioni: una prenotazione in corso finisce prima.
+     */
+    @Transactional
+    public EdizioneVista apriVendita(UUID id) {
+        Edizione edizione = repository.findPerModifica(id).orElseThrow(() -> new EdizioneNonTrovata(id));
+        edizione.apriVendita(orologio.instant());
+        repository.save(edizione);
+        return vista(edizione);
+    }
+
+    private EdizioneVista vista(Edizione edizione) {
+        return EdizioneVista.di(edizione, orologio.instant());
     }
 }

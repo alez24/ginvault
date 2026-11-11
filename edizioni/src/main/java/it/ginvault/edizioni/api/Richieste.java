@@ -60,6 +60,17 @@ public final class Richieste {
             BigDecimal botanicaDisponibileKg) {
     }
 
+    /**
+     * POST /edizioni/{id}/prenotazioni, ad esempio {"bottiglie": 2}. Il canale
+     * non si sceglie: SOCI in prelazione, ONLINE dopo (lo decide l'edizione).
+     * Il massimo per persona è una regola di vendita: oltre -> 409, non 400.
+     */
+    public record NuovaPrenotazione(
+            @NotNull(message = "il numero di bottiglie è obbligatorio")
+            @Positive(message = "si prenota almeno una bottiglia")
+            Integer bottiglie) {
+    }
+
     /** Il riferimento alla formulazione di Ricette. */
     public record Formulazione(
             @NotNull(message = "l'id della formulazione è obbligatorio")
