@@ -1,0 +1,152 @@
+# =============================================================================
+# notifiche: il microservizio NestJS Notifiche (gli avvisi del club: REST e
+# WebSocket /avvisi).
+#
+# Tre oggetti, come edizioni.yaml:
+#   1) ConfigMap   -> configurazione non segreta, come variabili d'ambiente
+#   2) Deployment  -> DUE pod con il container ginvault/notifiche:0.1
+#   3) Service     -> nome DNS stabile "notifiche" (:8086, NOTIFICHE_URI in gateway.yaml)
+#
+# Legge edizioni.eventi e pagamenti.esiti (consumer group "notifiche"), salva
+# gli avvisi in notifiche-db e li spinge sui WebSocket aperti; gli scarti
+# vanno in notifiche.dlt (docs/eventi.md).
+#
+# Perché due repliche: un WebSocket resta sul pod che l'ha accettato, ma
+# l'evento Kafka lo legge un pod solo (quello che ha la partizione). I pod si
+# passano gli avvisi nuovi con LISTEN/NOTIFY su notifiche-db: ognuno consegna ai
+# suoi WebSocket. Con due pod si vede che funziona (k8s/README.md, "Notifiche
+# con due repliche").
+#
+# Il browser apre il WebSocket su ws://localhost/api/notifiche/avvisi:
+# Ingress -> gateway (aggiunge il JWT all'handshake) -> Service notifiche.
+# ingress-nginx inoltra l'upgrade da solo e chiude un WebSocket muto dopo 60 s;
+# Notifiche manda un ping ogni 25 s.
+# =============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notifiche-config
+  labels:
+    app.kubernetes.io/name: notifiche
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+data:
+  PORT: "8086"
+  DB_HOST: notifiche-db
+  DB_PORT: "5432"
+  DB_NAME: notifiche
+  JWKS_URI: http://gateway:8080/.well-known/jwks.json
+  # Il Service headless di Kafka (kafka.yaml)
+  KAFKA_BOOTSTRAP: kafka:9092
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifiche
+  labels:
+    app.kubernetes.io/name: notifiche
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notifiche
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notifiche
+        # Verifica i JWT: la NetworkPolicy del gateway lo lascia scaricare la JWKS
+        app.kubernetes.io/component: microservizio
+        app.kubernetes.io/part-of: ginvault
+        # Consuma eventi: la NetworkPolicy di Kafka lo fa entrare
+        ginvault/usa-kafka: "true"
+    spec:
+      enableServiceLinks: false
+      # Allo spegnimento Notifiche chiude i WebSocket con 1001 (il browser si
+      # ricollega a un altro pod) e lascia il consumer group
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: notifiche
+          # Costruita dentro Minikube:
+          #   minikube image build -t ginvault/notifiche:0.1 .\notifiche
+          # 0.1 = storia di Giulia: consumer Kafka, avvisi, WebSocket
+          image: ginvault/notifiche:0.1
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8086
+          envFrom:
+            - configMapRef:
+                name: notifiche-config
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: notifiche-db
+                  key: POSTGRES_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: notifiche-db
+                  key: POSTGRES_PASSWORD
+          # --- Probe -------------------------------------------------------------
+          # /health risponde 503 se il database non risponde (Kafka non conta:
+          # senza Kafka REST e WebSocket funzionano e il consumer si ricollega).
+          # startupProbe: Node parte in pochi secondi; 20 x 2 s per lo schema.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 20
+          # readinessProbe: senza database il pod esce dal Service
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # livenessProbe: solo "il processo accetta connessioni?". Non /health:
+          # con il database giù riavviare Notifiche non servirebbe a nulla (è
+          # la stessa scelta della liveness di Spring, senza "db").
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 96Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            # L'immagine gira come utente "node". Kubernetes però controlla solo un
+            # utente NUMERICO: con il nome "node" e runAsNonRoot il pod non
+            # partirebbe. 1000 è l'uid di "node" nell'immagine node:24-alpine.
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifiche
+  labels:
+    app.kubernetes.io/name: notifiche
+    app.kubernetes.io/component: microservizio
+    app.kubernetes.io/part-of: ginvault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: notifiche
+  ports:
+    - name: http
+      port: 8086
+      targetPort: http

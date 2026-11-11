@@ -1,5 +1,6 @@
 # =============================================================================
-# NetworkPolicy: ogni database accetta connessioni SOLO dal proprio servizio.
+# NetworkPolicy: ogni database accetta connessioni SOLO dal proprio servizio
+# (edizioni, ricette, magazzino, produzione, pagamenti, notifiche).
 #
 # È l'equivalente delle reti private di Compose (edizioni-db-net, ricette-db-net...):
 # lì edizioni-db sta su una rete condivisa solo con edizioni; qui tutti i pod
@@ -114,6 +115,55 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: produzione
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pagamenti-db-solo-da-pagamenti
+  labels:
+    app.kubernetes.io/name: pagamenti-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pagamenti-db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pagamenti
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notifiche-db-solo-da-notifiche
+  labels:
+    app.kubernetes.io/name: notifiche-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: notifiche-db
+  policyTypes:
+    - Ingress
+  ingress:
+    # Le due repliche di notifiche: anche il LISTEN/NOTIFY tra loro passa da qui
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: notifiche
       ports:
         - protocol: TCP
           port: 5432

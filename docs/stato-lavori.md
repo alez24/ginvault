@@ -12,12 +12,13 @@ e il punto esatto in cui siamo arrivati.
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
 - **In corso: la storia di Giulia**, in 7 passi (vedi
   [La storia di Giulia](#la-storia-di-giulia)). I passi da 1 a 4 sono nei
-  commit `8443fb6`, `dab4cda`, `926e959` e `7b1edf3`; il passo 5 (front-end)
-  è nel commit successivo. I passi 5, 6 e 7 si fanno di fila, senza fermarsi
-  (richiesta dell'11 novembre), con un commit locale per passo.
+  commit `8443fb6`, `dab4cda`, `926e959`, `7b1edf3` e `33a1597`; il passo 6
+  (Kubernetes) è nel commit successivo. I passi 5, 6 e 7 si fanno di fila,
+  senza fermarsi (richiesta dell'11 novembre), con un commit locale per passo.
 - Il giro della demo di Elena dal browser sul cluster è ancora da fare.
-- Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
-  `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
+- Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.6`,
+  `ricette:0.2`, `magazzino:0.3`, `produzione:0.4`, `pagamenti:0.1` e
+  `notifiche:0.1` (2 repliche).
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
@@ -44,6 +45,7 @@ e il punto esatto in cui siamo arrivati.
 | `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
 | `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
 | `7b1edf3` | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
+| `33a1597` | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -63,8 +65,8 @@ I sette passi, sul branch `storia-giulia`:
 | 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ `dab4cda` |
 | 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ `926e959` |
 | 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ `7b1edf3` |
-| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ commit dopo `7b1edf3` |
-| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | da fare |
+| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ `33a1597` |
+| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | ✅ commit dopo `33a1597` |
 | 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | da fare |
 
 Le scelte dell'utente (11 novembre):
@@ -341,7 +343,7 @@ Le scelte dell'utente (11 novembre):
   - **Non fatto:** il giro dal browser con il gateway (passo 5) e il cluster
     (passo 6, compreso `notifiche.dlt` nel Job `kafka-topic`).
 
-### Passo 5: il front-end dell'area soci
+### Passo 5: il front-end dell'area soci (`33a1597`)
 
 - **Dati veri:** l'area soci legge Edizioni (`/api/edizioni/prenotazioni`,
   `/edizioni`, `/regole-di-vendita`) e Notifiche. `src/mock/soci.ts` e il suo
@@ -386,6 +388,72 @@ Le scelte dell'utente (11 novembre):
     in `numeri.test.ts`;
   - `npm run build`: tipi e build a posto;
   - il giro nel browser, con il login OAuth, è nella demo del passo 7.
+
+### Passo 6: Kubernetes
+
+- **Manifest nuovi**, come quelli di magazzino:
+  - `pagamenti-db.yaml`, `notifiche-db.yaml`: PVC, Deployment (`Recreate`) e
+    Service;
+  - `pagamenti.yaml`: ConfigMap, Deployment, Service :8085;
+  - `notifiche.yaml`: ConfigMap, Deployment con **2 repliche**, Service :8086.
+- **Label:** tutti e due hanno `app.kubernetes.io/component: microservizio`
+  (scaricano la JWKS del gateway) e `ginvault/usa-kafka: "true"`.
+- **Chiave di Stripe:** Secret a parte, `pagamenti-stripe`, con la sola
+  `STRIPE_SECRET_KEY`.
+  - `crea-secret.ps1` la legge dalla riga del `.env` (spazi e virgolette come
+    Compose) e dice se c'è ed è di test, senza stamparla.
+  - Lo script crea anche `pagamenti-db` e `notifiche-db` con password casuali.
+  - `gateway-segreti` resta fatto da tutto il `.env`: contiene anche la chiave,
+    che il gateway non usa.
+- **NetworkPolicy:** `pagamenti-db-solo-da-pagamenti` e
+  `notifiche-db-solo-da-notifiche` in `networkpolicy-db.yaml` (dieci in tutto).
+  Pagamenti esce su Internet verso `api.stripe.com`: le policy filtrano solo
+  l'entrata.
+- **Kafka:** il Job `kafka-topic` crea anche `pagamenti.comandi`,
+  `pagamenti.esiti`, `pagamenti.dlt` e `notifiche.dlt`, gli stessi topic di
+  Compose.
+- **Notifiche:**
+  - startup e readiness su `/health`, che dà 503 senza DB;
+  - liveness `tcpSocket`, perché con il DB giù riavviare Node non serve;
+  - `runAsUser: 1000`: con il solo nome utente `node` e `runAsNonRoot` il pod
+    non partirebbe.
+- **Immagini:** `edizioni:0.6`, `pagamenti:0.1`, `notifiche:0.1`,
+  `frontend:0.4` (`minikube image build`). Il gateway resta `0.3`: il suo
+  codice non è cambiato, e la route di notifiche faceva già da WebSocket.
+- **`k8s/README.md`:**
+  - la sezione «Pagamenti e Notifiche (storia di Giulia)»: la SAGA, la chiave,
+    i consumer group, le due repliche con LISTEN/NOTIFY, le probe, la
+    dashboard;
+  - aggiornati i file, l'avvio, i Secret, le NetworkPolicy con il test e la
+    demo.
+- **Verificato sul cluster (11 nov):**
+  - 17 pod `1/1 Running` e il Job `kafka-topic` `Completed`. Al primo avvio i
+    due pod di notifiche si sono riavviati una volta: erano partiti prima di
+    `notifiche-db` (`ECONNREFUSED`);
+  - consumer group:
+    - `pagamenti` su `pagamenti.comandi`;
+    - `edizioni` su `pagamenti.esiti` e `produzione.eventi`;
+    - `notifiche` con le 6 partizioni divise tra i due pod;
+  - su `notifiche-db` due connessioni `LISTEN notifiche_nuove`, una per pod;
+  - test busybox, dopo le policy nuove:
+    - da un pod qualsiasi i sei DB, il front-end, il gateway, Kafka e
+      `magazzino:9084` sono BLOCCATI; `magazzino:8084`, `pagamenti:8085` e
+      `notifiche:8086` sono APERTI;
+    - pagamenti raggiunge Kafka, il suo DB e la JWKS, non `notifiche-db` né
+      `edizioni-db`; notifiche lo stesso, a parti invertite;
+    - ricette non raggiunge Kafka;
+    - `api.stripe.com:443` è raggiungibile da pagamenti;
+  - dall'Ingress, da un pod nel cluster: `/soci` dà la pagina del front-end
+    0.4; `/api/notifiche/notifiche`, `/api/edizioni/regole-di-vendita` e
+    l'handshake WebSocket su `/api/notifiche/avvisi` senza sessione danno 401
+    dal gateway.
+- **Da sistemare (utente):** nel `.env` non c'è la riga `STRIPE_SECRET_KEY=`.
+  Lo dice `crea-secret.ps1`, e `gateway-segreti` ha 8 chiavi, cioè solo OAuth
+  e ruoli. Per questo la chiave arrivava vuota anche in Compose. Pagamenti lo
+  scrive nel log («STRIPE_SECRET_KEY non impostata»). Dopo aver aggiunto la
+  riga:
+  - rilanciare `.\k8s\crea-secret.ps1`;
+  - `kubectl rollout restart deployment/pagamenti -n ginvault`.
 
 ## La storia di Elena
 

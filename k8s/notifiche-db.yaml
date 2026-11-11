@@ -1,0 +1,117 @@
+# =============================================================================
+# notifiche-db: il database PostgreSQL PRIVATO del servizio Notifiche
+# (gli avvisi degli utenti, la proiezione di edizioni e prenotazioni
+# confermate, evento_elaborato per il consumer idempotente).
+#
+# Stessi tre oggetti di edizioni-db.yaml (lì sono spiegati in dettaglio):
+#   1) PersistentVolumeClaim  -> il disco dei dati (1 GiB, StorageClass "standard")
+#   2) Deployment             -> il pod di Postgres (strategia Recreate)
+#   3) Service                -> il nome DNS stabile "notifiche-db", solo interno
+#
+# Utente e password arrivano dal Secret "notifiche-db" (k8s/crea-secret.ps1).
+# Solo i pod di Notifiche possono collegarsi: vedi networkpolicy-db.yaml.
+#
+# Serve anche da "bus" tra le repliche di notifiche: ogni avviso nuovo fa un
+# NOTIFY sul canale notifiche_nuove, e ogni replica, in LISTEN, lo consegna ai
+# WebSocket che ha lei.
+# =============================================================================
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: notifiche-db-dati
+  labels:
+    app.kubernetes.io/name: notifiche-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifiche-db
+  labels:
+    app.kubernetes.io/name: notifiche-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # mai due Postgres sullo stesso volume
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: notifiche-db
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: notifiche-db
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: ginvault
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: notifiche
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: notifiche-db       # POSTGRES_USER e POSTGRES_PASSWORD
+          volumeMounts:
+            - name: dati
+              mountPath: /var/lib/postgresql/data
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: dati
+          persistentVolumeClaim:
+            claimName: notifiche-db-dati
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notifiche-db
+  labels:
+    app.kubernetes.io/name: notifiche-db
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: ginvault
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: notifiche-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
