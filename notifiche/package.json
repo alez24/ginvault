@@ -8,20 +8,31 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main"
+    "start:prod": "node --disable-warning=TimeoutNegativeWarning dist/main",
+    "build:test": "node -e \"require('fs').rmSync('dist-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json",
+    "test": "npm run build:test && node --disable-warning=TimeoutNegativeWarning --test --test-concurrency=1 --test-force-exit \"dist-test/test/**/*.spec.js\"",
+    "test:unita": "npm run build:test && node --test \"dist-test/test/unita/*.spec.js\""
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",
     "@nestjs/core": "^12.0.1",
     "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/platform-ws": "^12.3.3",
+    "@nestjs/websockets": "^12.3.3",
     "jose": "^6.2.15",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^12.0.0",
+    "@testcontainers/postgresql": "^12.2.1",
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "testcontainers": "^12.2.1",
     "typescript": "^6.0.2"
   }
 }

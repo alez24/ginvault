@@ -11,9 +11,9 @@ e il punto esatto in cui siamo arrivati.
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
 - **In corso: la storia di Giulia**, in 7 passi (vedi
-  [La storia di Giulia](#la-storia-di-giulia)). I passi 1 e 2 sono nei commit
-  `8443fb6` e `dab4cda`; il passo 3 (la SAGA in Edizioni) è fatto e aspetta
-  l'ok per il commit.
+  [La storia di Giulia](#la-storia-di-giulia)). I passi 1, 2 e 3 sono nei
+  commit `8443fb6`, `dab4cda` e `926e959`; il passo 4 (Notifiche) è fatto e
+  aspetta l'ok per il commit.
 - Il giro della demo di Elena dal browser sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
@@ -41,6 +41,7 @@ e il punto esatto in cui siamo arrivati.
 | `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
 | `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
 | `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
+| `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -58,8 +59,8 @@ I sette passi, sul branch `storia-giulia`:
 |---|---|---|
 | 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ `8443fb6` |
 | 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ `dab4cda` |
-| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ fatto, da committare |
-| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | da fare |
+| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ `926e959` |
+| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ fatto, da committare |
 | 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | da fare |
 | 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | da fare |
 | 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | da fare |
@@ -188,7 +189,7 @@ Le scelte dell'utente (11 novembre):
     vuota o ha un altro nome. Si rilancia con
     `docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero`.
 
-### Passo 3: la SAGA in Edizioni (da committare)
+### Passo 3: la SAGA in Edizioni (`926e959`)
 
 - **SAGA orchestrata da Edizioni**, con lo stato nella prenotazione. Il giro
   completo è in [`docs/eventi.md`](eventi.md#la-saga-in-edizioni).
@@ -260,6 +261,83 @@ Le scelte dell'utente (11 novembre):
     di nuovo spento.
   - **Non fatto:** il giro con Pagamenti e lo Stripe vero (serve la riga del
     `.env`, vedi passo 2) e l'immagine per il cluster (passo 6).
+
+### Passo 4: Notifiche (da committare)
+
+- **Cosa fa:** Notifiche (NestJS) legge `edizioni.eventi` e `pagamenti.esiti`
+  nel gruppo `notifiche`, salva gli avvisi nel suo PostgreSQL (`notifiche-db`)
+  e li spinge sui WebSocket aperti. Il contratto e il protocollo sono in
+  [`docs/eventi.md`](eventi.md#il-consumer-di-notifiche).
+- **Avvisi**, in italiano, a chi riguardano:
+  - `PrenotazioneConfermata`: l'importo e i numeri ("Le tue bottiglie sono la
+    112 e la 113.");
+  - `PrenotazioneAnnullata`: carta rifiutata o tempo finito, con la
+    spiegazione di Edizioni;
+  - `TiraturaRidotta` e `TiraturaAumentata`: a ognuno che ha bottiglie
+    confermate dell'edizione, con i suoi numeri ("Le tue bottiglie, la 112 e
+    la 113, restano tue.");
+  - `RimborsoEseguito`: l'importo restituito;
+  - `EdizioneCreata` serve solo alla proiezione (il nome della botanica). Gli
+    altri tipi si ignorano.
+- **Proiezione** (`edizione`, `prenotazione_confermata`): Notifiche non chiama
+  Edizioni. Limite noto: chi ha una prenotazione ancora da pagare non riceve
+  l'avviso della tiratura.
+- **Consumer:** kafkajs 2.2.4, che con Kafka 4.3 funziona (lo provano i test).
+  Le regole dei consumer Spring:
+  - una transazione con `evento_elaborato`, l'offset dopo il commit;
+  - retry dopo 1, 2, 4 e 8 secondi;
+  - `notifiche.dlt` nella stessa partizione, con gli header `kafka_dlt-*`;
+  - con Kafka spento il servizio parte e risponde lo stesso: `/health` è UP con
+    `"kafka":"NON_COLLEGATO"` e il consumer si ricollega.
+- **Fan-out tra repliche:** ogni notifica fa un `NOTIFY` nella sua
+  transazione; ogni replica è in `LISTEN` e consegna ai WebSocket che ha lei.
+- **WebSocket** `/api/notifiche/avvisi` (adapter `ws` di Nest):
+  - il JWT del gateway si verifica all'handshake: 4401 se manca o non è valido;
+  - alla scadenza del JWT (5 minuti) si chiude con 4001 e il client si
+    ricollega con uno nuovo;
+  - messaggi `connesso` (con `nonLette`), `notifica` e `ping` ogni 25 s
+    (nginx chiude dopo 60 s di silenzio).
+- **REST:** `GET /api/notifiche/notifiche` (le ultime 50 e `nonLette`),
+  `POST .../{id}/letta` (204, 404 se è di un altro) e `POST .../lette`. Il
+  `ProvaController` provvisorio è tolto.
+- **Compose:**
+  - `notifiche-db`, con la porta 5446 nell'override;
+  - `notifiche` anche su `kafka-net` e `notifiche-db-net`;
+  - `notifiche.dlt` tra i topic di `kafka-topic`.
+- **Dettagli tecnici:**
+  - nel `CMD` c'è `--disable-warning=TimeoutNegativeWarning`: kafkajs chiama
+    `setTimeout` con un ritardo negativo e Node 24 lo segnala a ogni volta;
+  - il producer del dead letter non è idempotente;
+  - `@testcontainers/kafka` funziona solo con le immagini Confluent: i test
+    usano `apache/kafka:4.3.0` con un `GenericContainer`.
+- **Verificato (11 nov):** 19 test verdi (`npm test`, con Docker Desktop
+  acceso):
+  - 11 di unità: i testi degli avvisi e il lettore degli eventi;
+  - 8 di integrazione, con PostgreSQL e Kafka dei Testcontainers, due istanze
+    di Notifiche e un finto gateway con la sua JWKS:
+    - Giulia con la 112 e la 113: la conferma, poi la tiratura da 600 a 540 in
+      diretta; Anna ha il suo avviso, Marco nessuno;
+    - fan-out: collegata all'istanza che non legge Kafka, riceve lo stesso;
+    - lo stesso evento due volte dà una notifica sola; `RicalcoloRifiutato` si
+      ignora;
+    - scadenza e rimborso;
+    - dead letter: JSON rotto subito, errore del database dopo i tentativi, e
+      la partizione non si blocca;
+    - WebSocket chiuso con 4401 (senza JWT, firma sbagliata, issuer sbagliato)
+      e con 4001 alla scadenza;
+    - REST 401, 404, 400, letta e tutte lette;
+    - `/health`.
+  - In Compose (solo notifiche, il suo DB e Kafka; nessun messaggio sui topic
+    veri):
+    - healthy, schema creato;
+    - gruppo `notifiche` con le 3 partizioni dei due topic, `notifiche.dlt` con
+      3 partizioni;
+    - un WebSocket senza JWT si chiude con 4401, REST risponde 401;
+    - con Kafka fermo `/health` resta UP, e il consumer rientra nel gruppo
+      quando Kafka torna;
+    - Compose di nuovo spento.
+  - **Non fatto:** il giro dal browser con il gateway (passo 5) e il cluster
+    (passo 6, compreso `notifiche.dlt` nel Job `kafka-topic`).
 
 ## La storia di Elena
 
@@ -733,6 +811,8 @@ gh pr list --state all --limit 5
 
 # Test di un servizio senza giacenze-api (edizioni, ricette, pagamenti)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+# Notifiche (NestJS): test di unità e di integrazione, con Docker Desktop acceso
+cd notifiche; npm test; cd ..
 # Pagamenti contro lo Stripe vero (modalità test): la chiave la passa Compose dal .env
 docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero
 # Magazzino e produzione: prima il modulo condiviso

@@ -15,7 +15,7 @@ broker e da controller.
 |---|---|---|
 | Dove | servizio `kafka`, rete `kafka-net` | StatefulSet `kafka` (pod `kafka-0`), [`k8s/kafka.yaml`](../k8s/kafka.yaml) |
 | Indirizzo per i servizi | `kafka:9092` | `kafka:9092` (Service headless) |
-| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino, pagamenti | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
+| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino, pagamenti, notifiche | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
 | Dati | volume `kafka-data` | PVC `dati-kafka-0` (1 GiB) |
 | Heap | 512 MB al massimo | 512 MB al massimo, container con limite di 1 GiB |
 | Creazione dei topic | servizio `kafka-topic` (parte, crea, termina) | Job `kafka-topic` |
@@ -29,14 +29,15 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 
 | Topic | Produttore (unico) | Chiave | Eventi | Consumer group |
 |---|---|---|---|---|
-| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`, `PrenotazioneConfermata`, `PrenotazioneAnnullata` | `produzione`; più avanti `notifiche` |
+| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`, `PrenotazioneConfermata`, `PrenotazioneAnnullata` | `produzione`, `notifiche` |
 | `magazzino.eventi` | Magazzino | nome della botanica (`lavanda`) | `ConsegnaRegistrata` | `produzione` |
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
 | `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
 | `edizioni.dlt` | Edizioni (dead letter) | quella del messaggio originale | i messaggi che Edizioni non riesce a elaborare | nessuno: si leggono a mano |
 | `pagamenti.comandi` | Edizioni | id della prenotazione | i comandi `RichiestaPagamento`, `RichiestaRimborso` | `pagamenti` |
-| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni`; più avanti `notifiche` |
+| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni`, `notifiche` |
 | `pagamenti.dlt` | Pagamenti (dead letter) | quella del comando originale | i comandi che Pagamenti non riesce a elaborare | nessuno: si leggono a mano |
+| `notifiche.dlt` | Notifiche (dead letter) | quella del messaggio originale | i messaggi che Notifiche non riesce a elaborare | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
   possiede è l'unico che ci scrive. I nomi usano il punto e mai il trattino
@@ -56,7 +57,7 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 - `produzione.dlt` è il **dead letter topic** di Produzione: un topic solo per
   tutti i messaggi scartati dai suoi consumer, qualunque sia il topic
   d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni,
-  `pagamenti.dlt` quello di Pagamenti. Vedi
+  `pagamenti.dlt` quello di Pagamenti, `notifiche.dlt` quello di Notifiche. Vedi
   [Consumer](#consumer-idempotenza-retry-e-dead-letter).
 - **I comandi hanno il loro topic, e lo possiede chi li RICEVE**:
   `pagamenti.comandi` è di Pagamenti, che ne fissa il formato; ci scrive
@@ -146,11 +147,11 @@ nella stessa transazione dell'edizione. Produzione ne fa un piano di produzione.
 | Campo | Significato |
 |---|---|
 | `formulazione` | la ricetta (id e versione in Ricette) da cui nasce l'edizione |
-| `botanicaDiStagione` | minuscola, come in Ricette (`lavanda`) |
+| `botanicaDiStagione` | minuscola, come in Ricette (`lavanda`). Notifiche la usa per il nome dell'edizione negli avvisi |
 | `grammiPerBottiglia` | la dose della botanica di stagione |
 | `origineBotanica` | da dove deve venire la botanica: un lotto di un'altra origine non conta per l'edizione |
 | `kgPrevisti` | i kg con cui è stata calcolata la tiratura |
-| `tiratura`, `quote` | le bottiglie e la loro divisione per canale (Notifiche le userà per gli annunci) |
+| `tiratura`, `quote` | le bottiglie e la loro divisione per canale |
 
 ### `ResaRicalcolata` v1 (produzione.eventi)
 
@@ -260,8 +261,9 @@ Con il lotto integrato da Marco la resa torna a 12 kg: `TiraturaAumentata` con
 `tiraturaPrima` 540, `tiratura` 600 e ONLINE di nuovo a 150. Con 15 kg la
 tiratura resta 600: è il tetto di ogni edizione.
 
-`TiraturaRidotta` lo leggerà Notifiche (storia di Giulia), per avvisare chi ha
-prenotato.
+Notifiche legge `TiraturaRidotta` e `TiraturaAumentata` per avvisare chi ha
+bottiglie confermate dell'edizione (vedi
+[Il consumer di Notifiche](#il-consumer-di-notifiche)).
 
 ### `RicalcoloRifiutato` v1 (edizioni.eventi)
 
@@ -495,7 +497,8 @@ Allo stesso modo una seconda `RichiestaRimborso` ripubblica `RimborsoEseguito`.
 ### `PrenotazioneConfermata` v1 (edizioni.eventi)
 
 Chiave: l'id dell'edizione, come gli altri eventi di Edizioni. Notifiche lo
-userà per dire a Giulia i suoi numeri.
+usa per dire a Giulia i suoi numeri, e li ricorda per gli avvisi della
+tiratura.
 
 ```json
 {
@@ -742,8 +745,116 @@ secondo addebito. Terza difesa, nel database: UNIQUE su `prenotazione_id` di
 - **una carta rifiutata non è un errore:** il comando è elaborato, l'offset
   avanza e parte `PagamentoFallito`.
 
-Limite noto: `evento_elaborato` (e `comando_elaborato` di Pagamenti) cresce
-con i messaggi. Kafka li tiene 7 giorni, quindi le righe più vecchie si
+### Il consumer di Notifiche
+
+Notifiche (NestJS, con kafkajs) legge `edizioni.eventi` e `pagamenti.esiti`
+nel consumer group `notifiche`: un consumer per istanza, che elabora insieme le
+3 partizioni di ogni topic e i messaggi di una partizione uno alla volta. Le
+regole sono quelle di Produzione, scritte in TypeScript (`ConsumerEventi`,
+`ElaborazioneEventi`, `lettore-eventi.ts`):
+
+- **idempotenza:** un messaggio, una transazione. L'`eventId` va in
+  `evento_elaborato` per primo, insieme ad `avvisi` (quante notifiche ha
+  creato): se c'è già, il messaggio si scarta. Seconda difesa:
+  `UNIQUE (evento_id, destinatario)` su `notifica`. L'offset si salva dopo il
+  commit;
+- **cosa legge:**
+
+  | Evento | Cosa fa Notifiche |
+  |---|---|
+  | `EdizioneCreata` | salva l'edizione con la sua botanica (tabella `edizione`): serve al nome negli avvisi, "edizione con lavanda" |
+  | `PrenotazioneConfermata` | salva i numeri di bottiglia (tabella `prenotazione_confermata`) e avvisa chi ha prenotato |
+  | `PrenotazioneAnnullata` | avvisa chi aveva prenotato, con la `spiegazione` di Edizioni |
+  | `TiraturaRidotta`, `TiraturaAumentata` | un avviso per ogni acquirente con bottiglie confermate dell'edizione, con tutti i suoi numeri |
+  | `RimborsoEseguito` | avvisa chi è stato rimborsato, con l'importo |
+
+  Gli altri tipi (`RicalcoloRifiutato`, `PagamentoRiuscito`,
+  `PagamentoFallito`) si ignorano e non si scrivono in `evento_elaborato`. La
+  proiezione (`edizione`, `prenotazione_confermata`) evita di chiamare
+  Edizioni;
+- **ordine:** le conferme e le tirature di un'edizione hanno la stessa chiave,
+  quindi stanno nella stessa partizione. L'avviso di `TiraturaRidotta` va a chi
+  aveva già confermato, non a chi conferma dopo. `RimborsoEseguito` arriva da
+  un altro topic: se l'edizione non è ancora nella proiezione, l'avviso dice
+  solo "edizione";
+- **retry:** 1, 2, 4, 8 secondi (`NOTIFICHE_TENTATIVI_MS`). Durante l'attesa il
+  consumer manda l'heartbeat, così resta nel gruppo;
+- **dead letter** `notifiche.dlt`, nella stessa partizione, con gli header di
+  Spring. Differenza: `kafka_dlt-original-partition` e `-original-offset` sono
+  testo, mentre Spring li scrive come interi binari. Ci va subito un
+  `EventoNonValido`: JSON rotto, campo mancante, `versione` diversa da 1,
+  numeri di bottiglia diversi dalle bottiglie. Gli altri errori ci vanno dopo i
+  tentativi, con la classe dell'errore in `kafka_dlt-exception-fqcn` (per
+  esempio `DatabaseError`);
+- **Kafka spento**, all'avvio o dopo: REST e WebSocket funzionano, `/health`
+  risponde `{"status":"UP","database":"UP","kafka":"NON_COLLEGATO"}` e il
+  consumer si ricollega da solo.
+
+Limite noto: chi ha una prenotazione ancora da pagare non riceve l'avviso della
+tiratura, perché Edizioni non pubblica un evento quando nasce una prenotazione.
+
+### Gli avvisi in diretta
+
+Il WebSocket di Notifiche. Dal browser è `ws://localhost/api/notifiche/avvisi`:
+il gateway toglie `/api/notifiche` e Notifiche ascolta su `/avvisi`. Parla
+solo il server; quello che manda il client si ignora. Ogni messaggio è un JSON
+con un `tipo`:
+
+| `tipo` | Quando | Contenuto |
+|---|---|---|
+| `connesso` | appena aperto | `nonLette`: quante notifiche non lette ha l'utente |
+| `notifica` | una notifica nuova per l'utente | `notifica`, come in `GET /notifiche` |
+| `ping` | ogni 25 secondi | niente: tiene viva la connessione (nginx chiude dopo 60 secondi di silenzio) |
+
+```json
+{
+  "tipo": "notifica",
+  "notifica": {
+    "id": "5b1e7c0a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+    "tipo": "TIRATURA_RIDOTTA",
+    "titolo": "La tiratura scende a 540 bottiglie",
+    "testo": "L'edizione con lavanda passa da 600 a 540 bottiglie (consegna ridotta: 10,8 su 12 kg). Le tue bottiglie, la 112 e la 113, restano tue.",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "prenotazioneId": null,
+    "dati": { "tiraturaPrima": 600, "tiratura": 540, "numeriBottiglia": [112, 113], "causa": "consegna ridotta: 10,8 su 12 kg" },
+    "creataIl": "2026-08-06T08:30:02.000Z",
+    "lettaIl": null
+  }
+}
+```
+
+Il `tipo` della notifica è `PRENOTAZIONE_CONFERMATA`, `PRENOTAZIONE_ANNULLATA`,
+`TIRATURA_RIDOTTA`, `TIRATURA_AUMENTATA` o `RIMBORSO_ESEGUITO`. `creataIl` è
+l'`occorsoIl` dell'evento.
+
+- **Autenticazione:** il browser apre il WebSocket con il cookie di sessione e
+  il gateway aggiunge il JWT (`Authorization: Bearer`), come per ogni
+  richiesta. Notifiche lo verifica all'handshake. I codici di chiusura:
+  - `4401`: JWT mancante o non valido;
+  - `4001`: il JWT è scaduto (dura 5 minuti). Il client si ricollega e il
+    gateway gliene dà uno nuovo; così un logout vale anche per i WebSocket già
+    aperti;
+  - `1001`: Notifiche si ferma, e al nuovo collegamento risponde un'altra
+    replica.
+- **Più repliche:** il messaggio di Kafka lo elabora la replica che ha la
+  partizione, ma il WebSocket può essere aperto su un'altra. Ogni notifica
+  salvata fa `NOTIFY notifiche_nuove` con `{id, destinatario}` nella stessa
+  transazione, e il messaggio parte al commit. Ogni replica è in `LISTEN` su una
+  connessione sua e consegna la notifica ai WebSocket che ha lei.
+- **Il client:** a ogni `connesso` rilegge `GET /api/notifiche/notifiche`, per
+  le notifiche arrivate mentre era scollegato, e scarta una `notifica` con un
+  `id` che ha già.
+
+REST, con le sole notifiche di chi chiede:
+
+| Richiesta | Risposta |
+|---|---|
+| `GET /api/notifiche/notifiche` | `{"nonLette": 2, "notifiche": [...]}`: le ultime 50, dalla più recente |
+| `POST /api/notifiche/notifiche/{id}/letta` | 204; 404 se non c'è o è di un altro; 400 se l'id non è un UUID |
+| `POST /api/notifiche/notifiche/lette` | 204: tutte lette |
+
+Limite noto: `evento_elaborato` (anche quella di Notifiche) e
+`comando_elaborato` di Pagamenti crescono con i messaggi. Kafka li tiene 7 giorni, quindi le righe più vecchie si
 potrebbero cancellare dopo quel tempo (non lo fa ancora nessun job).
 
 ## Vedere i messaggi
@@ -781,6 +892,14 @@ dead letter topic:
 docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group pagamenti
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.esiti --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.dlt --from-beginning --formatter-property print.headers=true
+```
+
+E per Notifiche: il gruppo `notifiche` su `edizioni.eventi` e
+`pagamenti.esiti`, e il dead letter topic:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifiche
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic notifiche.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Su Kubernetes gli stessi comandi, con `kubectl exec -it -n ginvault kafka-0 --`

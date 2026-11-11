@@ -5,6 +5,8 @@ export interface UtenteAutenticato {
   sub: string;
   nome?: string;
   ruoli: string[];
+  /** Il claim "exp": quando il JWT scade (AvvisiGateway chiude lì il WebSocket). */
+  scadeIl: Date;
 }
 
 /** Richiesta HTTP dopo il passaggio di JwtAuthGuard. */

@@ -74,7 +74,7 @@ Produzione ricalcola la resa: 540 bottiglie                    [Produzione]
 Edizioni riduce la quota online, prelazione intatta            [Edizioni]
    │  Kafka  edizioni.eventi       TiraturaRidotta      key = idEdizione
    ▼
-Notifiche manda il push a Giulia e alla lista d'attesa         [Notifiche]
+Notifiche avvisa chi ha prenotato: le bottiglie 112 e 113     [Notifiche]
    │  WebSocket → front-end (il nostro mockup dell'area soci)
 ```
 
@@ -95,7 +95,7 @@ Il contratto completo (busta JSON, versioni, regole) è in [`eventi.md`](eventi.
 | `magazzino.eventi` | Magazzino | ConsegnaRegistrata (anche ridotta); più avanti LottoScartato | botanica | `produzione` |
 | `produzione.eventi` | Produzione | ResaRicalcolata; più avanti LottoImbottigliato | idEdizione | `edizioni` |
 | `edizioni.eventi` | Edizioni | EdizioneCreata, TiraturaRidotta, TiraturaAumentata, RicalcoloRifiutato, PrenotazioneConfermata (con i numeri di bottiglia), PrenotazioneAnnullata; più avanti PrelazioneAperta | idEdizione | `produzione`, `notifiche` |
-| `pagamenti.comandi` / `pagamenti.esiti` | Edizioni / Pagamenti | RichiestaPagamento, RichiestaRimborso / PagamentoRiuscito, PagamentoFallito, RimborsoEseguito | idPrenotazione | `pagamenti` / `edizioni` |
+| `pagamenti.comandi` / `pagamenti.esiti` | Edizioni / Pagamenti | RichiestaPagamento, RichiestaRimborso / PagamentoRiuscito, PagamentoFallito, RimborsoEseguito | idPrenotazione | `pagamenti` / `edizioni`, `notifiche` |
 
 ---
 

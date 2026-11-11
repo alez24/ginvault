@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { UtenteAutenticato } from './utente-autenticato';
+import { CONFIGURAZIONE, type Configurazione } from '../configurazione';
+import type { UtenteAutenticato } from './utente-autenticato';
 
 /**
  * Verifica il JWT emesso dal gateway, con le stesse regole dei servizi Spring:
@@ -8,19 +9,21 @@ import { UtenteAutenticato } from './utente-autenticato';
  *  - issuer = "ginvault-gateway";
  *  - token scaduto o senza "exp"/"sub" -> rifiutato.
  *
- * È separato dal guard HTTP perché servirà anche ai WebSocket: l'handshake di
+ * È separato dal guard HTTP perché serve anche ai WebSocket: l'handshake di
  * una connessione WebSocket arriva dal gateway con lo stesso header
- * "Authorization: Bearer ...", e il gateway WebSocket di notifiche lo
- * verificherà con questo stesso servizio.
+ * "Authorization: Bearer ...", e AvvisiGateway lo verifica con questo servizio.
  */
 @Injectable()
 export class VerificaJwtService {
   // createRemoteJWKSet scarica la JWKS alla prima verifica, la tiene in cache e
   // la riscarica se arriva un token con un "kid" sconosciuto (gateway riavviato).
-  private readonly chiaviGateway = createRemoteJWKSet(
-    new URL(process.env.JWKS_URI ?? 'http://localhost:8080/.well-known/jwks.json'),
-  );
-  private readonly issuer = process.env.JWT_ISSUER ?? 'ginvault-gateway';
+  private readonly chiaviGateway: ReturnType<typeof createRemoteJWKSet>;
+  private readonly issuer: string;
+
+  constructor(@Inject(CONFIGURAZIONE) configurazione: Configurazione) {
+    this.chiaviGateway = createRemoteJWKSet(new URL(configurazione.jwt.jwksUri));
+    this.issuer = configurazione.jwt.issuer;
+  }
 
   async verifica(token: string): Promise<UtenteAutenticato> {
     const { payload } = await jwtVerify(token, this.chiaviGateway, {
@@ -36,6 +39,7 @@ export class VerificaJwtService {
       sub: payload.sub as string,
       nome: typeof payload.name === 'string' ? payload.name : undefined,
       ruoli,
+      scadeIl: new Date((payload.exp as number) * 1000),
     };
   }
 }

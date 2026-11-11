@@ -4,6 +4,7 @@ target/
 # --- Node/NestJS ---
 node_modules/
 dist/
+dist-test/
 
 # --- IDE ---
 .idea/

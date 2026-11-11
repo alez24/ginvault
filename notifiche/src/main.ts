@@ -1,11 +1,14 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { creaApp } from './app';
+import { leggiConfigurazione } from './configurazione';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-  // Chiude l'app in modo pulito quando Docker invia SIGTERM (docker stop)
+  const configurazione = leggiConfigurazione();
+  // Livelli di log come INFO dei servizi Spring: niente debug e verbose
+  const app = await creaApp(configurazione, { logger: ['fatal', 'error', 'warn', 'log'] });
+  // Chiude l'app in modo pulito quando Docker invia SIGTERM (docker stop):
+  // WebSocket chiusi con 1001, consumer fuori dal gruppo, pool chiuso
   app.enableShutdownHooks();
   // Porta fissa per servizio (8086 = notifiche), sovrascrivibile con PORT
-  await app.listen(process.env.PORT ?? 8086);
+  await app.listen(configurazione.porta);
 }
-bootstrap();
+void bootstrap();

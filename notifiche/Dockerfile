@@ -35,5 +35,8 @@ USER node
 
 EXPOSE 8086
 
-# Avviamo node direttamente (non "npm start"): node è PID 1 e riceve SIGTERM
-CMD ["node", "dist/main.js"]
+# Avviamo node direttamente (non "npm start"): node è PID 1 e riceve SIGTERM.
+# --disable-warning: kafkajs 2.2.4 chiama setTimeout con un ritardo negativo
+# (il suo "throttledUntil" parte da -1); Node 24 lo tratta come 1 ms, come
+# prima, ma a ogni volta stampa un TimeoutNegativeWarning. Nient'altro.
+CMD ["node", "--disable-warning=TimeoutNegativeWarning", "dist/main.js"]
