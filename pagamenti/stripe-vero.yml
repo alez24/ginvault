@@ -1,0 +1,26 @@
+# Fa girare StripeVeroTest contro lo Stripe VERO, in modalità test (nessun
+# soldo vero: i PaymentIntent e i rimborsi compaiono nella dashboard di Stripe).
+#
+# Dalla cartella ginvault:
+#   docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero
+#
+# Compose legge STRIPE_SECRET_KEY dal .env e la passa SOLO a questo container
+# usa e getta: la chiave non si scrive da nessuna parte e non si stampa.
+# Con la chiave vuota (o non di test) i 3 test risultano "Skipped".
+name: ginvault-stripe-vero
+
+services:
+  stripe-vero:
+    image: maven:3.9-eclipse-temurin-21
+    working_dir: /workspace
+    environment:
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    volumes:
+      - ./:/workspace
+      - ginvault-m2:/root/.m2
+    command: ["mvn", "-B", "test", "-Dtest=StripeVeroTest", "-Dsurefire.failIfNoSpecifiedTests=false"]
+
+volumes:
+  # La cache di Maven usata anche dagli altri comandi di test
+  ginvault-m2:
+    external: true

@@ -8,7 +8,8 @@
 #   Stop:   docker compose down          (con -v cancella anche i dati dei DB)
 #
 # Prima del primo avvio: copiare .env.example in .env e compilarlo (client
-# id/secret OAuth, elenchi dei ruoli). Compose legge .env in automatico.
+# id/secret OAuth, elenchi dei ruoli, chiave di test di Stripe). Compose legge
+# .env in automatico.
 #
 # Reti:
 #   - frontend-net       -> solo front-end e gateway: nginx non vede i servizi
@@ -17,8 +18,8 @@
 #     pubblicata sull'host e ogni chiamata porta il JWT dell'utente; il filtro
 #     "solo produzione sulla 9084" lo fa la NetworkPolicy di Kubernetes
 #   - kafka-net          -> Kafka e SOLO i servizi che pubblicano o consumano
-#     eventi (edizioni, produzione, magazzino): gateway, front-end, ricette e
-#     i database non lo raggiungono
+#     eventi (edizioni, produzione, magazzino, pagamenti): gateway, front-end,
+#     ricette e i database non lo raggiungono
 #   - <servizio>-db-net  -> rete privata tra UN servizio e il SUO database.
 #     Il DB di edizioni non è raggiungibile da ricette, ecc.: il pattern
 #     "database per service" è garantito anche a livello di rete.
@@ -201,9 +202,13 @@ services:
     image: apache/kafka:4.3.0
     restart: "no"
     environment:
-      # produzione.dlt ed edizioni.dlt: i dead letter topic di Produzione e di
-      # Edizioni (messaggi che non si riescono a elaborare, docs/eventi.md)
-      TOPIC: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+      # produzione.dlt, edizioni.dlt, pagamenti.dlt: i dead letter topic
+      # (messaggi che non si riescono a elaborare, docs/eventi.md).
+      # pagamenti.comandi: i comandi di Edizioni per Pagamenti (addebita,
+      # rimborsa); pagamenti.esiti: come sono andati.
+      TOPIC: >-
+        edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+        pagamenti.comandi pagamenti.esiti pagamenti.dlt
       PARTIZIONI: 3
       KAFKA_HEAP_OPTS: -Xmx128m
     # $$ = un "$" per la shell: Compose non prova a sostituirlo con una variabile
@@ -374,14 +379,26 @@ services:
       DB_USER: pagamenti
       DB_PASSWORD: pagamenti
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Legge pagamenti.comandi (consumer group "pagamenti"), pubblica gli esiti
+      # su pagamenti.esiti e gli scarti su pagamenti.dlt
+      KAFKA_BOOTSTRAP: kafka:9092
+      # La chiave SEGRETA di test di Stripe, dal file .env (mai scritta qui).
+      # Vuota: pagamenti parte, ma gli addebiti finiscono in pagamenti.dlt.
+      # Le reti di Compose non sono "internal": pagamenti raggiunge
+      # api.stripe.com su Internet.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
     depends_on:
       pagamenti-db:
         condition: service_healthy
+      # Usa Kafka: parte quando i topic esistono
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8085/health"]
     networks:
       - backend
+      - kafka-net
       - pagamenti-db-net
 
   # ===========================================================================

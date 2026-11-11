@@ -27,6 +27,11 @@
     <properties>
         <!-- Letta dal parent per configurare il compilatore (release 21) -->
         <java.version>21</java.version>
+        <!--
+            SDK ufficiale di Stripe. La versione fissa anche la versione dell'API
+            di Stripe usata nelle chiamate (Stripe.API_VERSION, 2026-10-28.endive).
+        -->
+        <stripe.version>34.1.0</stripe.version>
     </properties>
 
     <dependencies>
@@ -40,6 +45,22 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
+            Spring for Apache Kafka: il consumer @KafkaListener di pagamenti.comandi
+            e il KafkaTemplate (publisher dell'outbox e dead letter). Versione gestita dal parent.
+        -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!-- Stripe in modalità test: PaymentIntent e rimborsi, chiamati dal server -->
+        <dependency>
+            <groupId>com.stripe</groupId>
+            <artifactId>stripe-java</artifactId>
+            <version>${stripe.version}</version>
         </dependency>
 
         <!-- Accesso al DB: JPA/Hibernate + pool di connessioni HikariCP -->
@@ -73,6 +94,53 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Testcontainers: nei test di integrazione avvia un PostgreSQL e un Kafka
+            VERI in container Docker usa-e-getta (serve Docker in esecuzione).
+            @ServiceConnection collega da soli datasource e Kafka ai container.
+            Versioni gestite dal parent di Spring Boot.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Awaitility: "aspetta finché l'esito è su Kafka" senza sleep fissi -->
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            WireMock: uno Stripe FINTO nei test, un server HTTP vero su una porta
+            casuale che risponde come l'API di Stripe (pagamento riuscito, carta
+            rifiutata, errore 500, lentezza). La versione standalone ha le sue
+            dipendenze dentro il jar e non si scontra con quelle di Spring Boot.
+        -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

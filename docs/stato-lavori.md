@@ -11,8 +11,9 @@ e il punto esatto in cui siamo arrivati.
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
 - **In corso: la storia di Giulia**, in 7 passi (vedi
-  [La storia di Giulia](#la-storia-di-giulia)). Il passo 1 è fatto e aspetta
-  l'ok per il commit.
+  [La storia di Giulia](#la-storia-di-giulia)). Il passo 1 è nel commit
+  `8443fb6`; il passo 2 (Pagamenti con Stripe) è fatto e aspetta l'ok per il
+  commit.
 - Il giro della demo di Elena dal browser sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
@@ -38,6 +39,7 @@ e il punto esatto in cui siamo arrivati.
 | `2c5b712` (PR #4) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
 | `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
 | `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
+| `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -53,8 +55,8 @@ I sette passi, sul branch `storia-giulia`:
 
 | # | Passo | Stato |
 |---|---|---|
-| 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ fatto, da committare |
-| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | da fare |
+| 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ `8443fb6` |
+| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ fatto, da committare |
 | 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | da fare |
 | 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | da fare |
 | 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | da fare |
@@ -72,7 +74,7 @@ Le scelte dell'utente (11 novembre):
   storia finisce con le bottiglie 112 e 113.
 - **Lista d'attesa fuori:** dall'area soci si toglie.
 
-### Passo 1: prelazione e prenotazioni (da committare)
+### Passo 1: prelazione e prenotazioni (`8443fb6`)
 
 - **Stato dell'edizione** (`StatoEdizione`):
   - `IN_PRELAZIONE` dall'annuncio, per 7 giorni: prenotano solo i soci;
@@ -125,6 +127,65 @@ Le scelte dell'utente (11 novembre):
   - Nel log SQL il blocco è `select ... from edizione ... for no key update`.
   - **Non fatto:** immagine `edizioni:0.6` e cluster (si aggiornano con i
     passi di Kubernetes e integrazione).
+
+### Passo 2: Pagamenti con Stripe (da committare)
+
+- **Il flusso:** Edizioni (dal passo 3) manda un comando su
+  `pagamenti.comandi`; Pagamenti chiama Stripe e pubblica l'esito su
+  `pagamenti.esiti` con l'outbox. Chiave: l'id della prenotazione. I contratti
+  sono in [`docs/eventi.md`](eventi.md#i-messaggi-della-storia-di-giulia).
+  - `RichiestaPagamento` → `PagamentoRiuscito` o `PagamentoFallito`;
+  - `RichiestaRimborso` → `RimborsoEseguito`. Serve al passo 3 (pagamento
+    arrivato a prenotazione scaduta), ma è già qui: così Pagamenti è completo.
+- **Stripe** (`PagamentiStripe`, SDK `stripe-java` 34.1.0):
+  - un PaymentIntent creato e confermato dal server (`confirm=true`, niente
+    redirect), importo in centesimi;
+  - `pm_card_visa` → riuscito; `pm_card_chargeDeclined` → `CARTA_RIFIUTATA`,
+    `generic_decline`; una carta che chiede il 3D Secure →
+    `AUTENTICAZIONE_RICHIESTA`;
+  - chiave di idempotenza `ginvault-pagamento-<prenotazione>` (e
+    `ginvault-rimborso-<prenotazione>`): un comando rielaborato non addebita
+    due volte;
+  - 2 s per connettersi, 10 s per la risposta, nessun nuovo tentativo dentro
+    l'SDK. Rete giù, 5xx, 429 o chiave sbagliata → si riprova (1, 2, 4, 8 s),
+    poi `pagamenti.dlt`;
+  - a Stripe vanno solo gli id (metadata `prenotazioneId`, `edizioneId`), non
+    chi ha prenotato;
+  - la chiave arriva da `STRIPE_SECRET_KEY` e non va mai nei log. Una chiave
+    live fa fallire l'avvio; senza chiave il servizio parte, con un WARN.
+- **Stripe fuori dalla transazione:** prima la chiamata, poi in un solo commit
+  il pagamento, la riga di outbox e il comando elaborato.
+- **Doppioni fermati tre volte:** `comando_elaborato` (stesso `eventId`); un
+  pagamento per prenotazione (UNIQUE `prenotazione_id`: un altro comando
+  ripete l'esito senza richiamare Stripe); la chiave di idempotenza di Stripe.
+- **Tabelle:** `pagamento`, `outbox`, `comando_elaborato`.
+- **Compose:** i topic `pagamenti.comandi`, `pagamenti.esiti`,
+  `pagamenti.dlt`; pagamenti su `kafka-net`, con `KAFKA_BOOTSTRAP` e
+  `STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}`, e parte dopo `kafka-topic`.
+  `.env.example` ha la riga `STRIPE_SECRET_KEY=`. Kubernetes al passo 6.
+- **Verificato (11 nov):** 44 test di pagamenti, 41 verdi e 3 saltati:
+  - `PagamentoTest` (11, dominio);
+  - `PagamentiStripeTest` (14, Stripe finto con WireMock): parametri e header
+    mandati, 402, 3D Secure, 400, 500, 429, 401 senza la chiave nel messaggio,
+    Stripe lento (interrotto a 500 ms, una sola chiamata), chiave vuota, live
+    o pubblicabile, rimborso;
+  - `PagamentiIntegrazioneTest` (9, PostgreSQL e Kafka veri, Stripe finto):
+    - carta buona e carta rifiutata;
+    - lo stesso comando due volte: Stripe chiamato una volta;
+    - un altro comando per la stessa prenotazione: esito ripetuto;
+    - 500 e poi 200: pagato al secondo tentativo, con la stessa chiave;
+    - Stripe sempre giù: `pagamenti.dlt` dopo 4 chiamate, nessun pagamento;
+    - comandi illeggibili o sconosciuti: subito in `pagamenti.dlt`, e il
+      comando buono dopo passa;
+    - rimborso; rimborso di un pagamento rifiutato → `pagamenti.dlt`;
+  - `SicurezzaTest` (7), come prima;
+  - in Compose: pagamenti healthy, i 3 topic creati, il gruppo `pagamenti`
+    con 3 consumer, nessun messaggio sui topic veri.
+  - **Da fare:** `StripeVeroTest` (3 test contro lo Stripe vero in modalità
+    test) è saltato. Nel container `STRIPE_SECRET_KEY` arriva vuota, mentre
+    le variabili di GitHub arrivano: nel `.env` la riga di Stripe manca, è
+    vuota o ha un altro nome. Si rilancia con
+    `docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero`.
 
 ## La storia di Elena
 
@@ -596,8 +657,10 @@ git status
 git log --oneline -5
 gh pr list --state all --limit 5
 
-# Test di un servizio senza giacenze-api (edizioni, ricette)
+# Test di un servizio senza giacenze-api (edizioni, ricette, pagamenti)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+# Pagamenti contro lo Stripe vero (modalità test): la chiave la passa Compose dal .env
+docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero
 # Magazzino e produzione: prima il modulo condiviso
 docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /repo maven:3.9-eclipse-temurin-21 sh -c 'mvn -B -q -f giacenze-api/pom.xml install && mvn -B -f magazzino/pom.xml test && mvn -B -f produzione/pom.xml test'
 

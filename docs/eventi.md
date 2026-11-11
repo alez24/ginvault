@@ -15,7 +15,7 @@ broker e da controller.
 |---|---|---|
 | Dove | servizio `kafka`, rete `kafka-net` | StatefulSet `kafka` (pod `kafka-0`), [`k8s/kafka.yaml`](../k8s/kafka.yaml) |
 | Indirizzo per i servizi | `kafka:9092` | `kafka:9092` (Service headless) |
-| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
+| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino, pagamenti | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
 | Dati | volume `kafka-data` | PVC `dati-kafka-0` (1 GiB) |
 | Heap | 512 MB al massimo | 512 MB al massimo, container con limite di 1 GiB |
 | Creazione dei topic | servizio `kafka-topic` (parte, crea, termina) | Job `kafka-topic` |
@@ -34,6 +34,9 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
 | `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
 | `edizioni.dlt` | Edizioni (dead letter) | quella del messaggio originale | i messaggi che Edizioni non riesce a elaborare | nessuno: si leggono a mano |
+| `pagamenti.comandi` | Edizioni (dal passo 3 della storia di Giulia) | id della prenotazione | i comandi `RichiestaPagamento`, `RichiestaRimborso` | `pagamenti` |
+| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni` (passo 3); più avanti `notifiche` |
+| `pagamenti.dlt` | Pagamenti (dead letter) | quella del comando originale | i comandi che Pagamenti non riesce a elaborare | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
   possiede è l'unico che ci scrive. I nomi usano il punto e mai il trattino
@@ -52,8 +55,15 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
   verità è il database di ogni servizio, non Kafka.
 - `produzione.dlt` è il **dead letter topic** di Produzione: un topic solo per
   tutti i messaggi scartati dai suoi consumer, qualunque sia il topic
-  d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni. Vedi
+  d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni,
+  `pagamenti.dlt` quello di Pagamenti. Vedi
   [Consumer](#consumer-idempotenza-retry-e-dead-letter).
+- **I comandi hanno il loro topic, e lo possiede chi li RICEVE**:
+  `pagamenti.comandi` è di Pagamenti, che ne fissa il formato; ci scrive
+  Edizioni. Le risposte vanno su `pagamenti.esiti` invece che su
+  `pagamenti.eventi`: lì ci sono solo gli esiti dei comandi. Un evento
+  racconta un fatto a chiunque; un comando chiede una cosa a un servizio
+  preciso, che risponde con un esito.
 
 ## Formato dei messaggi
 
@@ -338,6 +348,147 @@ evento per `ordineId`.
 | `esitoQualita` | `CONFORME` o `NON_CONFORME`. Un lotto non conforme resta tracciato ma non si usa per produrre |
 | `consegnataIl` | il giorno di arrivo (fuso di Roma) |
 
+## I messaggi della storia di Giulia
+
+Giulia, socia, prenota 2 bottiglie dell'edizione d'estate e paga con una carta
+di prova scelta da un menu. Il pagamento non parte dalla richiesta HTTP:
+Edizioni manda un **comando** a Pagamenti e aspetta l'**esito** (la SAGA del
+passo 3). Pagamenti addebita con Stripe in modalità test, dal server.
+
+| Messaggio | Topic | Chi lo scrive | Quando |
+|---|---|---|---|
+| `RichiestaPagamento` (comando) | `pagamenti.comandi` | Edizioni | Giulia conferma la prenotazione con una carta |
+| `RichiestaRimborso` (comando) | `pagamenti.comandi` | Edizioni | il pagamento è arrivato quando la prenotazione era già scaduta |
+| `PagamentoRiuscito` | `pagamenti.esiti` | Pagamenti | Stripe ha addebitato l'importo |
+| `PagamentoFallito` | `pagamenti.esiti` | Pagamenti | la carta è rifiutata, chiede il 3D Secure o Stripe non accetta la richiesta |
+| `RimborsoEseguito` | `pagamenti.esiti` | Pagamenti | Stripe ha restituito l'addebito |
+
+La busta è la stessa degli eventi, anche per i comandi: `eventId` è l'id del
+messaggio, `tipo` il nome del comando (`Richiesta...`) o dell'evento (al
+passato). Chiave di tutti e due i topic: **l'id della prenotazione**, così i
+messaggi della stessa prenotazione restano in ordine (il rimborso dopo il suo
+pagamento). Gli importi sono interi, **in centesimi**, come li vuole Stripe:
+2 bottiglie a 45,00 euro = `9000`.
+
+### `RichiestaPagamento` v1 (pagamenti.comandi)
+
+```json
+{
+  "eventId": "7d1f0c2e-3b4a-4c5d-8e6f-9a0b1c2d3e4f",
+  "tipo": "RichiestaPagamento",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:00Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "importoCentesimi": 9000,
+    "valuta": "eur",
+    "metodo": "pm_card_visa",
+    "descrizione": "GinVault: 2 bottiglie dell'edizione d'estate"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `acquirente` | il `sub` di chi ha prenotato. Resta in GinVault: a Stripe vanno solo `prenotazioneId` ed `edizioneId` (metadata) |
+| `importoCentesimi` | intero maggiore di zero: `9000.5` è un comando non valido |
+| `valuta` | codice ISO di 3 lettere, minuscolo (`eur`) |
+| `metodo` | il metodo di pagamento di Stripe (`pm_...`): `pm_card_visa` riesce, `pm_card_chargeDeclined` è rifiutata |
+| `descrizione` | facoltativa, al più 200 caratteri: compare nella dashboard di Stripe |
+
+### `RichiestaRimborso` v1 (pagamenti.comandi)
+
+```json
+{
+  "eventId": "8e2a1d3f-4c5b-4d6e-9f70-a1b2c3d4e5f6",
+  "tipo": "RichiestaRimborso",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:21:00Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "motivo": "pagamento arrivato a prenotazione scaduta"
+  }
+}
+```
+
+Si rimborsa sempre l'intero addebito della prenotazione; `motivo` è
+facoltativo.
+
+### `PagamentoRiuscito` v1 (pagamenti.esiti)
+
+```json
+{
+  "eventId": "9f3b2e40-5d6c-4e7f-a081-b2c3d4e5f607",
+  "tipo": "PagamentoRiuscito",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:02Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "pagamentoId": "c0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "importoCentesimi": 9000,
+    "valuta": "eur",
+    "riferimentoStripe": "pi_3QxYz..."
+  }
+}
+```
+
+`riferimentoStripe` è l'id del PaymentIntent: lo si cerca nella dashboard di
+Stripe. Edizioni conferma la prenotazione e assegna i numeri di bottiglia.
+
+### `PagamentoFallito` v1 (pagamenti.esiti)
+
+Solo il `payload` (la busta è come sopra):
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000002",
+  "pagamentoId": "c0000000-0000-4000-8000-000000000002",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "motivo": "CARTA_RIFIUTATA",
+  "codice": "generic_decline",
+  "spiegazione": "La banca ha rifiutato la carta."
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `motivo` | `CARTA_RIFIUTATA` (402 di Stripe), `AUTENTICAZIONE_RICHIESTA` (la carta chiede il 3D Secure, che un pagamento dal server non può fare), `RICHIESTA_NON_VALIDA` (per esempio un `metodo` che non esiste) |
+| `codice` | il codice di Stripe: il `decline_code` per una carta rifiutata, se no il `code` |
+| `spiegazione` | in italiano, per l'avviso a chi ha prenotato |
+
+Edizioni annulla la prenotazione e libera le bottiglie. Uno Stripe che non
+risponde **non** è un `PagamentoFallito`: il comando si riprova e, finiti i
+tentativi, va in `pagamenti.dlt` (vedi sotto).
+
+### `RimborsoEseguito` v1 (pagamenti.esiti)
+
+Solo il `payload`:
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+  "pagamentoId": "c0000000-0000-4000-8000-000000000001",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "importoCentesimi": 9000,
+  "valuta": "eur",
+  "riferimentoStripe": "re_3QxYz...",
+  "motivo": "pagamento arrivato a prenotazione scaduta"
+}
+```
+
+Qui `riferimentoStripe` è l'id del rimborso (`re_...`).
+
+**Un pagamento per prenotazione.** Una seconda `RichiestaPagamento` per la
+stessa prenotazione (con un altro `eventId`) non richiama Stripe: Pagamenti
+ripubblica l'esito che ha già, anche se il secondo comando ha un'altra carta.
+Allo stesso modo una seconda `RichiestaRimborso` ripubblica `RimborsoEseguito`.
+
 ## Transactional outbox
 
 Un evento non parte dalla richiesta HTTP: il servizio lo scrive nella sua
@@ -365,8 +516,9 @@ conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
 gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
 volta**: i consumer devono scartare gli `eventId` già visti. L'outbox ce
 l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`,
-`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`) e Produzione
-(`ResaRicalcolata`).
+`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`), Produzione
+(`ResaRicalcolata`) e Pagamenti (`PagamentoRiuscito`, `PagamentoFallito`,
+`RimborsoEseguito`).
 
 ## Consumer: idempotenza, retry e dead letter
 
@@ -445,9 +597,45 @@ classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
 - **un ricalcolo rifiutato non è un errore:** il messaggio è elaborato, l'offset
   avanza e parte `RicalcoloRifiutato`, con un WARN nel log.
 
-Limite noto: `evento_elaborato` cresce con gli eventi. Kafka tiene i messaggi
-7 giorni, quindi le righe più vecchie si potrebbero cancellare dopo quel
-tempo (non lo fa ancora nessun job).
+### Il consumer di Pagamenti
+
+Pagamenti legge `pagamenti.comandi` nel consumer group `pagamenti`, con 3
+consumer, uno per partizione (`ElaborazioneComandi`, `ConfigurazioneKafka`,
+`LettoreComandi`). La differenza con gli altri: in mezzo c'è una chiamata a
+Stripe, che **non** sta nella transazione del database (terrebbe una
+connessione occupata per secondi, e un rollback non annullerebbe un addebito).
+
+1. legge la busta; se è illeggibile, o il `tipo` è sconosciuto → dead letter
+   (su un topic di comandi arrivano solo comandi per Pagamenti);
+2. se l'`eventId` è in `comando_elaborato` → già elaborato, si scarta senza
+   chiamare Stripe;
+3. chiama Stripe con la **chiave di idempotenza** della prenotazione
+   (`Idempotency-Key: ginvault-pagamento-<prenotazione>`, per il rimborso
+   `ginvault-rimborso-<prenotazione>`), solo se la prenotazione non ha già un
+   pagamento;
+4. in una transazione: il pagamento, la riga di outbox con l'esito e
+   l'`eventId` in `comando_elaborato`.
+
+Se il punto 4 fallisce, Kafka ripropone il comando e il punto 3 si ripete:
+Stripe riconosce la chiave e restituisce la risposta di prima, senza un
+secondo addebito. Terza difesa, nel database: UNIQUE su `prenotazione_id` di
+`pagamento`.
+
+- **retry:** 1, 2, 4, 8 secondi (`pagamenti.consumer.*`) quando Stripe non
+  dà un esito: rete giù, timeout (2 s per connettersi, 10 s per la risposta),
+  errori 5xx, 429, chiave mancante o sbagliata. Ogni tentativo usa la stessa
+  chiave di idempotenza;
+- **dead letter** `pagamenti.dlt`, con gli stessi header: ci va subito un
+  comando illeggibile (`ComandoNonValido`) o un rimborso impossibile
+  (`RimborsoNonPossibile`: il pagamento era stato rifiutato, o Stripe non
+  accetta il rimborso); dopo i tentativi, un comando con Stripe sempre giù
+  (`ProviderNonDisponibile`);
+- **una carta rifiutata non è un errore:** il comando è elaborato, l'offset
+  avanza e parte `PagamentoFallito`.
+
+Limite noto: `evento_elaborato` (e `comando_elaborato` di Pagamenti) cresce
+con i messaggi. Kafka li tiene 7 giorni, quindi le righe più vecchie si
+potrebbero cancellare dopo quel tempo (non lo fa ancora nessun job).
 
 ## Vedere i messaggi
 
@@ -473,6 +661,15 @@ eventi su `edizioni.eventi` e il suo dead letter topic:
 docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.eventi --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.dlt --from-beginning --formatter-property print.headers=true
+```
+
+E per Pagamenti: il gruppo `pagamenti` su `pagamenti.comandi`, gli esiti e il
+dead letter topic:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group pagamenti
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.esiti --from-beginning --formatter-property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Su Kubernetes gli stessi comandi, con `kubectl exec -it -n ginvault kafka-0 --`
