@@ -26,7 +26,8 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
  *   POST /api/edizioni/edizioni/{id}/prenotazioni   prenota
  *   GET  /api/edizioni/prenotazioni                 le mie prenotazioni
  *   GET  /api/edizioni/prenotazioni/{id}            una mia prenotazione
- *   GET  /api/edizioni/regole-di-vendita            prelazione, limiti, prezzi
+ *   POST /api/edizioni/prenotazioni/{id}/pagamento  pago con una carta di prova
+ *   GET  /api/edizioni/regole-di-vendita            prelazione, limiti, prezzi, carte
  *
  * Chi prenota è l'utente del JWT: il "sub" diventa l'acquirente e il ruolo
  * SOCIO decide se può prenotare in prelazione. Ognuno vede solo le sue
@@ -76,7 +77,24 @@ public class PrenotazioniController {
         return servizio.trova(id, utente.getToken().getSubject());
     }
 
-    /** Durata della prelazione, bottiglie per persona, prezzi e tempo per pagare. */
+    /**
+     * Chiede di pagare una mia prenotazione con una carta di prova del menu.
+     * 202 Accepted: il pagamento è partito ma l'esito arriva dopo, da
+     * Pagamenti (la SAGA). Il front-end rilegge la prenotazione finché non è
+     * CONFERMATA (con i numeri di bottiglia) o ANNULLATA. 400 se la carta non
+     * è nel menu, 404 se non è mia, 409 se il pagamento è già chiesto, il
+     * tempo è finito o la prenotazione è chiusa (motivo nel corpo).
+     */
+    @PostMapping("/prenotazioni/{id}/pagamento")
+    @PreAuthorize("hasAnyRole('SOCIO', 'CLIENTE')")
+    public ResponseEntity<PrenotazioneVista> paga(@PathVariable UUID id,
+                                                  @Valid @RequestBody Richieste.Pagamento richiesta,
+                                                  JwtAuthenticationToken utente) {
+        PrenotazioneVista prenotazione = servizio.paga(id, utente.getToken().getSubject(), richiesta.metodo());
+        return ResponseEntity.accepted().body(prenotazione);
+    }
+
+    /** Durata della prelazione, bottiglie per persona, prezzi, tempo per pagare e carte di prova. */
     @GetMapping("/regole-di-vendita")
     @PreAuthorize("hasAnyRole('SOCIO', 'CLIENTE', 'DISTILLATORE', 'RESP_ACQUISTI', 'ADMIN')")
     public RegoleDiVenditaVista regole() {

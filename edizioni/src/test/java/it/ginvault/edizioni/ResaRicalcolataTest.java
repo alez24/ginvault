@@ -134,6 +134,12 @@ class ResaRicalcolataTest {
         NewTopic deadLetter() {
             return TopicBuilder.name(DEAD_LETTER).partitions(3).replicas(1).build();
         }
+
+        /** Gli esiti di Pagamenti, letti dal secondo listener (provato in SagaPagamentoTest): qui restano vuoti. */
+        @Bean
+        NewTopic pagamentiEsiti() {
+            return TopicBuilder.name("pagamenti.esiti").partitions(3).replicas(1).build();
+        }
     }
 
     @Autowired

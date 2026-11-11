@@ -259,9 +259,12 @@ services:
       # validare la formulazione. Niente depends_on: se Ricette è giù, Edizioni
       # parte lo stesso e risponde 503 solo quando serve Ricette.
       RICETTE_URI: http://ricette:8082
-      # Pubblica EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
-      # RicalcoloRifiutato su edizioni.eventi (outbox); legge ResaRicalcolata da
-      # produzione.eventi (consumer group "edizioni"), gli scarti su edizioni.dlt
+      # Pubblica EdizioneCreata, TiraturaRidotta, TiraturaAumentata,
+      # RicalcoloRifiutato, PrenotazioneConfermata e PrenotazioneAnnullata su
+      # edizioni.eventi e i comandi RichiestaPagamento e RichiestaRimborso su
+      # pagamenti.comandi (outbox); legge ResaRicalcolata da produzione.eventi e
+      # gli esiti di Pagamenti da pagamenti.esiti (consumer group "edizioni"),
+      # gli scarti su edizioni.dlt
       KAFKA_BOOTSTRAP: kafka:9092
     depends_on:
       edizioni-db:

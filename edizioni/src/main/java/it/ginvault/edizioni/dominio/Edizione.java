@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
@@ -30,6 +31,7 @@ import jakarta.persistence.Transient;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 
+import org.hibernate.annotations.ColumnDefault;
 import org.springframework.data.domain.AfterDomainEventPublication;
 import org.springframework.data.domain.DomainEvents;
 
@@ -79,6 +81,18 @@ import org.springframework.data.domain.DomainEvents;
  *  - lo stato (StatoEdizione) non si salva: si calcola dall'orologio e dalle quote.
  * Dell'annuncio restano tiratura, kg e quote annunciati: dopo un raccolto
  * scarso i soci vedono "da 600 a 540".
+ *
+ * La SAGA del pagamento (pagamentoRiuscito, pagamentoFallito, scadenza) passa
+ * da qui perché tocca le quote e i numeri di bottiglia:
+ *  - pagamento riuscito: la prenotazione è confermata e prende i numeri
+ *    successivi dell'edizione (dopo 111 bottiglie numerate, Giulia ha 112 e 113);
+ *  - pagamento rifiutato o tempo finito: la prenotazione è annullata e le sue
+ *    bottiglie tornano libere nella quota (compensazione);
+ *  - pagamento riuscito a prenotazione già annullata: si chiede il rimborso.
+ * Chi chiama tiene bloccata la riga dell'edizione (findPerModifica) fino al
+ * commit: così i numeri non hanno né buchi né doppioni anche con conferme
+ * nello stesso istante. Rete di sicurezza: UNIQUE (edizione_id, numero) nella
+ * tabella bottiglia_numerata.
  */
 @Entity
 @Table(name = "edizione", uniqueConstraints = @UniqueConstraint(
@@ -157,6 +171,15 @@ public class Edizione {
     @MapKeyColumn(name = "canale", length = 10)
     @Column(name = "bottiglie", nullable = false)
     private Map<Canale, Integer> quoteAnnunciate = new EnumMap<>(Canale.class);
+
+    /**
+     * Quante bottiglie hanno già un numero: la prossima prenotazione confermata
+     * prende i numeri successivi. Default 0 nel database: così ddl-auto può
+     * aggiungere la colonna NOT NULL anche a una tabella che ha già righe.
+     */
+    @ColumnDefault("0")
+    @Column(name = "bottiglie_numerate", nullable = false)
+    private int bottiglieNumerate;
 
     /** Blocco ottimistico; null = edizione nuova, mai salvata. */
     @Version
@@ -388,6 +411,103 @@ public class Edizione {
         quote.put(canale, quota.conPrenotate(quota.prenotate() + bottiglie));
     }
 
+    // ---------------------------------------------------------------- la SAGA del pagamento
+
+    /**
+     * Pagamenti ha addebitato la prenotazione (PagamentoRiuscito):
+     *  - in attesa di pagamento: confermata, con i numeri di bottiglia
+     *    successivi. Anche se il tempo è appena finito ma la scadenza non l'ha
+     *    ancora annullata: le bottiglie sono ancora sue;
+     *  - annullata (scaduta o rifiutata): le bottiglie non ci sono più, si
+     *    chiede di restituire il pagamento, una volta sola;
+     *  - già confermata: lo stesso esito arrivato di nuovo, niente da fare.
+     */
+    public EsitoPrenotazione pagamentoRiuscito(Prenotazione prenotazione, UUID pagamentoId, String riferimento,
+                                               Instant adesso) {
+        verificaCheSiaDiQuesta(prenotazione);
+        return switch (prenotazione.stato()) {
+            case IN_ATTESA_PAGAMENTO -> {
+                prenotazione.conferma(pagamentoId, riferimento, numera(prenotazione.bottiglie()), adesso);
+                yield EsitoPrenotazione.CONFERMATA;
+            }
+            case ANNULLATA -> {
+                if (prenotazione.rimborsoRichiestoIl() != null) {
+                    yield EsitoPrenotazione.GIA_REGISTRATO;
+                }
+                prenotazione.richiediRimborso(pagamentoId, riferimento, adesso);
+                yield EsitoPrenotazione.RIMBORSO_RICHIESTO;
+            }
+            case CONFERMATA -> EsitoPrenotazione.GIA_REGISTRATO;
+        };
+    }
+
+    /**
+     * Pagamenti non ha potuto addebitare (PagamentoFallito): la prenotazione
+     * è annullata e le sue bottiglie tornano libere nella quota. Se è già
+     * annullata (per esempio scaduta) o confermata, non cambia niente.
+     *
+     * @param spiegazione quella di Pagamenti, in italiano ("La banca ha rifiutato la carta.")
+     */
+    public EsitoPrenotazione pagamentoFallito(Prenotazione prenotazione, String spiegazione, Instant adesso) {
+        verificaCheSiaDiQuesta(prenotazione);
+        if (prenotazione.stato() != StatoPrenotazione.IN_ATTESA_PAGAMENTO) {
+            return EsitoPrenotazione.GIA_REGISTRATO;
+        }
+        libera(prenotazione);
+        prenotazione.annulla(CausaAnnullamento.PAGAMENTO_RIFIUTATO,
+                spiegazione == null || spiegazione.isBlank() ? "Il pagamento non è riuscito." : spiegazione.trim(),
+                adesso);
+        return EsitoPrenotazione.ANNULLATA;
+    }
+
+    /**
+     * Il tempo per pagare è finito: la prenotazione è annullata e le sue
+     * bottiglie tornano libere. Se non è scaduta, o non aspetta più il
+     * pagamento, non cambia niente.
+     *
+     * @return true se la prenotazione è stata annullata adesso
+     */
+    public boolean scadenza(Prenotazione prenotazione, Instant adesso) {
+        verificaCheSiaDiQuesta(prenotazione);
+        if (prenotazione.stato() != StatoPrenotazione.IN_ATTESA_PAGAMENTO || !prenotazione.scaduta(adesso)) {
+            return false;
+        }
+        libera(prenotazione);
+        prenotazione.annulla(CausaAnnullamento.SCADUTA, "Il tempo per pagare è finito il "
+                + DATA_E_ORA.format(prenotazione.scadeIl()) + ": le bottiglie sono tornate disponibili.", adesso);
+        return true;
+    }
+
+    /** I numeri successivi a quelli già dati: dopo 111, per 2 bottiglie, 112 e 113. */
+    private List<Integer> numera(int bottiglie) {
+        if (bottiglieNumerate + bottiglie > tiratura.bottiglie()) {
+            // Non succede: le bottiglie confermate sono prenotate, e le prenotate non superano la tiratura
+            throw new IllegalStateException("Numeri di bottiglia oltre la tiratura: " + bottiglieNumerate + " + "
+                    + bottiglie + " > " + tiratura.bottiglie());
+        }
+        List<Integer> numeri = IntStream.rangeClosed(bottiglieNumerate + 1, bottiglieNumerate + bottiglie)
+                .boxed().toList();
+        bottiglieNumerate += bottiglie;
+        return numeri;
+    }
+
+    /** Le bottiglie della prenotazione tornano libere nella quota del suo canale. */
+    private void libera(Prenotazione prenotazione) {
+        Quota quota = quote.get(prenotazione.canale());
+        if (quota.prenotate() < prenotazione.bottiglie()) {
+            throw new IllegalStateException("Nel canale " + prenotazione.canale() + " ci sono " + quota.prenotate()
+                    + " bottiglie prenotate: non se ne liberano " + prenotazione.bottiglie());
+        }
+        quote.put(prenotazione.canale(), quota.conPrenotate(quota.prenotate() - prenotazione.bottiglie()));
+    }
+
+    private void verificaCheSiaDiQuesta(Prenotazione prenotazione) {
+        if (!id.equals(prenotazione.edizioneId())) {
+            throw new IllegalArgumentException("La prenotazione " + prenotazione.id() + " è dell'edizione "
+                    + prenotazione.edizioneId() + ", non di " + id);
+        }
+    }
+
     private boolean inPrelazione(Instant adesso) {
         return prelazioneFinoAl != null && adesso.isBefore(prelazioneFinoAl);
     }
@@ -494,6 +614,11 @@ public class Edizione {
         EnumMap<Canale, Integer> copia = new EnumMap<>(Canale.class);
         copia.putAll(quoteAnnunciate);
         return Collections.unmodifiableMap(copia);
+    }
+
+    /** Quante bottiglie hanno già un numero (l'ultimo numero dato). */
+    public int bottiglieNumerate() {
+        return bottiglieNumerate;
     }
 
     // ---------------------------------------------------------------- regole

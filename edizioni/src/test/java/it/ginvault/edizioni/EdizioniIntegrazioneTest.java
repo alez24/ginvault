@@ -114,6 +114,12 @@ class EdizioniIntegrazioneTest {
         NewTopic produzioneEventi() {
             return TopicBuilder.name("produzione.eventi").partitions(3).replicas(1).build();
         }
+
+        /** Gli esiti di Pagamenti, letti dal secondo listener (provato in SagaPagamentoTest): qui restano vuoti. */
+        @Bean
+        NewTopic pagamentiEsiti() {
+            return TopicBuilder.name("pagamenti.esiti").partitions(3).replicas(1).build();
+        }
     }
 
     private static final GatewayDiProva GATEWAY = new GatewayDiProva();

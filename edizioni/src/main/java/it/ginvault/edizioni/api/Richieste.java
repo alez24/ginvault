@@ -71,6 +71,17 @@ public final class Richieste {
             Integer bottiglie) {
     }
 
+    /**
+     * POST /prenotazioni/{id}/pagamento, ad esempio {"metodo": "pm_card_visa"}.
+     * Le carte accettate sono in GET /regole-di-vendita (metodiDiPagamento):
+     * una carta fuori dal menu -> 400 dal servizio.
+     */
+    public record Pagamento(
+            @NotBlank(message = "serve il metodo di pagamento (es. pm_card_visa)")
+            @Size(max = 64, message = "al massimo 64 caratteri")
+            String metodo) {
+    }
+
     /** Il riferimento alla formulazione di Ricette. */
     public record Formulazione(
             @NotNull(message = "l'id della formulazione è obbligatorio")

@@ -11,9 +11,9 @@ e il punto esatto in cui siamo arrivati.
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
 - **In corso: la storia di Giulia**, in 7 passi (vedi
-  [La storia di Giulia](#la-storia-di-giulia)). Il passo 1 è nel commit
-  `8443fb6`; il passo 2 (Pagamenti con Stripe) è fatto e aspetta l'ok per il
-  commit.
+  [La storia di Giulia](#la-storia-di-giulia)). I passi 1 e 2 sono nei commit
+  `8443fb6` e `dab4cda`; il passo 3 (la SAGA in Edizioni) è fatto e aspetta
+  l'ok per il commit.
 - Il giro della demo di Elena dal browser sul cluster è ancora da fare.
 - Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
   `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
@@ -40,6 +40,7 @@ e il punto esatto in cui siamo arrivati.
 | `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
 | `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
 | `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
+| `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -56,8 +57,8 @@ I sette passi, sul branch `storia-giulia`:
 | # | Passo | Stato |
 |---|---|---|
 | 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ `8443fb6` |
-| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ fatto, da committare |
-| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | da fare |
+| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ `dab4cda` |
+| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ fatto, da committare |
 | 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | da fare |
 | 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | da fare |
 | 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | da fare |
@@ -128,7 +129,7 @@ Le scelte dell'utente (11 novembre):
   - **Non fatto:** immagine `edizioni:0.6` e cluster (si aggiornano con i
     passi di Kubernetes e integrazione).
 
-### Passo 2: Pagamenti con Stripe (da committare)
+### Passo 2: Pagamenti con Stripe (`dab4cda`)
 
 - **Il flusso:** Edizioni (dal passo 3) manda un comando su
   `pagamenti.comandi`; Pagamenti chiama Stripe e pubblica l'esito su
@@ -186,6 +187,79 @@ Le scelte dell'utente (11 novembre):
     le variabili di GitHub arrivano: nel `.env` la riga di Stripe manca, è
     vuota o ha un altro nome. Si rilancia con
     `docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero`.
+
+### Passo 3: la SAGA in Edizioni (da committare)
+
+- **SAGA orchestrata da Edizioni**, con lo stato nella prenotazione. Il giro
+  completo è in [`docs/eventi.md`](eventi.md#la-saga-in-edizioni).
+  - `POST /prenotazioni/{id}/pagamento {"metodo": "pm_card_visa"}` → 202.
+    Nello stesso commit parte il comando `RichiestaPagamento` (outbox), con
+    l'importo in centesimi e la descrizione per la dashboard di Stripe.
+  - `PagamentoRiuscito` → `CONFERMATA` con i numeri di bottiglia →
+    `PrenotazioneConfermata`.
+  - `PagamentoFallito` → `ANNULLATA` (`PAGAMENTO_RIFIUTATO`), le bottiglie
+    tornano libere (compensazione) → `PrenotazioneAnnullata`.
+  - **Tempo finito:** `ScadenzaPrenotazioni` gira ogni 30 s e annulla
+    (`SCADUTA`) le prenotazioni in attesa oltre i 15 minuti, al massimo 100 per
+    giro, ognuna nella sua transazione.
+  - **Pagamento arrivato tardi:** a prenotazione annullata non la riapre. Parte
+    `RichiestaRimborso` (una volta sola), poi `RimborsoEseguito` lo segna.
+  - **Pagamento dopo l'ora ma prima della scadenza:** conferma, perché le
+    bottiglie erano ancora tenute.
+- **Numeri di bottiglia:** il contatore `bottiglie_numerate` nell'edizione
+  (`DEFAULT 0`, così ddl-auto aggiunge la colonna anche con righe), assegnati
+  in sequenza alla conferma. I numeri sono nella tabella `bottiglia_numerata`,
+  con `UNIQUE (edizione_id, numero)`.
+- **Regola dei blocchi:** ogni passo che cambia una prenotazione blocca prima
+  la riga dell'edizione e solo dopo la legge. Per questo le query
+  `edizioneDi` leggono solo l'id dell'edizione, senza caricare la
+  prenotazione. Conferme simultanee, scadenza e pagamento della stessa
+  prenotazione vanno così in fila.
+- **API:**
+  - errori: 400 se la carta non è nel menu (con `metodiAccettati`), 404 se non
+    è tua, 409 con `motivo` (`PAGAMENTO_GIA_RICHIESTO`, `PRENOTAZIONE_SCADUTA`,
+    `PRENOTAZIONE_CHIUSA`);
+  - `GET /regole-di-vendita` ha `metodiDiPagamento`;
+  - la prenotazione ha `pagamento`, `numeriBottiglia`, `annullamento` e
+    `rimborso`.
+- **Kafka:**
+  - il listener `edizioni-pagamenti` su `pagamenti.esiti`, nel gruppo
+    `edizioni`, con idempotenza, retry e `edizioni.dlt` come per le rese;
+  - `PrenotazioneNonTrovata` va subito nel dead letter;
+  - in `evento_elaborato` l'esito: `CONFERMATA`, `ANNULLATA`,
+    `RIMBORSO_RICHIESTO`, `RIMBORSATA` o `GIA_REGISTRATO`.
+- **Configurazione** (`edizioni.vendita.*`): `metodi-di-pagamento`,
+  `controllo-scadenze-ms`, `scadenze-per-giro`. In Compose i topic c'erano
+  già dal passo 2: cambia solo un commento.
+- **Verificato (11 nov):** 139 test di edizioni verdi (erano 114), 25 nuovi:
+  - `PagamentoDellaPrenotazioneTest` (13, dominio):
+    - dopo 111 bottiglie numerate, quelle di Giulia sono la 112 e la 113;
+    - un'annullata non lascia buchi nei numeri;
+    - carta rifiutata e scadenza liberano le bottiglie;
+    - rimborso del pagamento arrivato tardi;
+    - esiti ripetuti senza effetto;
+    - 409 con i tre motivi;
+  - `PrenotazioniControllerTest` (+5): 202, 401/403, 400 senza metodo o con
+    una carta fuori menu, 409 con il motivo, 404;
+  - `SagaPagamentoTest` (7, PostgreSQL e Kafka veri; la parte di Pagamenti la
+    fa il test sui topic dei Testcontainers):
+    - Giulia via HTTP: comando letto da `pagamenti.comandi`, esito su
+      `pagamenti.esiti`, bottiglie 112 e 113 nell'API e in
+      `PrenotazioneConfermata`;
+    - la carta rifiutata e la compensazione;
+    - la scadenza e poi il rimborso del pagamento tardivo;
+    - un esito ripetuto con lo stesso `eventId` o con uno nuovo;
+    - gli errori HTTP;
+    - un esito sconosciuto subito in `edizioni.dlt`;
+    - **concorrenza:** 20 conferme nello stesso istante prendono i numeri da 1
+      a 40, senza buchi né doppioni, e ogni prenotazione due numeri vicini.
+  - In Compose: edizioni healthy con il nuovo schema (`bottiglie_numerate`
+    NOT NULL DEFAULT 0, `bottiglia_numerata` con il vincolo UNIQUE, indice
+    `ix_prenotazione_scadenza`). Il database di Compose era vuoto, quindi
+    l'aggiunta della colonna a righe esistenti non è stata provata. Compose è
+    di nuovo spento.
+  - **Non fatto:** il giro con Pagamenti e lo Stripe vero (serve la riga del
+    `.env`, vedi passo 2) e l'immagine per il cluster (passo 6).
 
 ## La storia di Elena
 

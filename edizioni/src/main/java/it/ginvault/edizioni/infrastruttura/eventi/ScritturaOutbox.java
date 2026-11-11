@@ -3,6 +3,7 @@ package it.ginvault.edizioni.infrastruttura.eventi;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -11,8 +12,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import it.ginvault.edizioni.dominio.Canale;
 import it.ginvault.edizioni.dominio.EdizioneCreata;
+import it.ginvault.edizioni.dominio.PagamentoRichiesto;
+import it.ginvault.edizioni.dominio.PrenotazioneAnnullata;
+import it.ginvault.edizioni.dominio.PrenotazioneConfermata;
 import it.ginvault.edizioni.dominio.Quota;
 import it.ginvault.edizioni.dominio.RicalcoloRifiutato;
+import it.ginvault.edizioni.dominio.RimborsoRichiesto;
 import it.ginvault.edizioni.dominio.TiraturaAumentata;
 import it.ginvault.edizioni.dominio.TiraturaRidotta;
 
@@ -27,14 +32,22 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * (phase = BEFORE_COMMIT). Edizione e riga di outbox entrano nello stesso
  * commit: o ci sono entrambe, o nessuna.
  *
- * La chiave del messaggio è l'id dell'edizione: tutti gli eventi di
- * un'edizione finiscono nella stessa partizione, nell'ordine in cui nascono.
+ * Su edizioni.eventi la chiave del messaggio è l'id dell'edizione: tutti gli
+ * eventi di un'edizione finiscono nella stessa partizione, nell'ordine in cui
+ * nascono.
  *
  * Gli eventi: EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
  * RicalcoloRifiutato. Gli ultimi tre nascono quasi sempre da una
  * ResaRicalcolata di Produzione (ElaborazioneEventi): in quel caso la riga di
  * outbox entra nello stesso commit dell'edizione ricalcolata e della riga di
  * evento_elaborato. Nascono anche dal ricalcolo manuale del distillatore.
+ *
+ * La SAGA del pagamento (storia di Giulia):
+ *  - PrenotazioneConfermata e PrenotazioneAnnullata su edizioni.eventi;
+ *  - i COMANDI RichiestaPagamento e RichiestaRimborso su pagamenti.comandi,
+ *    con chiave l'id della prenotazione (il formato lo fissa Pagamenti).
+ * Anche un comando passa dall'outbox: se Kafka è giù il pagamento parte
+ * quando torna, e un comando non parte mai per una prenotazione non salvata.
  */
 @Component
 public class ScritturaOutbox {
@@ -82,14 +95,49 @@ public class ScritturaOutbox {
                         quote, evento.causa(), evento.resaRicalcolataId()));
     }
 
+    // ---------------------------------------------------------------- la SAGA del pagamento
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void pagamentoRichiesto(PagamentoRichiesto evento) {
+        scrivi(ConfigurazioneKafka.COMANDI_PAGAMENTI, evento.prenotazioneId(), "RichiestaPagamento", 1,
+                evento.occorsoIl(), new RichiestaPagamentoV1(evento.prenotazioneId(), evento.edizioneId(),
+                        evento.acquirente(), evento.importoCentesimi(), evento.valuta(), evento.metodo(),
+                        evento.descrizione()));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void rimborsoRichiesto(RimborsoRichiesto evento) {
+        scrivi(ConfigurazioneKafka.COMANDI_PAGAMENTI, evento.prenotazioneId(), "RichiestaRimborso", 1,
+                evento.occorsoIl(), new RichiestaRimborsoV1(evento.prenotazioneId(), evento.motivo()));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void prenotazioneConfermata(PrenotazioneConfermata evento) {
+        scrivi(TOPIC, evento.edizioneId(), "PrenotazioneConfermata", 1, evento.occorsoIl(),
+                new PrenotazioneConfermataV1(evento.prenotazioneId(), evento.edizioneId(), evento.acquirente(),
+                        evento.canale(), evento.bottiglie(), evento.numeri(), evento.totale(),
+                        evento.pagamentoId()));
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void prenotazioneAnnullata(PrenotazioneAnnullata evento) {
+        scrivi(TOPIC, evento.edizioneId(), "PrenotazioneAnnullata", 1, evento.occorsoIl(),
+                new PrenotazioneAnnullataV1(evento.prenotazioneId(), evento.edizioneId(), evento.acquirente(),
+                        evento.canale(), evento.bottiglie(), evento.causa().name(), evento.spiegazione()));
+    }
+
     private void scrivi(String tipo, int versione, UUID edizioneId, Instant occorsoIl, Object payload) {
+        scrivi(TOPIC, edizioneId, tipo, versione, occorsoIl, payload);
+    }
+
+    private void scrivi(String topic, UUID chiave, String tipo, int versione, Instant occorsoIl, Object payload) {
         UUID eventId = UUID.randomUUID();
         Busta busta = new Busta(eventId, tipo, versione, occorsoIl, payload);
         try {
-            outbox.save(new RigaOutbox(eventId, TOPIC, edizioneId.toString(), tipo, json.writeValueAsString(busta),
+            outbox.save(new RigaOutbox(eventId, topic, chiave.toString(), tipo, json.writeValueAsString(busta),
                     occorsoIl));
         } catch (JsonProcessingException errore) {
-            throw new IllegalStateException("Evento " + tipo + " non serializzabile", errore);
+            throw new IllegalStateException("Messaggio " + tipo + " non serializzabile", errore);
         }
     }
 
@@ -141,5 +189,38 @@ public class ScritturaOutbox {
         static QuotaV1 di(Quota quota) {
             return new QuotaV1(quota.bottiglie(), quota.prenotate());
         }
+    }
+
+    /**
+     * Il comando RichiestaPagamento, versione 1: il contratto lo fissa
+     * Pagamenti (docs/eventi.md). Importo in centesimi: 2 bottiglie a 45,00 -> 9000.
+     */
+    record RichiestaPagamentoV1(UUID prenotazioneId, UUID edizioneId, String acquirente, long importoCentesimi,
+                                String valuta, String metodo, String descrizione) {
+    }
+
+    /** Il comando RichiestaRimborso, versione 1: si restituisce tutto l'addebito della prenotazione. */
+    record RichiestaRimborsoV1(UUID prenotazioneId, String motivo) {
+    }
+
+    /**
+     * Il payload di PrenotazioneConfermata, versione 1. Lo leggerà Notifiche
+     * per dire a chi ha prenotato i suoi numeri di bottiglia.
+     *
+     * @param numeriBottiglia progressivi nell'edizione, in ordine: [112, 113]
+     */
+    record PrenotazioneConfermataV1(UUID prenotazioneId, UUID edizioneId, String acquirente, Canale canale,
+                                    int bottiglie, List<Integer> numeriBottiglia, BigDecimal totale,
+                                    UUID pagamentoId) {
+    }
+
+    /**
+     * Il payload di PrenotazioneAnnullata, versione 1: le bottiglie sono
+     * tornate libere nella quota del canale.
+     *
+     * @param causa PAGAMENTO_RIFIUTATO o SCADUTA
+     */
+    record PrenotazioneAnnullataV1(UUID prenotazioneId, UUID edizioneId, String acquirente, Canale canale,
+                                   int bottiglie, String causa, String spiegazione) {
     }
 }

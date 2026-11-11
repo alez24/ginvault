@@ -19,12 +19,14 @@ import java.util.List;
 import java.util.UUID;
 
 import it.ginvault.edizioni.applicazione.EdizioneNonTrovata;
+import it.ginvault.edizioni.applicazione.MetodoNonAccettato;
 import it.ginvault.edizioni.applicazione.PrenotazioneNonTrovata;
 import it.ginvault.edizioni.applicazione.PrenotazioneVista;
 import it.ginvault.edizioni.applicazione.RegoleDiVenditaVista;
 import it.ginvault.edizioni.applicazione.ServizioPrenotazioni;
 import it.ginvault.edizioni.dominio.Acquirente;
 import it.ginvault.edizioni.dominio.Canale;
+import it.ginvault.edizioni.dominio.PagamentoNonPossibile;
 import it.ginvault.edizioni.dominio.PrenotazioneNonPossibile;
 import it.ginvault.edizioni.dominio.QuotaEsaurita;
 import it.ginvault.edizioni.dominio.Ritiro;
@@ -47,9 +49,9 @@ import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * Strato web delle prenotazioni: chi può prenotare (401/403), da dove viene
- * l'acquirente (il "sub" e il ruolo SOCIO del JWT), validazione del corpo
- * (400) e traduzione dei rifiuti in 409 con il motivo, 404.
+ * Strato web delle prenotazioni: chi può prenotare e pagare (401/403), da
+ * dove viene l'acquirente (il "sub" e il ruolo SOCIO del JWT), validazione del
+ * corpo (400) e traduzione dei rifiuti in 409 con il motivo, 404.
  * Il servizio applicativo è un mock: database e regole sono negli altri test.
  */
 @WebMvcTest(PrenotazioniController.class)
@@ -60,6 +62,8 @@ class PrenotazioniControllerTest {
     private static final UUID EDIZIONE = UUID.fromString("e0000000-0000-4000-8000-000000000001");
     private static final UUID PRENOTAZIONE = UUID.fromString("b0000000-0000-4000-8000-000000000001");
     private static final String DUE_BOTTIGLIE = "{\"bottiglie\": 2}";
+    private static final String VISA = "{\"metodo\": \"pm_card_visa\"}";
+    private static final List<String> MENU = List.of("pm_card_visa", "pm_card_chargeDeclined");
 
     @DynamicPropertySource
     static void puntaAllaJwksDiProva(DynamicPropertyRegistry registro) {
@@ -178,12 +182,78 @@ class PrenotazioniControllerTest {
         prenotaComeCliente().andExpect(status().isNotFound());
     }
 
+    // ---------------------------------------------------------------- il pagamento
+
+    @Test
+    void ilSocioPagaLaSuaPrenotazioneERiceve202() throws Exception {
+        when(servizio.paga(PRENOTAZIONE, "github:1001", "pm_card_visa")).thenReturn(vistaConPagamento());
+
+        paga("github:1001", "SOCIO", VISA)
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.stato").value("IN_ATTESA_PAGAMENTO"))
+                .andExpect(jsonPath("$.pagamento.metodo").value("pm_card_visa"))
+                .andExpect(jsonPath("$.pagamento.richiestoIl").value("2026-07-09T08:26:00Z"))
+                .andExpect(jsonPath("$.numeriBottiglia.length()").value(0));
+
+        verify(servizio).paga(PRENOTAZIONE, "github:1001", "pm_card_visa");
+    }
+
+    @Test
+    void senzaTokenOConUnAltroRuoloNonSiPaga() throws Exception {
+        mvc.perform(post("/prenotazioni/{id}/pagamento", PRENOTAZIONE).contentType(MediaType.APPLICATION_JSON)
+                .content(VISA)).andExpect(status().isUnauthorized());
+        for (String ruolo : List.of("DISTILLATORE", "ADMIN", "RESP_ACQUISTI")) {
+            paga("github:42", ruolo, VISA).andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void senzaMetodoRisponde400() throws Exception {
+        for (String corpo : List.of("{}", "{\"metodo\": \"\"}", "{\"metodo\": \"" + "x".repeat(65) + "\"}")) {
+            paga("github:1001", "SOCIO", corpo)
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.campi[0].campo").value("metodo"));
+        }
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void unaCartaFuoriDalMenuRisponde400ConLeCarteAccettate() throws Exception {
+        when(servizio.paga(PRENOTAZIONE, "github:1001", "pm_card_mastercard"))
+                .thenThrow(new MetodoNonAccettato("pm_card_mastercard", MENU));
+
+        paga("github:1001", "SOCIO", "{\"metodo\": \"pm_card_mastercard\"}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.title").value("Metodo di pagamento non accettato"))
+                .andExpect(jsonPath("$.metodiAccettati[0]").value("pm_card_visa"))
+                .andExpect(jsonPath("$.metodiAccettati[1]").value("pm_card_chargeDeclined"));
+    }
+
+    @Test
+    void unPagamentoNonPossibileDiventa409ConIlMotivo() throws Exception {
+        when(servizio.paga(eq(PRENOTAZIONE), any(), any()))
+                .thenThrow(new PagamentoNonPossibile(PagamentoNonPossibile.Motivo.PAGAMENTO_GIA_RICHIESTO,
+                        "Il pagamento è già in corso"))
+                .thenThrow(new PagamentoNonPossibile(PagamentoNonPossibile.Motivo.PRENOTAZIONE_SCADUTA,
+                        "Il tempo per pagare è finito alle 10:39"))
+                .thenThrow(new PrenotazioneNonTrovata(PRENOTAZIONE));
+
+        paga("github:1001", "SOCIO", VISA).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.title").value("Pagamento non possibile"))
+                .andExpect(jsonPath("$.motivo").value("PAGAMENTO_GIA_RICHIESTO"));
+        paga("github:1001", "SOCIO", VISA).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.motivo").value("PRENOTAZIONE_SCADUTA"))
+                .andExpect(jsonPath("$.detail").value("Il tempo per pagare è finito alle 10:39"));
+        paga("github:1001", "SOCIO", VISA).andExpect(status().isNotFound());
+    }
+
     // ---------------------------------------------------------------- regole di vendita
 
     @Test
     void leRegoleDiVenditaLeLeggonoTuttiIRuoli() throws Exception {
         when(servizio.regole()).thenReturn(new RegoleDiVenditaVista(7, 2, 6, new BigDecimal("45.00"),
-                new BigDecimal("52.00"), 15));
+                new BigDecimal("52.00"), 15, MENU));
 
         for (String ruolo : List.of("SOCIO", "CLIENTE", "DISTILLATORE", "RESP_ACQUISTI", "ADMIN")) {
             mvc.perform(come("github:42", ruolo, get("/regole-di-vendita")))
@@ -191,7 +261,8 @@ class PrenotazioniControllerTest {
                     .andExpect(jsonPath("$.giorniDiPrelazione").value(7))
                     .andExpect(jsonPath("$.bottigliePerSocio").value(2))
                     .andExpect(jsonPath("$.prezzoSoci").value(45.00))
-                    .andExpect(jsonPath("$.minutiPerPagare").value(15));
+                    .andExpect(jsonPath("$.minutiPerPagare").value(15))
+                    .andExpect(jsonPath("$.metodiDiPagamento[1]").value("pm_card_chargeDeclined"));
         }
         mvc.perform(get("/regole-di-vendita")).andExpect(status().isUnauthorized());
     }
@@ -203,11 +274,26 @@ class PrenotazioniControllerTest {
                 .contentType(MediaType.APPLICATION_JSON).content(DUE_BOTTIGLIE)));
     }
 
+    private ResultActions paga(String sub, String ruolo, String corpo) throws Exception {
+        return mvc.perform(come(sub, ruolo, post("/prenotazioni/{id}/pagamento", PRENOTAZIONE)
+                .contentType(MediaType.APPLICATION_JSON).content(corpo)));
+    }
+
     private static MockHttpServletRequestBuilder come(String sub, String ruolo, MockHttpServletRequestBuilder richiesta) {
         return richiesta.header(HttpHeaders.AUTHORIZATION, "Bearer " + GATEWAY.tokenPer(sub, ruolo));
     }
 
     private static PrenotazioneVista vista() {
+        return vista(null);
+    }
+
+    /** Pagamento chiesto due minuti dopo la prenotazione: l'esito non è ancora arrivato. */
+    private static PrenotazioneVista vistaConPagamento() {
+        return vista(new PrenotazioneVista.Pagamento("pm_card_visa", Instant.parse("2026-07-09T08:26:00Z"), null,
+                null));
+    }
+
+    private static PrenotazioneVista vista(PrenotazioneVista.Pagamento pagamento) {
         Instant prenotata = Instant.parse("2026-07-09T08:24:00Z");
         Ritiro ritiro = new Ritiro("masterclass d’agosto", "La lavanda nel gin", "Due ore in distilleria",
                 OffsetDateTime.parse("2026-08-22T18:00:00+02:00"), OffsetDateTime.parse("2026-08-22T20:00:00+02:00"),
@@ -216,6 +302,6 @@ class PrenotazioniControllerTest {
                 new PrenotazioneVista.EdizioneInBreve(EDIZIONE, "lavanda", "Alta Val Varaita (Alpi Cozie)", 600,
                         Instant.parse("2026-07-08T08:00:00Z")),
                 Canale.SOCI, 2, new BigDecimal("45.00"), new BigDecimal("90.00"), StatoPrenotazione.IN_ATTESA_PAGAMENTO,
-                prenotata, prenotata.plusSeconds(900), ritiro);
+                prenotata, prenotata.plusSeconds(900), pagamento, List.of(), null, null, ritiro);
     }
 }

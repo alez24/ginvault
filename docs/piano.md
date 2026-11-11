@@ -94,8 +94,8 @@ Il contratto completo (busta JSON, versioni, regole) è in [`eventi.md`](eventi.
 |---|---|---|---|---|
 | `magazzino.eventi` | Magazzino | ConsegnaRegistrata (anche ridotta); più avanti LottoScartato | botanica | `produzione` |
 | `produzione.eventi` | Produzione | ResaRicalcolata; più avanti LottoImbottigliato | idEdizione | `edizioni` |
-| `edizioni.eventi` | Edizioni | EdizioneCreata, TiraturaRidotta, RicalcoloRifiutato; più avanti PrelazioneAperta, PrenotazioneConfermata, NumeriAssegnati | idEdizione | `produzione`, `notifiche` |
-| `pagamenti.comandi` / `pagamenti.esiti` | Edizioni / Pagamenti | RichiestaPagamento / PagamentoRiuscito, PagamentoFallito | idPrenotazione | `pagamenti` / `edizioni` |
+| `edizioni.eventi` | Edizioni | EdizioneCreata, TiraturaRidotta, TiraturaAumentata, RicalcoloRifiutato, PrenotazioneConfermata (con i numeri di bottiglia), PrenotazioneAnnullata; più avanti PrelazioneAperta | idEdizione | `produzione`, `notifiche` |
+| `pagamenti.comandi` / `pagamenti.esiti` | Edizioni / Pagamenti | RichiestaPagamento, RichiestaRimborso / PagamentoRiuscito, PagamentoFallito, RimborsoEseguito | idPrenotazione | `pagamenti` / `edizioni` |
 
 ---
 
@@ -155,7 +155,7 @@ CLIENTE dopo; `POST /magazzino/consegne` solo a RESP_ACQUISTI.
 | Class diagram | Aggregato Edizione (Edizione, Quota, Prenotazione, ListaAttesa + VO); al massimo Lotto di gin |
 | Sequence diagram (REST) | Annuncio di un'edizione: Edizioni → Ricette, validazione della formulazione |
 | Collaboration diagram (asincrono) | La catena del raccolto scarso (sezione 3) |
-| State machine | Prenotazione: IN_ATTESA_PAGAMENTO → CONFERMATA → NUMERATA → RITIRATA, oppure ANNULLATA (compensazione SAGA); Edizione: IN_SVILUPPO → IN_PRELAZIONE → IN_VENDITA → ESAURITA |
+| State machine | Prenotazione: IN_ATTESA_PAGAMENTO → CONFERMATA (i numeri di bottiglia si assegnano alla conferma) → RITIRATA (più avanti), oppure ANNULLATA (compensazione SAGA: carta rifiutata o tempo finito; un pagamento arrivato dopo si rimborsa); Edizione: IN_SVILUPPO → IN_PRELAZIONE → IN_VENDITA → ESAURITA |
 | Diagramma Kafka | Topic, chiavi di partizionamento e consumer group (tabella in sezione 3) |
 | (consigliato) | Il file `.proto` del servizio gRPC |
 

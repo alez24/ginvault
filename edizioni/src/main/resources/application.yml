@@ -32,11 +32,14 @@ spring:
       hibernate.default_batch_fetch_size: 50
 
   # Kafka:
-  #  - PUBBLICARE: EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
-  #    RicalcoloRifiutato su edizioni.eventi, dalla tabella outbox come in
-  #    Magazzino: se Kafka è giù l'evento aspetta nella tabella (PubblicatoreOutbox);
-  #  - LEGGERE: ResaRicalcolata da produzione.eventi (ConsumerEventi), con
-  #    consumer idempotente, retry e dead letter edizioni.dlt come in Produzione.
+  #  - PUBBLICARE: EdizioneCreata, TiraturaRidotta, TiraturaAumentata,
+  #    RicalcoloRifiutato, PrenotazioneConfermata e PrenotazioneAnnullata su
+  #    edizioni.eventi, i comandi RichiestaPagamento e RichiestaRimborso su
+  #    pagamenti.comandi, dalla tabella outbox come in Magazzino: se Kafka è
+  #    giù il messaggio aspetta nella tabella (PubblicatoreOutbox);
+  #  - LEGGERE: ResaRicalcolata da produzione.eventi e gli esiti di Pagamenti
+  #    da pagamenti.esiti (ConsumerEventi), con consumer idempotente, retry e
+  #    dead letter edizioni.dlt come in Produzione.
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
     producer:
@@ -128,6 +131,13 @@ edizioni:
     # Quanto resta valida una prenotazione non pagata: poi si annulla e le
     # bottiglie tornano libere (la SAGA con Pagamenti)
     tempo-per-pagare: ${TEMPO_PER_PAGARE:15m}
+    # Ogni quanti millisecondi si annullano le prenotazioni scadute
+    # (ScadenzaPrenotazioni), e quante al massimo per giro
+    controllo-scadenze-ms: 30000
+    scadenze-per-giro: 100
+    # Le carte di prova di Stripe del menu, separate da virgole: la prima
+    # riesce, la seconda è rifiutata dalla banca
+    metodi-di-pagamento: pm_card_visa,pm_card_chargeDeclined
   consumer:
     # Messaggio non elaborato (es. database occupato): nuovi tentativi dopo 1,
     # 2, 4 e 8 secondi, poi il messaggio va in edizioni.dlt (ConfigurazioneKafka)

@@ -98,6 +98,12 @@ class PrenotazioniIntegrazioneTest {
         NewTopic produzioneEventi() {
             return TopicBuilder.name("produzione.eventi").partitions(3).replicas(1).build();
         }
+
+        /** Gli esiti di Pagamenti, letti dal secondo listener (provato in SagaPagamentoTest): qui restano vuoti. */
+        @Bean
+        NewTopic pagamentiEsiti() {
+            return TopicBuilder.name("pagamenti.esiti").partitions(3).replicas(1).build();
+        }
     }
 
     private static final GatewayDiProva GATEWAY = new GatewayDiProva();
@@ -207,7 +213,9 @@ class PrenotazioniIntegrazioneTest {
                 .andExpect(jsonPath("$.bottigliePerCliente").value(6))
                 .andExpect(jsonPath("$.prezzoSoci").value(45.00))
                 .andExpect(jsonPath("$.prezzoOnline").value(52.00))
-                .andExpect(jsonPath("$.minutiPerPagare").value(15));
+                .andExpect(jsonPath("$.minutiPerPagare").value(15))
+                .andExpect(jsonPath("$.metodiDiPagamento[0]").value("pm_card_visa"))
+                .andExpect(jsonPath("$.metodiDiPagamento[1]").value("pm_card_chargeDeclined"));
     }
 
     // ---------------------------------------------------------------- concorrenza

@@ -29,13 +29,13 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 
 | Topic | Produttore (unico) | Chiave | Eventi | Consumer group |
 |---|---|---|---|---|
-| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato` | `produzione`; più avanti `notifiche` |
+| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`, `PrenotazioneConfermata`, `PrenotazioneAnnullata` | `produzione`; più avanti `notifiche` |
 | `magazzino.eventi` | Magazzino | nome della botanica (`lavanda`) | `ConsegnaRegistrata` | `produzione` |
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
 | `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
 | `edizioni.dlt` | Edizioni (dead letter) | quella del messaggio originale | i messaggi che Edizioni non riesce a elaborare | nessuno: si leggono a mano |
-| `pagamenti.comandi` | Edizioni (dal passo 3 della storia di Giulia) | id della prenotazione | i comandi `RichiestaPagamento`, `RichiestaRimborso` | `pagamenti` |
-| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni` (passo 3); più avanti `notifiche` |
+| `pagamenti.comandi` | Edizioni | id della prenotazione | i comandi `RichiestaPagamento`, `RichiestaRimborso` | `pagamenti` |
+| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni`; più avanti `notifiche` |
 | `pagamenti.dlt` | Pagamenti (dead letter) | quella del comando originale | i comandi che Pagamenti non riesce a elaborare | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
@@ -352,16 +352,19 @@ evento per `ordineId`.
 
 Giulia, socia, prenota 2 bottiglie dell'edizione d'estate e paga con una carta
 di prova scelta da un menu. Il pagamento non parte dalla richiesta HTTP:
-Edizioni manda un **comando** a Pagamenti e aspetta l'**esito** (la SAGA del
-passo 3). Pagamenti addebita con Stripe in modalità test, dal server.
+Edizioni manda un **comando** a Pagamenti e aspetta l'**esito** (la SAGA,
+vedi [sotto](#la-saga-in-edizioni)). Pagamenti addebita con Stripe in
+modalità test, dal server.
 
 | Messaggio | Topic | Chi lo scrive | Quando |
 |---|---|---|---|
-| `RichiestaPagamento` (comando) | `pagamenti.comandi` | Edizioni | Giulia conferma la prenotazione con una carta |
-| `RichiestaRimborso` (comando) | `pagamenti.comandi` | Edizioni | il pagamento è arrivato quando la prenotazione era già scaduta |
+| `RichiestaPagamento` (comando) | `pagamenti.comandi` | Edizioni | Giulia sceglie la carta e chiede di pagare (`POST /prenotazioni/{id}/pagamento`) |
+| `RichiestaRimborso` (comando) | `pagamenti.comandi` | Edizioni | un pagamento riuscito è arrivato quando la prenotazione era già annullata (scaduta o rifiutata) |
 | `PagamentoRiuscito` | `pagamenti.esiti` | Pagamenti | Stripe ha addebitato l'importo |
 | `PagamentoFallito` | `pagamenti.esiti` | Pagamenti | la carta è rifiutata, chiede il 3D Secure o Stripe non accetta la richiesta |
 | `RimborsoEseguito` | `pagamenti.esiti` | Pagamenti | Stripe ha restituito l'addebito |
+| `PrenotazioneConfermata` | `edizioni.eventi` | Edizioni | dopo `PagamentoRiuscito`: la prenotazione ha i suoi numeri di bottiglia (Giulia: 112 e 113) |
+| `PrenotazioneAnnullata` | `edizioni.eventi` | Edizioni | dopo `PagamentoFallito`, o a tempo finito: le bottiglie tornano libere |
 
 La busta è la stessa degli eventi, anche per i comandi: `eventId` è l'id del
 messaggio, `tipo` il nome del comando (`Richiesta...`) o dell'evento (al
@@ -489,6 +492,104 @@ stessa prenotazione (con un altro `eventId`) non richiama Stripe: Pagamenti
 ripubblica l'esito che ha già, anche se il secondo comando ha un'altra carta.
 Allo stesso modo una seconda `RichiestaRimborso` ripubblica `RimborsoEseguito`.
 
+### `PrenotazioneConfermata` v1 (edizioni.eventi)
+
+Chiave: l'id dell'edizione, come gli altri eventi di Edizioni. Notifiche lo
+userà per dire a Giulia i suoi numeri.
+
+```json
+{
+  "eventId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "tipo": "PrenotazioneConfermata",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:03Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "canale": "SOCI",
+    "bottiglie": 2,
+    "numeriBottiglia": [112, 113],
+    "totale": 90.00,
+    "pagamentoId": "c0000000-0000-4000-8000-000000000001"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `numeriBottiglia` | progressivi nell'edizione, in ordine, senza buchi né doppioni: la prima prenotazione confermata ha 1, 2...; un'annullata non ne prende |
+| `totale` | in euro, come il prezzo della prenotazione (non in centesimi: è un fatto di Edizioni, non un comando per Stripe) |
+| `pagamentoId` | il pagamento in Pagamenti |
+
+### `PrenotazioneAnnullata` v1 (edizioni.eventi)
+
+Solo il `payload`:
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000002",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "canale": "SOCI",
+  "bottiglie": 2,
+  "causa": "PAGAMENTO_RIFIUTATO",
+  "spiegazione": "La banca ha rifiutato la carta."
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `causa` | `PAGAMENTO_RIFIUTATO` (dopo `PagamentoFallito`) o `SCADUTA` (il tempo per pagare è finito) |
+| `spiegazione` | in italiano, per chi ha prenotato: quella di Pagamenti, o "Il tempo per pagare è finito il 1 agosto 2026 alle 11:20: le bottiglie sono tornate disponibili." |
+| `bottiglie` | quante ne sono tornate libere nella quota del `canale` |
+
+### La SAGA in Edizioni
+
+Una SAGA **orchestrata**: Edizioni decide i passi e manda i comandi, Pagamenti
+li esegue. Lo stato della SAGA è la prenotazione stessa (`stato`, più le date
+di pagamento, annullamento e rimborso).
+
+```
+POST /prenotazioni/{id}/pagamento ──► RichiestaPagamento ──► Pagamenti ──► Stripe
+         (202, IN_ATTESA_PAGAMENTO)                               │
+                                                                  ▼
+  PagamentoRiuscito ──► CONFERMATA, numeri di bottiglia ──► PrenotazioneConfermata
+  PagamentoFallito ───► ANNULLATA, bottiglie libere ──────► PrenotazioneAnnullata   (compensazione)
+  tempo finito ───────► ANNULLATA, bottiglie libere ──────► PrenotazioneAnnullata   (timeout)
+  PagamentoRiuscito a prenotazione annullata ──► RichiestaRimborso ──► RimborsoEseguito
+```
+
+- **Compensazione.** La prenotazione toglie subito le bottiglie dalla quota
+  (passo 1). Se il pagamento non va, l'annullamento le rimette: la quota
+  torna come prima e un altro socio le può prenotare.
+- **Timeout.** Ogni 30 secondi (`edizioni.vendita.controllo-scadenze-ms`)
+  `ScadenzaPrenotazioni` annulla le prenotazioni in attesa con il tempo finito
+  (15 minuti). Così le bottiglie non restano bloccate se Pagamenti è fermo o
+  se nessuno paga.
+- **Il pagamento arrivato tardi.** Se Pagamenti era fermo, l'addebito può
+  arrivare dopo la scadenza. Le bottiglie non ci sono più (forse le ha già un
+  altro socio): la prenotazione resta annullata e Edizioni chiede il rimborso
+  (`RichiestaRimborso`), una volta sola. Se invece la scadenza non è ancora
+  passata, il pagamento conferma: le bottiglie erano ancora tenute.
+- **Un pagamento solo.** `POST .../pagamento` una seconda volta → 409
+  `PAGAMENTO_GIA_RICHIESTO`; con il tempo finito → 409 `PRENOTAZIONE_SCADUTA`;
+  confermata o annullata → 409 `PRENOTAZIONE_CHIUSA`. Le carte sono quelle del
+  menu (`edizioni.vendita.metodi-di-pagamento`, in `GET /regole-di-vendita`):
+  un'altra → 400.
+- **Esiti ripetuti.** Lo stesso `eventId` si scarta (`evento_elaborato`); un
+  esito nuovo per una prenotazione già confermata o annullata non cambia
+  niente (`GIA_REGISTRATO`).
+- **I numeri di bottiglia.** L'edizione tiene il conto delle bottiglie
+  numerate (`bottiglie_numerate`): una conferma prende i numeri successivi.
+  Ogni passo della SAGA blocca prima la riga dell'edizione
+  (`SELECT ... FOR NO KEY UPDATE`, lo stesso blocco delle prenotazioni) e solo
+  dopo legge la prenotazione: due conferme nello stesso istante si mettono in
+  fila, e la scadenza e un pagamento non vedono mai la stessa prenotazione "in
+  attesa". Rete di sicurezza: `UNIQUE (edizione_id, numero)` nella tabella
+  `bottiglia_numerata`. Il test di concorrenza: 20 conferme insieme prendono i
+  numeri da 1 a 40, due vicini per prenotazione.
+
 ## Transactional outbox
 
 Un evento non parte dalla richiesta HTTP: il servizio lo scrive nella sua
@@ -516,9 +617,12 @@ conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
 gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
 volta**: i consumer devono scartare gli `eventId` già visti. L'outbox ce
 l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`,
-`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`), Produzione
-(`ResaRicalcolata`) e Pagamenti (`PagamentoRiuscito`, `PagamentoFallito`,
-`RimborsoEseguito`).
+`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`,
+`PrenotazioneConfermata`, `PrenotazioneAnnullata` e i comandi
+`RichiestaPagamento`, `RichiestaRimborso`), Produzione (`ResaRicalcolata`) e
+Pagamenti (`PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito`). Anche
+i comandi passano dall'outbox: se Kafka è giù il pagamento parte quando torna,
+e non parte mai per una prenotazione che non è stata salvata.
 
 ## Consumer: idempotenza, retry e dead letter
 
@@ -576,16 +680,19 @@ il messaggio va nel dead letter.
 
 ### Il consumer di Edizioni
 
-Edizioni legge `produzione.eventi` nel consumer group `edizioni`, con 3
-consumer, uno per partizione. Le stesse regole di Produzione, nelle stesse
-classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
+Edizioni legge `produzione.eventi` e `pagamenti.esiti` nel consumer group
+`edizioni`, con due listener (`edizioni-produzione`, `edizioni-pagamenti`) e 3
+consumer ciascuno, uno per partizione. Le stesse regole di Produzione, nelle
+stesse classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
 
 - **idempotenza:** `ResaRicalcolata` si applica nella transazione che scrive
   la riga di outbox e quella di `evento_elaborato`. Lo stesso `eventId`
   rimandato si scarta. Serve davvero: la resa di Elena (10,8 kg) rimandata
   dopo quella dell'integrazione (12 kg) riporterebbe l'edizione a 540. In
   `evento_elaborato` di Edizioni c'è anche l'`esito`: `RIDOTTA`,
-  `AUMENTATA`, `INVARIATA` o `RIFIUTATO`;
+  `AUMENTATA`, `INVARIATA` o `RIFIUTATO` per le rese, `CONFERMATA`,
+  `ANNULLATA`, `RIMBORSO_RICHIESTO`, `RIMBORSATA` o `GIA_REGISTRATO` per gli
+  esiti di Pagamenti;
 - **retry:** 1, 2, 4, 8 secondi (`edizioni.consumer.*`), per esempio con il
   database occupato o con un ricalcolo manuale sulla stessa edizione nello
   stesso istante (`@Version`);
@@ -593,7 +700,9 @@ classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
   header. Ci va subito un messaggio illeggibile (`EventoNonValido`, anche per
   kg negativi o con più di 3 decimali) o una resa per un'edizione che non
   esiste (`EdizioneNonTrovata`). Una resa arriva sempre dopo la sua edizione,
-  quindi riprovare non serve;
+  quindi riprovare non serve. Lo stesso per un esito di Pagamenti con una
+  prenotazione che non esiste (`PrenotazioneNonTrovata`): il comando parte
+  nello stesso commit della prenotazione;
 - **un ricalcolo rifiutato non è un errore:** il messaggio è elaborato, l'offset
   avanza e parte `RicalcoloRifiutato`, con un WARN nel log.
 
@@ -654,11 +763,13 @@ docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-se
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
 ```
 
-Lo stesso per Edizioni: il gruppo `edizioni` su `produzione.eventi`, i suoi
-eventi su `edizioni.eventi` e il suo dead letter topic:
+Lo stesso per Edizioni: il gruppo `edizioni` su `produzione.eventi` e
+`pagamenti.esiti`, i suoi eventi su `edizioni.eventi`, i comandi per
+Pagamenti e il suo dead letter topic:
 
 ```powershell
 docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.comandi --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.eventi --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.dlt --from-beginning --formatter-property print.headers=true
 ```
