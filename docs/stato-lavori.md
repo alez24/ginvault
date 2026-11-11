@@ -10,12 +10,14 @@ e il punto esatto in cui siamo arrivati.
   `cbb04e5`, sono nella **PR #4**, unita il 10 novembre con il merge commit
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
-- **In corso: la storia di Giulia**, in 7 passi (vedi
-  [La storia di Giulia](#la-storia-di-giulia)). I passi da 1 a 4 sono nei
-  commit `8443fb6`, `dab4cda`, `926e959`, `7b1edf3` e `33a1597`; il passo 6
-  (Kubernetes) è nel commit successivo. I passi 5, 6 e 7 si fanno di fila,
-  senza fermarsi (richiesta dell'11 novembre), con un commit locale per passo.
-- Il giro della demo di Elena dal browser sul cluster è ancora da fare.
+- **Storia di Giulia finita sul branch**, in 7 commit locali (vedi
+  [La storia di Giulia](#la-storia-di-giulia)): da `8443fb6` a `f4e7c9d`, più
+  quello del passo 7, l'integrazione e la demo. I passi 5, 6 e 7 sono fatti di
+  fila, senza fermarsi (richiesta dell'11 novembre). Niente push né PR: si
+  fanno quando lo dici.
+- **Da fare (utente):** la riga `STRIPE_SECRET_KEY=` nel `.env` (vedi
+  [passo 6](#passo-6-kubernetes-f4e7c9d)) e il giro dal browser, sul cluster,
+  delle demo di Elena e di Giulia.
 - Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.6`,
   `ricette:0.2`, `magazzino:0.3`, `produzione:0.4`, `pagamenti:0.1` e
   `notifiche:0.1` (2 repliche).
@@ -46,6 +48,7 @@ e il punto esatto in cui siamo arrivati.
 | `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
 | `7b1edf3` | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
 | `33a1597` | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
+| `f4e7c9d` | 11 nov | **Giulia, passo 6: pagamenti e notifiche su Kubernetes** (vedi sotto) |
 
 Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`.
@@ -66,8 +69,8 @@ I sette passi, sul branch `storia-giulia`:
 | 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ `926e959` |
 | 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ `7b1edf3` |
 | 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ `33a1597` |
-| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | ✅ commit dopo `33a1597` |
-| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | da fare |
+| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | ✅ `f4e7c9d` |
+| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | ✅ commit dopo `f4e7c9d` |
 
 Le scelte dell'utente (11 novembre):
 
@@ -389,7 +392,7 @@ Le scelte dell'utente (11 novembre):
   - `npm run build`: tipi e build a posto;
   - il giro nel browser, con il login OAuth, è nella demo del passo 7.
 
-### Passo 6: Kubernetes
+### Passo 6: Kubernetes (`f4e7c9d`)
 
 - **Manifest nuovi**, come quelli di magazzino:
   - `pagamenti-db.yaml`, `notifiche-db.yaml`: PVC, Deployment (`Recreate`) e
@@ -454,6 +457,67 @@ Le scelte dell'utente (11 novembre):
   riga:
   - rilanciare `.\k8s\crea-secret.ps1`;
   - `kubectl rollout restart deployment/pagamenti -n ginvault`.
+
+### Passo 7: integrazione e demo
+
+- **[`docs/demo-storia-giulia.md`](demo-storia-giulia.md):** la demo dal
+  browser su Minikube, come quella di Elena.
+  - Prerequisiti: la riga `STRIPE_SECRET_KEY=` nel `.env`, poi
+    `crea-secret.ps1` e il riavvio di pagamenti; un account con SOCIO,
+    DISTILLATORE e RESP_ACQUISTI.
+  - Marco annuncia l'edizione: 600 bottiglie, in prelazione.
+  - L'antefatto: 111 bottiglie già confermate da 56 soci.
+  - Giulia prova la carta rifiutata, poi paga con la Visa e ha le bottiglie
+    112 e 113, con l'avviso in diretta.
+  - Elena registra la consegna da 10,8 kg: la tiratura scende a 540 e a
+    Giulia arriva l'avviso con i suoi numeri.
+  - Poi: dietro le quinte (topic, consumer group, tabelle), le due repliche
+    di Notifiche, la scadenza, il riepilogo dei casi e la stessa demo con
+    Compose.
+- **[`docs/demo-storia-giulia-antefatto.sql`](demo-storia-giulia-antefatto.sql):**
+  l'antefatto scritto nel database di Edizioni, in una transazione sola:
+  - 55 prenotazioni da 2 e una da 1, confermate, con i numeri da 1 a 111;
+  - la quota dei soci e il contatore dell'edizione aggiornati, come in
+    `Edizione.conferma`;
+  - si ferma se l'edizione non è in prelazione o se nella quota dei soci non
+    ci sono 111 bottiglie libere.
+  Serve perché nel browser c'è un account solo, e un socio ne prenota al
+  massimo 2.
+- **README:**
+  - lo stato, lo schema (`notifiche-db`, `kafka-net`, Stripe, WebSocket) e la
+    tabella dei servizi;
+  - la sezione «Prenotazioni, pagamenti e notifiche», i test della storia e
+    tre limiti noti nuovi: l'`Origin` del WebSocket, Stripe solo in modalità
+    test, l'avviso della tiratura solo a chi ha confermato;
+  - la riga 7, con gli spazi già cambiati prima del passo, non è nel commit.
+- **`k8s/README.md`:** la storia di Giulia nella Demo completa. Nello schema
+  della SAGA c'era `PagamentoRifiutato`: l'evento si chiama `PagamentoFallito`.
+- **Verificato (11 nov), in Docker Compose con il codice del branch.** Al
+  posto del gateway un container «finti» con la sua JWKS e i JWT di prova; al
+  posto di Stripe uno Stripe finto con le risposte della modalità test
+  (`STRIPE_API_BASE`). Il container e gli script sono rimasti fuori dal
+  repository.
+  - La storia completa, con 56 soci via API:
+    - 111 bottiglie numerate da 1 a 111 in 2,3 s;
+    - Giulia confermata in 1,6 s con 112 e 113, con l'avviso sul WebSocket;
+    - Anna con la carta rifiutata, annullata in 1,6 s; Giulia non riceve il
+      suo avviso;
+    - la consegna da 10,8 kg: 540 in 1,9 s (SOCI 300, ONLINE 90), e l'avviso
+      a Giulia con «la 112 e la 113»;
+    - 409 `LIMITE_PER_PERSONA` e `PAGAMENTO_GIA_RICHIESTO`, 400 per la carta
+      fuori menu, 4401 senza JWT;
+    - gli avvisi segnati come letti; i dead letter topic vuoti.
+  - Il giro della demo, con un account solo e l'antefatto SQL: la carta
+    rifiutata annullata in 3,2 s, la nuova prenotazione, la Visa confermata
+    in 1,3 s con 112 e 113, la tiratura a 540 in 1,9 s con l'avviso.
+  - Compose è spento, ma i suoi volumi hanno i dati di queste prove:
+    `docker compose down -v` li cancella (lo decide l'utente).
+  - Sul cluster: 17 pod Ready dopo il riavvio di minikube.
+- **Da fare (utente):**
+  - la riga `STRIPE_SECRET_KEY=sk_test_...` nel `.env`, poi
+    `.\k8s\crea-secret.ps1` e il riavvio di pagamenti;
+  - il giro dal browser, con il login OAuth e lo Stripe vero in modalità test;
+  - il push del branch e la PR, quando lo dici.
 
 ## La storia di Elena
 
@@ -939,6 +1003,7 @@ minikube start
 kubectl get pods -n ginvault
 kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
 kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifiche
 kubectl logs -n ginvault deploy/produzione --tail=20
 ```
 
@@ -947,7 +1012,7 @@ PowerShell come amministratore, con Compose spento.
 
 ## Dopo la storia di Elena (dal piano, `docs/piano.md`)
 
-- **Storia di Giulia:** in corso, vedi sopra.
+- **Storia di Giulia:** finita sul branch `storia-giulia`, da unire con una PR.
 - **Kubernetes:** Istio e circuit breaker.
 - **Plus rimanenti:** repliche del consumer Kafka.
 - **Documentazione e prova generale:** diagrammi, presentazione, checklist.

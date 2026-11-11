@@ -5,27 +5,30 @@ Kafka e un database PostgreSQL per ogni servizio, avviato con Docker Compose
 e, in parte, su Kubernetes (Minikube).
 Il piano completo è in [`docs/piano.md`](docs/piano.md).
 
-> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes, la storia di Marco e
-> quella di Elena.**
-> Ogni servizio si avvia, ha `GET /health`, il proprio database e un endpoint di
-> prova protetto da ruolo.
+> **Stato: fondamenta, sicurezza OAuth2/JWT, Kubernetes e le storie di Marco,
+> Elena e Giulia.**
+> Ogni servizio si avvia, ha `GET /health` e il proprio database; i servizi
+> Spring hanno anche un endpoint di prova protetto da ruolo.
 > - Ricette ed Edizioni: formulazioni con prove di assaggio, edizioni validate da
 >   Ricette via REST, tiratura e ricalcolo.
 > - Magazzino e Produzione: ordini, consegne, lotti e piani di produzione.
+> - Edizioni, Pagamenti e Notifiche: prelazione dei soci e prenotazioni, la SAGA
+>   del pagamento con Stripe in modalità test, i numeri di bottiglia e gli
+>   avvisi in diretta su WebSocket.
 > - Tra i servizi: Kafka, con transactional outbox, consumer idempotenti, retry e
 >   dead letter, e gRPC (`Giacenze`). Una consegna ridotta arriva da sola fino
->   alla tiratura dell'edizione: 600 → 540.
+>   alla tiratura dell'edizione, 600 → 540, e all'avviso dei soci.
 >
 > Il front-end React ha il back-office di Marco (con il piano di produzione e
 > l'integrazione di un lotto), l'area acquisti di Elena e l'area soci di Giulia
-> (con dati finti finché non ci sono le prenotazioni); è servito da nginx su
-> `http://localhost` ([`frontend/README.md`](frontend/README.md)).
+> (prenotare, pagare con le carte di prova, gli avvisi in diretta); è servito da
+> nginx su `http://localhost` ([`frontend/README.md`](frontend/README.md)).
 > Su Minikube gira tutto questo, Kafka compreso, dietro un Ingress, con
 > NetworkPolicy che isolano database, front-end, gateway, Kafka e la porta gRPC
 > ([`k8s/README.md`](k8s/README.md)). Le demo:
 > [storia di Marco](docs/demo-storia-marco.md),
-> [storia di Elena](docs/demo-storia-elena.md).
-> Manca ancora la storia di Giulia: prenotazioni e pagamenti, notifiche.
+> [storia di Elena](docs/demo-storia-elena.md),
+> [storia di Giulia](docs/demo-storia-giulia.md).
 
 ## Architettura
 
@@ -44,13 +47,17 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
    rete "backend"      │  /api/<servizio>/**  + Authorization: Bearer <JWT GinVault>
  ┌──────────┬──────────┼──────────┬──────────┬───────────┐
  edizioni   ricette    produzione magazzino  pagamenti   notifiche
-  :8081      :8082      :8083      :8084      :8085       :8086
-   │          │          │          │          │         (NestJS)
- edizioni-db ricette-db produzione-db magazzino-db pagamenti-db
+  :8081      :8082      :8083      :8084      :8085       :8086 (NestJS)
+   │          │          │          │          │          │
+ edizioni-db ricette-db produzione-db magazzino-db pagamenti-db notifiche-db
    (ognuno su una rete privata condivisa SOLO con il proprio servizio)
 
- rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione e magazzino
-   topic edizioni.eventi, magazzino.eventi, produzione.eventi (docs/eventi.md)
+ rete "kafka-net": kafka :9092 (KRaft) con edizioni, produzione, magazzino,
+   pagamenti e notifiche. Topic edizioni.eventi, magazzino.eventi,
+   produzione.eventi, pagamenti.comandi, pagamenti.esiti (docs/eventi.md)
+
+ pagamenti ── HTTPS ──▶ Stripe, modalità test (pagamento confermato dal server)
+ notifiche ◀── WebSocket /api/notifiche/avvisi, dal browser via nginx e gateway
 
  gRPC produzione ──▶ magazzino :9084  servizio Giacenze (Disponibilita, RiservaLotto,
    AnnullaRiserva), deadline 2 s, JWT dell'utente nel metadata (docs/grpc.md)
@@ -65,7 +72,7 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 | produzione  | Spring Boot 3.5 / Java 21   | 8083  | `produzione-db` (5443)       | DISTILLATORE          |
 | magazzino   | Spring Boot 3.5 / Java 21   | 8084 (gRPC 9084) | `magazzino-db` (5444) | RESP_ACQUISTI      |
 | pagamenti   | Spring Boot 3.5 / Java 21   | 8085  | `pagamenti-db` (5445)        | CLIENTE               |
-| notifiche   | NestJS 12 / Node 24         | 8086  | –                            | ADMIN                 |
+| notifiche   | NestJS 12 / Node 24         | 8086  | `notifiche-db` (5446)        | – (nessun `/prova`)   |
 | kafka       | Apache Kafka 4.3 (KRaft)    | 9092  | –                            | –                     |
 
 ## Struttura del repository
@@ -152,14 +159,16 @@ quindi `--wait` termina quando tutto il sistema risponde.
 
 ### Su Kubernetes (Minikube)
 
-Front-end, gateway, edizioni, ricette, magazzino, produzione, i loro database e
+Front-end, gateway, i sei servizi (notifiche con 2 repliche), i loro database e
 Kafka, esposti con un Ingress su `http://localhost`: le pagine vanno al
 front-end (2 repliche), `/api`, `/auth`, `/oauth2`, `/login` e `/logout` al
 gateway. Prerequisiti, avvio, spiegazione di ogni oggetto, la **Demo completa**
 (dal `minikube start` alla storia di Marco dal front-end) e le demo d'esame sono
 in [`k8s/README.md`](k8s/README.md). La storia di Elena, con gli eventi Kafka e
 le prove di idempotenza e outbox, è in
-[`docs/demo-storia-elena.md`](docs/demo-storia-elena.md).
+[`docs/demo-storia-elena.md`](docs/demo-storia-elena.md); quella di Giulia, con
+la SAGA del pagamento e gli avvisi in diretta, in
+[`docs/demo-storia-giulia.md`](docs/demo-storia-giulia.md).
 
 ## Sicurezza: come funziona
 
@@ -199,8 +208,8 @@ un cookie di sessione, il JWT viaggia esclusivamente tra gateway e servizi.
 | `/health` con ruolo ADMIN                    | anche i dettagli (DB, disco...) |
 
 Nota di dominio: il ruolo **SOCIO** dà accesso all'area soci. Il diritto di
-*prelazione* su un'edizione non è un ruolo: lo verificherà Edizioni con il mock
-del Club.
+*prelazione* su un'edizione non è un ruolo: lo verifica Edizioni con il mock
+del Club (7 giorni dall'annuncio, al massimo 2 bottiglie per socio).
 
 ### Provare il login (nel browser)
 
@@ -307,9 +316,9 @@ tiratura = min(600, grammi di botanica disponibili / grammi per bottiglia)   sem
     prenotato si passa a BAR;
   - se non basta (bisognerebbe toccare SOCI o le prenotate) la risposta è 409
     con la spiegazione, e l'edizione resta com'era.
-- **Prenotazioni:** il modello tiene le bottiglie prenotate per canale, ma per
-  ora le crea solo `Edizione.prenota()` nei test. L'endpoint arriverà con la
-  storia delle prenotazioni.
+- **Prenotazioni:** le bottiglie prenotate escono dalla quota del loro canale
+  e ci tornano se la prenotazione si annulla (vedi
+  [Prenotazioni, pagamenti e notifiche](#prenotazioni-pagamenti-e-notifiche-storia-di-giulia)).
 
 Se la tiratura **sale** (lotto integrato, altra lavanda arrivata), le
 bottiglie in più vanno tutte a ONLINE, fino a 600.
@@ -342,8 +351,9 @@ produzione.eventi  ResaRicalcolata 10,8 kg ──▶ ONLINE e BAR tutte prenotat
   un'edizione che non esiste va subito nel dead letter: l'edizione nasce
   prima della resa, quindi non arriverà più.
 
-`TiraturaRidotta` la leggerà **Notifiche** (storia di Giulia), per avvisare
-chi aveva prenotato. Formato degli eventi in [docs/eventi.md](docs/eventi.md).
+`TiraturaRidotta` e `TiraturaAumentata` le legge anche **Notifiche**, per
+avvisare chi ha bottiglie confermate, con i suoi numeri. Formato degli eventi
+in [docs/eventi.md](docs/eventi.md).
 
 ```bash
 # Gli eventi di Edizioni in uscita e le rese già applicate
@@ -525,6 +535,81 @@ docker compose exec produzione-db psql -U produzione -d produzione -c "select or
 docker compose exec produzione-db psql -U produzione -d produzione -c "select event_id, tipo, topic, partizione, posizione, elaborato_il from evento_elaborato order by elaborato_il"
 ```
 
+## Prenotazioni, pagamenti e notifiche (storia di Giulia)
+
+Giulia è socia: nei 7 giorni di **prelazione** dopo l'annuncio prenota 2
+bottiglie dalla quota dei soci, a 45 €, e le paga con Stripe in modalità
+test. Il pagamento è una **SAGA orchestrata da Edizioni**, tutta su Kafka.
+Il giro completo è in [docs/eventi.md](docs/eventi.md#la-saga-in-edizioni).
+
+```
+POST /prenotazioni/{id}/pagamento → 202, e nello stesso commit (outbox):
+  pagamenti.comandi  RichiestaPagamento ──▶ pagamenti ── PaymentIntent ──▶ Stripe
+  pagamenti.esiti    PagamentoRiuscito  ──▶ edizioni: CONFERMATA, bottiglie 112 e 113
+                     PagamentoFallito   ──▶ edizioni: ANNULLATA, bottiglie di nuovo libere
+  edizioni.eventi    PrenotazioneConfermata / PrenotazioneAnnullata / TiraturaRidotta
+                                        ──▶ notifiche ── WebSocket ──▶ il browser di Giulia
+```
+
+Dal gateway: `/api/edizioni/...`.
+
+| Endpoint | Ruolo | Cosa fa |
+|---|---|---|
+| `GET /regole-di-vendita` | tutti | prezzi (45 € in prelazione, 52 € online), bottiglie per persona (2 e 6), 15 minuti per pagare, le carte di prova |
+| `POST /edizioni/{id}/prenotazioni` | SOCIO, CLIENTE | `{"bottiglie": 2}`: 201, da pagare entro 15 minuti; 409 con `motivo` (`PRELAZIONE_DEI_SOCI`, `LIMITE_PER_PERSONA`, `QUOTA_ESAURITA`) |
+| `GET /prenotazioni`, `GET /prenotazioni/{id}` | SOCIO, CLIENTE | solo le proprie (404 per quelle degli altri), con pagamento, numeri di bottiglia, annullamento e rimborso |
+| `POST /prenotazioni/{id}/pagamento` | SOCIO, CLIENTE | `{"metodo": "pm_card_visa"}` o `pm_card_chargeDeclined`: 202; 400 per una carta fuori dal menu; 409 `PAGAMENTO_GIA_RICHIESTO`, `PRENOTAZIONE_SCADUTA`, `PRENOTAZIONE_CHIUSA` |
+| `POST /edizioni/{id}/vendita` | DISTILLATORE | chiude la prelazione prima dei 7 giorni |
+
+**Edizioni:**
+- le bottiglie escono dalla quota alla prenotazione. Chi prenota blocca la
+  riga dell'edizione (`PESSIMISTIC_WRITE`): bottiglie libere e limite per
+  persona tengono anche con molte richieste insieme;
+- **numeri di bottiglia** alla conferma, progressivi per edizione: il
+  contatore `bottiglie_numerate` e la tabella `bottiglia_numerata`, con
+  `UNIQUE (edizione_id, numero)`. Un'annullata non lascia buchi;
+- dopo 15 minuti senza esito `ScadenzaPrenotazioni` (ogni 30 s) annulla la
+  prenotazione (`SCADUTA`). Un pagamento arrivato dopo non la riapre: parte
+  `RichiestaRimborso`.
+
+**Pagamenti** (Spring Boot, `pagamenti-db`):
+- consumer idempotente di `pagamenti.comandi` (gruppo `pagamenti`), outbox
+  per `pagamenti.esiti`, retry (1, 2, 4, 8 s) e `pagamenti.dlt`;
+- Stripe si chiama fuori dalla transazione, con la chiave di idempotenza
+  `ginvault-pagamento-<prenotazione>`: un comando rielaborato non addebita due
+  volte. A Stripe vanno solo gli id della prenotazione e dell'edizione;
+- la chiave è `STRIPE_SECRET_KEY` nel `.env` (dashboard di Stripe in modalità
+  test, *Sviluppatori* → *Chiavi API*). Una chiave live fa fallire l'avvio;
+  senza chiave il servizio parte con un WARN, e i comandi finiscono in
+  `pagamenti.dlt`.
+
+**Notifiche** (NestJS, `notifiche-db`):
+- legge `edizioni.eventi` e `pagamenti.esiti` (gruppo `notifiche`) con le
+  regole dei consumer Spring: idempotenza, retry, `notifiche.dlt`;
+- gli avvisi, in italiano: la conferma con i numeri, l'annullamento, la
+  tiratura cambiata (a chi ha bottiglie confermate, con i suoi numeri), il
+  rimborso;
+- REST per ogni utente con il login: `GET /api/notifiche/notifiche`,
+  `POST .../{id}/letta`, `POST .../lette`;
+- WebSocket `/api/notifiche/avvisi`: il gateway aggiunge il JWT all'handshake
+  e Notifiche lo verifica. Chiude con 4401 se manca, con 4001 quando scade
+  (dopo 5 minuti: il front-end si ricollega), e manda un `ping` ogni 25 s;
+- con più repliche (2 su Kubernetes) ogni notifica fa un `NOTIFY` su
+  `notifiche-db`, e ogni replica la consegna ai WebSocket che ha lei.
+
+I messaggi e il protocollo sono in
+[docs/eventi.md](docs/eventi.md#i-messaggi-della-storia-di-giulia).
+
+```bash
+# Le prenotazioni e i numeri di bottiglia
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select stato, bottiglie, causa_annullamento, confermata_il from prenotazione order by prenotata_il"
+docker compose exec edizioni-db psql -U edizioni -d edizioni -c "select edizione_id, numero, prenotazione_id from bottiglia_numerata order by numero"
+# I pagamenti, con il riferimento di Stripe
+docker compose exec pagamenti-db psql -U pagamenti -d pagamenti -c "select * from pagamento"
+# Gli avvisi
+docker compose exec notifiche-db psql -U notifiche -d notifiche -c "select destinatario, tipo, titolo, letta_il from notifica order by creata_il"
+```
+
 ## Test
 
 Ogni servizio Spring ha test di sicurezza (401/403/200, token scaduto, firma
@@ -582,6 +667,27 @@ Il gRPC tra Produzione e Magazzino si prova da tutte e due le parti:
   e la compensazione: se il piano non si salva, la riserva si annulla con
   `AnnullaRiserva`.
 
+La storia di Giulia:
+- **Edizioni:** `PrenotazioneTest` e `PagamentoDellaPrenotazioneTest`
+  (dominio); `PrenotazioniIntegrazioneTest` e `SagaPagamentoTest` con
+  PostgreSQL e Kafka veri (la parte di Pagamenti la fa il test sui topic).
+  Provano la prelazione e i limiti, la carta rifiutata con le bottiglie che
+  tornano libere, la scadenza, il rimborso e la concorrenza: 12 clienti
+  insieme per 5 bottiglie, e 20 conferme nello stesso istante con i numeri da
+  1 a 40, senza buchi né doppioni.
+- **Pagamenti:** `PagamentiStripeTest` con uno Stripe finto (WireMock: 402, 3D
+  Secure, 500, 429, Stripe lento) e `PagamentiIntegrazioneTest` con
+  PostgreSQL e Kafka veri: lo stesso comando due volte chiama Stripe una
+  volta sola, e con Stripe sempre giù il comando va in `pagamenti.dlt`.
+  `StripeVeroTest` parla con lo Stripe vero in modalità test e, senza la
+  chiave, si salta: si lancia con
+  `docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero`.
+- **Notifiche:** `npm test` nella cartella `notifiche` (serve Node 24, con
+  Docker acceso). PostgreSQL e Kafka dei Testcontainers, due istanze di
+  Notifiche e un finto gateway con la sua JWKS: gli avvisi di Giulia in
+  diretta anche sull'istanza che non legge Kafka, i doppioni, il dead letter,
+  i WebSocket chiusi con 4401 e 4001.
+
 Si possono lanciare da IntelliJ (tasto destro sulla cartella `src/test` → *Run*)
 oppure senza Maven installato, in un container. Docker Desktop deve essere
 avviato: il container di Maven usa il Docker del portatile per avviare i
@@ -617,8 +723,8 @@ docker compose exec edizioni-db psql -U edizioni -d edizioni
 ```
 
 In modalità sviluppo i DB sono raggiungibili anche dal portatile, solo su
-`127.0.0.1` (non dalla rete Wi-Fi): `localhost:5441` (edizioni) … `localhost:5445`
-(pagamenti), utente/password/database uguali al nome del servizio. Si possono
+`127.0.0.1` (non dalla rete Wi-Fi): `localhost:5441` (edizioni) … `localhost:5446`
+(notifiche), utente/password/database uguali al nome del servizio. Si possono
 aprire con il *Database tool* di IntelliJ.
 
 ### Kafka
@@ -682,12 +788,17 @@ avviato in IntelliJ.
   bisogna rifare il login. Con più repliche del gateway, la sessione andrà su
   Redis e tutte le repliche dovranno firmare con la stessa chiave, letta da un
   segreto condiviso.
-- **WebSocket di notifiche.** Il gateway inoltra il JWT anche sull'handshake
-  WebSocket. Resta da far verificare il token alla connessione, con
-  `VerificaJwtService`, e da controllare l'header `Origin`.
+- **WebSocket di notifiche.** Il JWT si verifica all'handshake, ma l'header
+  `Origin` non lo controlla nessuno, né il gateway né Notifiche.
+- **Stripe solo in modalità test**, con le due carte di prova scelte da un menu
+  e il pagamento confermato dal server: niente Stripe Elements né 3D Secure nel
+  browser. Una carta che chiede il 3D Secure risulta rifiutata
+  (`AUTENTICAZIONE_RICHIESTA`).
+- **L'avviso della tiratura** va solo a chi ha bottiglie confermate: chi ha una
+  prenotazione ancora da pagare non lo riceve.
 - **Aumento di tiratura tutto su ONLINE:** scelta provvisoria, da discutere (vedi
   [Edizione: tiratura, quote e ricalcolo](#edizione-tiratura-quote-e-ricalcolo)).
-- **Outbox (magazzino, edizioni, produzione) ed eventi elaborati:**
+- **Outbox (magazzino, edizioni, produzione, pagamenti) ed eventi elaborati:**
   - le righe pubblicate restano nella tabella `outbox`, e quelle di
     `evento_elaborato` in Produzione. Andranno cancellate dopo qualche giorno
     (Kafka tiene i messaggi 7), con un job periodico;

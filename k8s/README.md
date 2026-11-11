@@ -549,7 +549,7 @@ La SAGA del pagamento passa da tre servizi e due topic
 ```
 edizioni ── RichiestaPagamento ──▶ pagamenti.comandi ──▶ pagamenti ── HTTPS ──▶ api.stripe.com
    ▲                                                         │         (modalità test)
-   └──── PagamentoRiuscito / PagamentoRifiutato ◀── pagamenti.esiti ◀┘
+   └──── PagamentoRiuscito / PagamentoFallito ◀──── pagamenti.esiti ◀┘
             │
             └─▶ PrenotazioneConfermata (numeri 112 e 113) ──▶ edizioni.eventi ──▶ notifiche (2 pod)
                                                                                   │ WebSocket
@@ -910,6 +910,13 @@ a metà.
 Elena ordina 12 kg e ne registra 10,8, e l'edizione scende a 540 con gli
 eventi Kafka. Servono i ruoli DISTILLATORE e RESP_ACQUISTI (anche sullo stesso
 account). I passi sono in [`docs/demo-storia-elena.md`](../docs/demo-storia-elena.md).
+
+**6+. La storia di Giulia**, con lo stesso cluster: Giulia prenota 2 bottiglie
+in prelazione, prova la carta rifiutata, paga con la Visa di prova e riceve le
+bottiglie 112 e 113; poi la consegna ridotta di Elena le manda l'avviso in
+diretta. Servono la chiave di test di Stripe nel `.env` (Secret
+`pagamenti-stripe`) e i ruoli SOCIO, DISTILLATORE e RESP_ACQUISTI. I passi
+sono in [`docs/demo-storia-giulia.md`](../docs/demo-storia-giulia.md).
 
 **7. Fine.** **Esci** nel menu; Ctrl+C nel PowerShell del tunnel;
 `minikube stop` (oggetti e dati restano per la prossima volta).
