@@ -16,8 +16,8 @@
 #
 # "127.0.0.1:5441:5432" = HOST_IP:HOST_PORTA:CONTAINER_PORTA
 #   - 127.0.0.1: la porta è aperta solo su questo computer, non sulla rete Wi-Fi
-#   - 5441..5445 invece di 5432: non si scontrano con un eventuale Postgres
-#     installato sul portatile, e ricordano le porte dei servizi (8081..8085)
+#   - 5441..5446 invece di 5432: non si scontrano con un eventuale Postgres
+#     installato sul portatile, e ricordano le porte dei servizi (8081..8086)
 # =============================================================================
 
 services:
@@ -40,3 +40,7 @@ services:
   pagamenti-db:
     ports:
       - "127.0.0.1:5445:5432"
+
+  notifiche-db:
+    ports:
+      - "127.0.0.1:5446:5432"

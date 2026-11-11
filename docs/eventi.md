@@ -15,7 +15,7 @@ broker e da controller.
 |---|---|---|
 | Dove | servizio `kafka`, rete `kafka-net` | StatefulSet `kafka` (pod `kafka-0`), [`k8s/kafka.yaml`](../k8s/kafka.yaml) |
 | Indirizzo per i servizi | `kafka:9092` | `kafka:9092` (Service headless) |
-| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
+| Chi lo raggiunge | i servizi sulla rete `kafka-net`: edizioni, produzione, magazzino, pagamenti, notifiche | i pod con la label `ginvault/usa-kafka: "true"` ([`networkpolicy-kafka.yaml`](../k8s/networkpolicy-kafka.yaml)) |
 | Dati | volume `kafka-data` | PVC `dati-kafka-0` (1 GiB) |
 | Heap | 512 MB al massimo | 512 MB al massimo, container con limite di 1 GiB |
 | Creazione dei topic | servizio `kafka-topic` (parte, crea, termina) | Job `kafka-topic` |
@@ -29,11 +29,15 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
 
 | Topic | Produttore (unico) | Chiave | Eventi | Consumer group |
 |---|---|---|---|---|
-| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato` | `produzione`; più avanti `notifiche` |
+| `edizioni.eventi` | Edizioni | id dell'edizione | `EdizioneCreata`, `TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`, `PrenotazioneConfermata`, `PrenotazioneAnnullata` | `produzione`, `notifiche` |
 | `magazzino.eventi` | Magazzino | nome della botanica (`lavanda`) | `ConsegnaRegistrata` | `produzione` |
 | `produzione.eventi` | Produzione | id dell'edizione | `ResaRicalcolata` | `edizioni` |
 | `produzione.dlt` | Produzione (dead letter) | quella del messaggio originale | i messaggi che Produzione non riesce a elaborare, così come sono arrivati | nessuno: si leggono a mano |
 | `edizioni.dlt` | Edizioni (dead letter) | quella del messaggio originale | i messaggi che Edizioni non riesce a elaborare | nessuno: si leggono a mano |
+| `pagamenti.comandi` | Edizioni | id della prenotazione | i comandi `RichiestaPagamento`, `RichiestaRimborso` | `pagamenti` |
+| `pagamenti.esiti` | Pagamenti | id della prenotazione | `PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito` | `edizioni`, `notifiche` |
+| `pagamenti.dlt` | Pagamenti (dead letter) | quella del comando originale | i comandi che Pagamenti non riesce a elaborare | nessuno: si leggono a mano |
+| `notifiche.dlt` | Notifiche (dead letter) | quella del messaggio originale | i messaggi che Notifiche non riesce a elaborare | nessuno: si leggono a mano |
 
 - **Un topic per bounded context**, con nome `<contesto>.eventi`: chi lo
   possiede è l'unico che ci scrive. I nomi usano il punto e mai il trattino
@@ -52,8 +56,15 @@ invece un topic nuovo, con 1 partizione, che nessuno legge.
   verità è il database di ogni servizio, non Kafka.
 - `produzione.dlt` è il **dead letter topic** di Produzione: un topic solo per
   tutti i messaggi scartati dai suoi consumer, qualunque sia il topic
-  d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni. Vedi
+  d'origine (lo dicono gli header). `edizioni.dlt` è quello di Edizioni,
+  `pagamenti.dlt` quello di Pagamenti, `notifiche.dlt` quello di Notifiche. Vedi
   [Consumer](#consumer-idempotenza-retry-e-dead-letter).
+- **I comandi hanno il loro topic, e lo possiede chi li RICEVE**:
+  `pagamenti.comandi` è di Pagamenti, che ne fissa il formato; ci scrive
+  Edizioni. Le risposte vanno su `pagamenti.esiti` invece che su
+  `pagamenti.eventi`: lì ci sono solo gli esiti dei comandi. Un evento
+  racconta un fatto a chiunque; un comando chiede una cosa a un servizio
+  preciso, che risponde con un esito.
 
 ## Formato dei messaggi
 
@@ -136,11 +147,11 @@ nella stessa transazione dell'edizione. Produzione ne fa un piano di produzione.
 | Campo | Significato |
 |---|---|
 | `formulazione` | la ricetta (id e versione in Ricette) da cui nasce l'edizione |
-| `botanicaDiStagione` | minuscola, come in Ricette (`lavanda`) |
+| `botanicaDiStagione` | minuscola, come in Ricette (`lavanda`). Notifiche la usa per il nome dell'edizione negli avvisi |
 | `grammiPerBottiglia` | la dose della botanica di stagione |
 | `origineBotanica` | da dove deve venire la botanica: un lotto di un'altra origine non conta per l'edizione |
 | `kgPrevisti` | i kg con cui è stata calcolata la tiratura |
-| `tiratura`, `quote` | le bottiglie e la loro divisione per canale (Notifiche le userà per gli annunci) |
+| `tiratura`, `quote` | le bottiglie e la loro divisione per canale |
 
 ### `ResaRicalcolata` v1 (produzione.eventi)
 
@@ -250,8 +261,9 @@ Con il lotto integrato da Marco la resa torna a 12 kg: `TiraturaAumentata` con
 `tiraturaPrima` 540, `tiratura` 600 e ONLINE di nuovo a 150. Con 15 kg la
 tiratura resta 600: è il tetto di ogni edizione.
 
-`TiraturaRidotta` lo leggerà Notifiche (storia di Giulia), per avvisare chi ha
-prenotato.
+Notifiche legge `TiraturaRidotta` e `TiraturaAumentata` per avvisare chi ha
+bottiglie confermate dell'edizione (vedi
+[Il consumer di Notifiche](#il-consumer-di-notifiche)).
 
 ### `RicalcoloRifiutato` v1 (edizioni.eventi)
 
@@ -338,6 +350,249 @@ evento per `ordineId`.
 | `esitoQualita` | `CONFORME` o `NON_CONFORME`. Un lotto non conforme resta tracciato ma non si usa per produrre |
 | `consegnataIl` | il giorno di arrivo (fuso di Roma) |
 
+## I messaggi della storia di Giulia
+
+Giulia, socia, prenota 2 bottiglie dell'edizione d'estate e paga con una carta
+di prova scelta da un menu. Il pagamento non parte dalla richiesta HTTP:
+Edizioni manda un **comando** a Pagamenti e aspetta l'**esito** (la SAGA,
+vedi [sotto](#la-saga-in-edizioni)). Pagamenti addebita con Stripe in
+modalità test, dal server.
+
+| Messaggio | Topic | Chi lo scrive | Quando |
+|---|---|---|---|
+| `RichiestaPagamento` (comando) | `pagamenti.comandi` | Edizioni | Giulia sceglie la carta e chiede di pagare (`POST /prenotazioni/{id}/pagamento`) |
+| `RichiestaRimborso` (comando) | `pagamenti.comandi` | Edizioni | un pagamento riuscito è arrivato quando la prenotazione era già annullata (scaduta o rifiutata) |
+| `PagamentoRiuscito` | `pagamenti.esiti` | Pagamenti | Stripe ha addebitato l'importo |
+| `PagamentoFallito` | `pagamenti.esiti` | Pagamenti | la carta è rifiutata, chiede il 3D Secure o Stripe non accetta la richiesta |
+| `RimborsoEseguito` | `pagamenti.esiti` | Pagamenti | Stripe ha restituito l'addebito |
+| `PrenotazioneConfermata` | `edizioni.eventi` | Edizioni | dopo `PagamentoRiuscito`: la prenotazione ha i suoi numeri di bottiglia (Giulia: 112 e 113) |
+| `PrenotazioneAnnullata` | `edizioni.eventi` | Edizioni | dopo `PagamentoFallito`, o a tempo finito: le bottiglie tornano libere |
+
+La busta è la stessa degli eventi, anche per i comandi: `eventId` è l'id del
+messaggio, `tipo` il nome del comando (`Richiesta...`) o dell'evento (al
+passato). Chiave di tutti e due i topic: **l'id della prenotazione**, così i
+messaggi della stessa prenotazione restano in ordine (il rimborso dopo il suo
+pagamento). Gli importi sono interi, **in centesimi**, come li vuole Stripe:
+2 bottiglie a 45,00 euro = `9000`.
+
+### `RichiestaPagamento` v1 (pagamenti.comandi)
+
+```json
+{
+  "eventId": "7d1f0c2e-3b4a-4c5d-8e6f-9a0b1c2d3e4f",
+  "tipo": "RichiestaPagamento",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:00Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "importoCentesimi": 9000,
+    "valuta": "eur",
+    "metodo": "pm_card_visa",
+    "descrizione": "GinVault: 2 bottiglie dell'edizione d'estate"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `acquirente` | il `sub` di chi ha prenotato. Resta in GinVault: a Stripe vanno solo `prenotazioneId` ed `edizioneId` (metadata) |
+| `importoCentesimi` | intero maggiore di zero: `9000.5` è un comando non valido |
+| `valuta` | codice ISO di 3 lettere, minuscolo (`eur`) |
+| `metodo` | il metodo di pagamento di Stripe (`pm_...`): `pm_card_visa` riesce, `pm_card_chargeDeclined` è rifiutata |
+| `descrizione` | facoltativa, al più 200 caratteri: compare nella dashboard di Stripe |
+
+### `RichiestaRimborso` v1 (pagamenti.comandi)
+
+```json
+{
+  "eventId": "8e2a1d3f-4c5b-4d6e-9f70-a1b2c3d4e5f6",
+  "tipo": "RichiestaRimborso",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:21:00Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "motivo": "pagamento arrivato a prenotazione scaduta"
+  }
+}
+```
+
+Si rimborsa sempre l'intero addebito della prenotazione; `motivo` è
+facoltativo.
+
+### `PagamentoRiuscito` v1 (pagamenti.esiti)
+
+```json
+{
+  "eventId": "9f3b2e40-5d6c-4e7f-a081-b2c3d4e5f607",
+  "tipo": "PagamentoRiuscito",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:02Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "pagamentoId": "c0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "importoCentesimi": 9000,
+    "valuta": "eur",
+    "riferimentoStripe": "pi_3QxYz..."
+  }
+}
+```
+
+`riferimentoStripe` è l'id del PaymentIntent: lo si cerca nella dashboard di
+Stripe. Edizioni conferma la prenotazione e assegna i numeri di bottiglia.
+
+### `PagamentoFallito` v1 (pagamenti.esiti)
+
+Solo il `payload` (la busta è come sopra):
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000002",
+  "pagamentoId": "c0000000-0000-4000-8000-000000000002",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "motivo": "CARTA_RIFIUTATA",
+  "codice": "generic_decline",
+  "spiegazione": "La banca ha rifiutato la carta."
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `motivo` | `CARTA_RIFIUTATA` (402 di Stripe), `AUTENTICAZIONE_RICHIESTA` (la carta chiede il 3D Secure, che un pagamento dal server non può fare), `RICHIESTA_NON_VALIDA` (per esempio un `metodo` che non esiste) |
+| `codice` | il codice di Stripe: il `decline_code` per una carta rifiutata, se no il `code` |
+| `spiegazione` | in italiano, per l'avviso a chi ha prenotato |
+
+Edizioni annulla la prenotazione e libera le bottiglie. Uno Stripe che non
+risponde **non** è un `PagamentoFallito`: il comando si riprova e, finiti i
+tentativi, va in `pagamenti.dlt` (vedi sotto).
+
+### `RimborsoEseguito` v1 (pagamenti.esiti)
+
+Solo il `payload`:
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+  "pagamentoId": "c0000000-0000-4000-8000-000000000001",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "importoCentesimi": 9000,
+  "valuta": "eur",
+  "riferimentoStripe": "re_3QxYz...",
+  "motivo": "pagamento arrivato a prenotazione scaduta"
+}
+```
+
+Qui `riferimentoStripe` è l'id del rimborso (`re_...`).
+
+**Un pagamento per prenotazione.** Una seconda `RichiestaPagamento` per la
+stessa prenotazione (con un altro `eventId`) non richiama Stripe: Pagamenti
+ripubblica l'esito che ha già, anche se il secondo comando ha un'altra carta.
+Allo stesso modo una seconda `RichiestaRimborso` ripubblica `RimborsoEseguito`.
+
+### `PrenotazioneConfermata` v1 (edizioni.eventi)
+
+Chiave: l'id dell'edizione, come gli altri eventi di Edizioni. Notifiche lo
+usa per dire a Giulia i suoi numeri, e li ricorda per gli avvisi della
+tiratura.
+
+```json
+{
+  "eventId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+  "tipo": "PrenotazioneConfermata",
+  "versione": 1,
+  "occorsoIl": "2026-08-01T09:05:03Z",
+  "payload": {
+    "prenotazioneId": "a0000000-0000-4000-8000-000000000001",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "acquirente": "github:1234567",
+    "canale": "SOCI",
+    "bottiglie": 2,
+    "numeriBottiglia": [112, 113],
+    "totale": 90.00,
+    "pagamentoId": "c0000000-0000-4000-8000-000000000001"
+  }
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `numeriBottiglia` | progressivi nell'edizione, in ordine, senza buchi né doppioni: la prima prenotazione confermata ha 1, 2...; un'annullata non ne prende |
+| `totale` | in euro, come il prezzo della prenotazione (non in centesimi: è un fatto di Edizioni, non un comando per Stripe) |
+| `pagamentoId` | il pagamento in Pagamenti |
+
+### `PrenotazioneAnnullata` v1 (edizioni.eventi)
+
+Solo il `payload`:
+
+```json
+{
+  "prenotazioneId": "a0000000-0000-4000-8000-000000000002",
+  "edizioneId": "e0000000-0000-4000-8000-000000000001",
+  "acquirente": "github:1234567",
+  "canale": "SOCI",
+  "bottiglie": 2,
+  "causa": "PAGAMENTO_RIFIUTATO",
+  "spiegazione": "La banca ha rifiutato la carta."
+}
+```
+
+| Campo | Significato |
+|---|---|
+| `causa` | `PAGAMENTO_RIFIUTATO` (dopo `PagamentoFallito`) o `SCADUTA` (il tempo per pagare è finito) |
+| `spiegazione` | in italiano, per chi ha prenotato: quella di Pagamenti, o "Il tempo per pagare è finito il 1 agosto 2026 alle 11:20: le bottiglie sono tornate disponibili." |
+| `bottiglie` | quante ne sono tornate libere nella quota del `canale` |
+
+### La SAGA in Edizioni
+
+Una SAGA **orchestrata**: Edizioni decide i passi e manda i comandi, Pagamenti
+li esegue. Lo stato della SAGA è la prenotazione stessa (`stato`, più le date
+di pagamento, annullamento e rimborso).
+
+```
+POST /prenotazioni/{id}/pagamento ──► RichiestaPagamento ──► Pagamenti ──► Stripe
+         (202, IN_ATTESA_PAGAMENTO)                               │
+                                                                  ▼
+  PagamentoRiuscito ──► CONFERMATA, numeri di bottiglia ──► PrenotazioneConfermata
+  PagamentoFallito ───► ANNULLATA, bottiglie libere ──────► PrenotazioneAnnullata   (compensazione)
+  tempo finito ───────► ANNULLATA, bottiglie libere ──────► PrenotazioneAnnullata   (timeout)
+  PagamentoRiuscito a prenotazione annullata ──► RichiestaRimborso ──► RimborsoEseguito
+```
+
+- **Compensazione.** La prenotazione toglie subito le bottiglie dalla quota
+  (passo 1). Se il pagamento non va, l'annullamento le rimette: la quota
+  torna come prima e un altro socio le può prenotare.
+- **Timeout.** Ogni 30 secondi (`edizioni.vendita.controllo-scadenze-ms`)
+  `ScadenzaPrenotazioni` annulla le prenotazioni in attesa con il tempo finito
+  (15 minuti). Così le bottiglie non restano bloccate se Pagamenti è fermo o
+  se nessuno paga.
+- **Il pagamento arrivato tardi.** Se Pagamenti era fermo, l'addebito può
+  arrivare dopo la scadenza. Le bottiglie non ci sono più (forse le ha già un
+  altro socio): la prenotazione resta annullata e Edizioni chiede il rimborso
+  (`RichiestaRimborso`), una volta sola. Se invece la scadenza non è ancora
+  passata, il pagamento conferma: le bottiglie erano ancora tenute.
+- **Un pagamento solo.** `POST .../pagamento` una seconda volta → 409
+  `PAGAMENTO_GIA_RICHIESTO`; con il tempo finito → 409 `PRENOTAZIONE_SCADUTA`;
+  confermata o annullata → 409 `PRENOTAZIONE_CHIUSA`. Le carte sono quelle del
+  menu (`edizioni.vendita.metodi-di-pagamento`, in `GET /regole-di-vendita`):
+  un'altra → 400.
+- **Esiti ripetuti.** Lo stesso `eventId` si scarta (`evento_elaborato`); un
+  esito nuovo per una prenotazione già confermata o annullata non cambia
+  niente (`GIA_REGISTRATO`).
+- **I numeri di bottiglia.** L'edizione tiene il conto delle bottiglie
+  numerate (`bottiglie_numerate`): una conferma prende i numeri successivi.
+  Ogni passo della SAGA blocca prima la riga dell'edizione
+  (`SELECT ... FOR NO KEY UPDATE`, lo stesso blocco delle prenotazioni) e solo
+  dopo legge la prenotazione: due conferme nello stesso istante si mettono in
+  fila, e la scadenza e un pagamento non vedono mai la stessa prenotazione "in
+  attesa". Rete di sicurezza: `UNIQUE (edizione_id, numero)` nella tabella
+  `bottiglia_numerata`. Il test di concorrenza: 20 conferme insieme prendono i
+  numeri da 1 a 40, due vicini per prenotazione.
+
 ## Transactional outbox
 
 Un evento non parte dalla richiesta HTTP: il servizio lo scrive nella sua
@@ -365,8 +620,12 @@ conferma di Kafka (`acks=all`, producer idempotente). Al primo errore si ferma:
 gli eventi dopo aspettano, così l'ordine non cambia. La garanzia è **almeno una
 volta**: i consumer devono scartare gli `eventId` già visti. L'outbox ce
 l'hanno Magazzino (`ConsegnaRegistrata`), Edizioni (`EdizioneCreata`,
-`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`) e Produzione
-(`ResaRicalcolata`).
+`TiraturaRidotta`, `TiraturaAumentata`, `RicalcoloRifiutato`,
+`PrenotazioneConfermata`, `PrenotazioneAnnullata` e i comandi
+`RichiestaPagamento`, `RichiestaRimborso`), Produzione (`ResaRicalcolata`) e
+Pagamenti (`PagamentoRiuscito`, `PagamentoFallito`, `RimborsoEseguito`). Anche
+i comandi passano dall'outbox: se Kafka è giù il pagamento parte quando torna,
+e non parte mai per una prenotazione che non è stata salvata.
 
 ## Consumer: idempotenza, retry e dead letter
 
@@ -424,16 +683,19 @@ il messaggio va nel dead letter.
 
 ### Il consumer di Edizioni
 
-Edizioni legge `produzione.eventi` nel consumer group `edizioni`, con 3
-consumer, uno per partizione. Le stesse regole di Produzione, nelle stesse
-classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
+Edizioni legge `produzione.eventi` e `pagamenti.esiti` nel consumer group
+`edizioni`, con due listener (`edizioni-produzione`, `edizioni-pagamenti`) e 3
+consumer ciascuno, uno per partizione. Le stesse regole di Produzione, nelle
+stesse classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
 
 - **idempotenza:** `ResaRicalcolata` si applica nella transazione che scrive
   la riga di outbox e quella di `evento_elaborato`. Lo stesso `eventId`
   rimandato si scarta. Serve davvero: la resa di Elena (10,8 kg) rimandata
   dopo quella dell'integrazione (12 kg) riporterebbe l'edizione a 540. In
   `evento_elaborato` di Edizioni c'è anche l'`esito`: `RIDOTTA`,
-  `AUMENTATA`, `INVARIATA` o `RIFIUTATO`;
+  `AUMENTATA`, `INVARIATA` o `RIFIUTATO` per le rese, `CONFERMATA`,
+  `ANNULLATA`, `RIMBORSO_RICHIESTO`, `RIMBORSATA` o `GIA_REGISTRATO` per gli
+  esiti di Pagamenti;
 - **retry:** 1, 2, 4, 8 secondi (`edizioni.consumer.*`), per esempio con il
   database occupato o con un ricalcolo manuale sulla stessa edizione nello
   stesso istante (`@Version`);
@@ -441,13 +703,159 @@ classi (`ElaborazioneEventi`, `ConfigurazioneKafka`, `LettoreEventi`):
   header. Ci va subito un messaggio illeggibile (`EventoNonValido`, anche per
   kg negativi o con più di 3 decimali) o una resa per un'edizione che non
   esiste (`EdizioneNonTrovata`). Una resa arriva sempre dopo la sua edizione,
-  quindi riprovare non serve;
+  quindi riprovare non serve. Lo stesso per un esito di Pagamenti con una
+  prenotazione che non esiste (`PrenotazioneNonTrovata`): il comando parte
+  nello stesso commit della prenotazione;
 - **un ricalcolo rifiutato non è un errore:** il messaggio è elaborato, l'offset
   avanza e parte `RicalcoloRifiutato`, con un WARN nel log.
 
-Limite noto: `evento_elaborato` cresce con gli eventi. Kafka tiene i messaggi
-7 giorni, quindi le righe più vecchie si potrebbero cancellare dopo quel
-tempo (non lo fa ancora nessun job).
+### Il consumer di Pagamenti
+
+Pagamenti legge `pagamenti.comandi` nel consumer group `pagamenti`, con 3
+consumer, uno per partizione (`ElaborazioneComandi`, `ConfigurazioneKafka`,
+`LettoreComandi`). La differenza con gli altri: in mezzo c'è una chiamata a
+Stripe, che **non** sta nella transazione del database (terrebbe una
+connessione occupata per secondi, e un rollback non annullerebbe un addebito).
+
+1. legge la busta; se è illeggibile, o il `tipo` è sconosciuto → dead letter
+   (su un topic di comandi arrivano solo comandi per Pagamenti);
+2. se l'`eventId` è in `comando_elaborato` → già elaborato, si scarta senza
+   chiamare Stripe;
+3. chiama Stripe con la **chiave di idempotenza** della prenotazione
+   (`Idempotency-Key: ginvault-pagamento-<prenotazione>`, per il rimborso
+   `ginvault-rimborso-<prenotazione>`), solo se la prenotazione non ha già un
+   pagamento;
+4. in una transazione: il pagamento, la riga di outbox con l'esito e
+   l'`eventId` in `comando_elaborato`.
+
+Se il punto 4 fallisce, Kafka ripropone il comando e il punto 3 si ripete:
+Stripe riconosce la chiave e restituisce la risposta di prima, senza un
+secondo addebito. Terza difesa, nel database: UNIQUE su `prenotazione_id` di
+`pagamento`.
+
+- **retry:** 1, 2, 4, 8 secondi (`pagamenti.consumer.*`) quando Stripe non
+  dà un esito: rete giù, timeout (2 s per connettersi, 10 s per la risposta),
+  errori 5xx, 429, chiave mancante o sbagliata. Ogni tentativo usa la stessa
+  chiave di idempotenza;
+- **dead letter** `pagamenti.dlt`, con gli stessi header: ci va subito un
+  comando illeggibile (`ComandoNonValido`) o un rimborso impossibile
+  (`RimborsoNonPossibile`: il pagamento era stato rifiutato, o Stripe non
+  accetta il rimborso); dopo i tentativi, un comando con Stripe sempre giù
+  (`ProviderNonDisponibile`);
+- **una carta rifiutata non è un errore:** il comando è elaborato, l'offset
+  avanza e parte `PagamentoFallito`.
+
+### Il consumer di Notifiche
+
+Notifiche (NestJS, con kafkajs) legge `edizioni.eventi` e `pagamenti.esiti`
+nel consumer group `notifiche`: un consumer per istanza, che elabora insieme le
+3 partizioni di ogni topic e i messaggi di una partizione uno alla volta. Le
+regole sono quelle di Produzione, scritte in TypeScript (`ConsumerEventi`,
+`ElaborazioneEventi`, `lettore-eventi.ts`):
+
+- **idempotenza:** un messaggio, una transazione. L'`eventId` va in
+  `evento_elaborato` per primo, insieme ad `avvisi` (quante notifiche ha
+  creato): se c'è già, il messaggio si scarta. Seconda difesa:
+  `UNIQUE (evento_id, destinatario)` su `notifica`. L'offset si salva dopo il
+  commit;
+- **cosa legge:**
+
+  | Evento | Cosa fa Notifiche |
+  |---|---|
+  | `EdizioneCreata` | salva l'edizione con la sua botanica (tabella `edizione`): serve al nome negli avvisi, "edizione con lavanda" |
+  | `PrenotazioneConfermata` | salva i numeri di bottiglia (tabella `prenotazione_confermata`) e avvisa chi ha prenotato |
+  | `PrenotazioneAnnullata` | avvisa chi aveva prenotato, con la `spiegazione` di Edizioni |
+  | `TiraturaRidotta`, `TiraturaAumentata` | un avviso per ogni acquirente con bottiglie confermate dell'edizione, con tutti i suoi numeri |
+  | `RimborsoEseguito` | avvisa chi è stato rimborsato, con l'importo |
+
+  Gli altri tipi (`RicalcoloRifiutato`, `PagamentoRiuscito`,
+  `PagamentoFallito`) si ignorano e non si scrivono in `evento_elaborato`. La
+  proiezione (`edizione`, `prenotazione_confermata`) evita di chiamare
+  Edizioni;
+- **ordine:** le conferme e le tirature di un'edizione hanno la stessa chiave,
+  quindi stanno nella stessa partizione. L'avviso di `TiraturaRidotta` va a chi
+  aveva già confermato, non a chi conferma dopo. `RimborsoEseguito` arriva da
+  un altro topic: se l'edizione non è ancora nella proiezione, l'avviso dice
+  solo "edizione";
+- **retry:** 1, 2, 4, 8 secondi (`NOTIFICHE_TENTATIVI_MS`). Durante l'attesa il
+  consumer manda l'heartbeat, così resta nel gruppo;
+- **dead letter** `notifiche.dlt`, nella stessa partizione, con gli header di
+  Spring. Differenza: `kafka_dlt-original-partition` e `-original-offset` sono
+  testo, mentre Spring li scrive come interi binari. Ci va subito un
+  `EventoNonValido`: JSON rotto, campo mancante, `versione` diversa da 1,
+  numeri di bottiglia diversi dalle bottiglie. Gli altri errori ci vanno dopo i
+  tentativi, con la classe dell'errore in `kafka_dlt-exception-fqcn` (per
+  esempio `DatabaseError`);
+- **Kafka spento**, all'avvio o dopo: REST e WebSocket funzionano, `/health`
+  risponde `{"status":"UP","database":"UP","kafka":"NON_COLLEGATO"}` e il
+  consumer si ricollega da solo.
+
+Limite noto: chi ha una prenotazione ancora da pagare non riceve l'avviso della
+tiratura, perché Edizioni non pubblica un evento quando nasce una prenotazione.
+
+### Gli avvisi in diretta
+
+Il WebSocket di Notifiche. Dal browser è `ws://localhost/api/notifiche/avvisi`:
+il gateway toglie `/api/notifiche` e Notifiche ascolta su `/avvisi`. Parla
+solo il server; quello che manda il client si ignora. Ogni messaggio è un JSON
+con un `tipo`:
+
+| `tipo` | Quando | Contenuto |
+|---|---|---|
+| `connesso` | appena aperto | `nonLette`: quante notifiche non lette ha l'utente |
+| `notifica` | una notifica nuova per l'utente | `notifica`, come in `GET /notifiche` |
+| `ping` | ogni 25 secondi | niente: tiene viva la connessione (nginx chiude dopo 60 secondi di silenzio) |
+
+```json
+{
+  "tipo": "notifica",
+  "notifica": {
+    "id": "5b1e7c0a-2f3d-4e5a-9b6c-7d8e9f0a1b2c",
+    "tipo": "TIRATURA_RIDOTTA",
+    "titolo": "La tiratura scende a 540 bottiglie",
+    "testo": "L'edizione con lavanda passa da 600 a 540 bottiglie (consegna ridotta: 10,8 su 12 kg). Le tue bottiglie, la 112 e la 113, restano tue.",
+    "edizioneId": "e0000000-0000-4000-8000-000000000001",
+    "prenotazioneId": null,
+    "dati": { "tiraturaPrima": 600, "tiratura": 540, "numeriBottiglia": [112, 113], "causa": "consegna ridotta: 10,8 su 12 kg" },
+    "creataIl": "2026-08-06T08:30:02.000Z",
+    "lettaIl": null
+  }
+}
+```
+
+Il `tipo` della notifica è `PRENOTAZIONE_CONFERMATA`, `PRENOTAZIONE_ANNULLATA`,
+`TIRATURA_RIDOTTA`, `TIRATURA_AUMENTATA` o `RIMBORSO_ESEGUITO`. `creataIl` è
+l'`occorsoIl` dell'evento.
+
+- **Autenticazione:** il browser apre il WebSocket con il cookie di sessione e
+  il gateway aggiunge il JWT (`Authorization: Bearer`), come per ogni
+  richiesta. Notifiche lo verifica all'handshake. I codici di chiusura:
+  - `4401`: JWT mancante o non valido;
+  - `4001`: il JWT è scaduto (dura 5 minuti). Il client si ricollega e il
+    gateway gliene dà uno nuovo; così un logout vale anche per i WebSocket già
+    aperti;
+  - `1001`: Notifiche si ferma, e al nuovo collegamento risponde un'altra
+    replica.
+- **Più repliche:** il messaggio di Kafka lo elabora la replica che ha la
+  partizione, ma il WebSocket può essere aperto su un'altra. Ogni notifica
+  salvata fa `NOTIFY notifiche_nuove` con `{id, destinatario}` nella stessa
+  transazione, e il messaggio parte al commit. Ogni replica è in `LISTEN` su una
+  connessione sua e consegna la notifica ai WebSocket che ha lei.
+- **Il client:** a ogni `connesso` rilegge `GET /api/notifiche/notifiche`, per
+  le notifiche arrivate mentre era scollegato, e scarta una `notifica` con un
+  `id` che ha già.
+
+REST, con le sole notifiche di chi chiede:
+
+| Richiesta | Risposta |
+|---|---|
+| `GET /api/notifiche/notifiche` | `{"nonLette": 2, "notifiche": [...]}`: le ultime 50, dalla più recente |
+| `POST /api/notifiche/notifiche/{id}/letta` | 204; 404 se non c'è o è di un altro; 400 se l'id non è un UUID |
+| `POST /api/notifiche/notifiche/lette` | 204: tutte lette |
+
+Limite noto: `evento_elaborato` (anche quella di Notifiche) e
+`comando_elaborato` di Pagamenti crescono con i messaggi. Kafka li tiene 7 giorni, quindi le righe più vecchie si
+potrebbero cancellare dopo quel tempo (non lo fa ancora nessun job).
 
 ## Vedere i messaggi
 
@@ -466,13 +874,32 @@ docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-se
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic produzione.dlt --from-beginning --formatter-property print.headers=true
 ```
 
-Lo stesso per Edizioni: il gruppo `edizioni` su `produzione.eventi`, i suoi
-eventi su `edizioni.eventi` e il suo dead letter topic:
+Lo stesso per Edizioni: il gruppo `edizioni` su `produzione.eventi` e
+`pagamenti.esiti`, i suoi eventi su `edizioni.eventi`, i comandi per
+Pagamenti e il suo dead letter topic:
 
 ```powershell
 docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.comandi --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.eventi --from-beginning --formatter-property print.key=true
 docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic edizioni.dlt --from-beginning --formatter-property print.headers=true
+```
+
+E per Pagamenti: il gruppo `pagamenti` su `pagamenti.comandi`, gli esiti e il
+dead letter topic:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group pagamenti
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.esiti --from-beginning --formatter-property print.key=true
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.dlt --from-beginning --formatter-property print.headers=true
+```
+
+E per Notifiche: il gruppo `notifiche` su `edizioni.eventi` e
+`pagamenti.esiti`, e il dead letter topic:
+
+```powershell
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifiche
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic notifiche.dlt --from-beginning --formatter-property print.headers=true
 ```
 
 Su Kubernetes gli stessi comandi, con `kubectl exec -it -n ginvault kafka-0 --`

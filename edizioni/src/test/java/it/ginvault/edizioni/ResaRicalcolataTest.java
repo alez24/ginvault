@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import it.ginvault.edizioni.dominio.Canale;
 import it.ginvault.edizioni.dominio.Edizione;
 import it.ginvault.edizioni.dominio.EdizioneRepository;
+import it.ginvault.edizioni.dominio.EdizioniDiProva;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo.Stato;
 import it.ginvault.edizioni.sicurezza.GatewayDiProva;
@@ -132,6 +133,12 @@ class ResaRicalcolataTest {
         @Bean
         NewTopic deadLetter() {
             return TopicBuilder.name(DEAD_LETTER).partitions(3).replicas(1).build();
+        }
+
+        /** Gli esiti di Pagamenti, letti dal secondo listener (provato in SagaPagamentoTest): qui restano vuoti. */
+        @Bean
+        NewTopic pagamentiEsiti() {
+            return TopicBuilder.name("pagamenti.esiti").partitions(3).replicas(1).build();
         }
     }
 
@@ -322,12 +329,12 @@ class ResaRicalcolataTest {
     private UUID edizioneDa600Bottiglie(int prenotateOnline, int prenotateBar) {
         Map<Canale, Integer> quote = new EnumMap<>(Map.of(Canale.SOCI, 300, Canale.BAR, 150, Canale.ONLINE, 150));
         Edizione edizione = Edizione.nuova(new FormulazioneInCatalogo(UUID.randomUUID(), Stato.SCELTA, 2, "Lavanda",
-                new BigDecimal("20"), null), 2, new BigDecimal("12"), ORIGINE, quote);
+                new BigDecimal("20"), null), 2, new BigDecimal("12"), ORIGINE, quote, Duration.ofDays(7));
         if (prenotateOnline > 0) {
-            edizione.prenota(Canale.ONLINE, prenotateOnline);
+            EdizioniDiProva.occupa(edizione, Canale.ONLINE, prenotateOnline);
         }
         if (prenotateBar > 0) {
-            edizione.prenota(Canale.BAR, prenotateBar);
+            EdizioniDiProva.occupa(edizione, Canale.BAR, prenotateBar);
         }
         edizioni.save(edizione);
         return edizione.id();

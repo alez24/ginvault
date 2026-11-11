@@ -8,7 +8,8 @@
 #   Stop:   docker compose down          (con -v cancella anche i dati dei DB)
 #
 # Prima del primo avvio: copiare .env.example in .env e compilarlo (client
-# id/secret OAuth, elenchi dei ruoli). Compose legge .env in automatico.
+# id/secret OAuth, elenchi dei ruoli, chiave di test di Stripe). Compose legge
+# .env in automatico.
 #
 # Reti:
 #   - frontend-net       -> solo front-end e gateway: nginx non vede i servizi
@@ -17,8 +18,8 @@
 #     pubblicata sull'host e ogni chiamata porta il JWT dell'utente; il filtro
 #     "solo produzione sulla 9084" lo fa la NetworkPolicy di Kubernetes
 #   - kafka-net          -> Kafka e SOLO i servizi che pubblicano o consumano
-#     eventi (edizioni, produzione, magazzino): gateway, front-end, ricette e
-#     i database non lo raggiungono
+#     eventi (edizioni, produzione, magazzino, pagamenti, notifiche): gateway,
+#     front-end, ricette e i database non lo raggiungono
 #   - <servizio>-db-net  -> rete privata tra UN servizio e il SUO database.
 #     Il DB di edizioni non è raggiungibile da ricette, ecc.: il pattern
 #     "database per service" è garantito anche a livello di rete.
@@ -122,6 +123,17 @@ services:
     networks:
       - pagamenti-db-net
 
+  notifiche-db:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: notifiche
+      POSTGRES_USER: notifiche
+      POSTGRES_PASSWORD: notifiche
+    volumes:
+      - notifiche-db-data:/var/lib/postgresql/data
+    networks:
+      - notifiche-db-net
+
   # ===========================================================================
   # KAFKA - modalità KRaft (senza ZooKeeper), un solo nodo
   # ===========================================================================
@@ -201,9 +213,13 @@ services:
     image: apache/kafka:4.3.0
     restart: "no"
     environment:
-      # produzione.dlt ed edizioni.dlt: i dead letter topic di Produzione e di
-      # Edizioni (messaggi che non si riescono a elaborare, docs/eventi.md)
-      TOPIC: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+      # produzione.dlt, edizioni.dlt, pagamenti.dlt, notifiche.dlt: i dead
+      # letter topic (messaggi che non si riescono a elaborare, docs/eventi.md).
+      # pagamenti.comandi: i comandi di Edizioni per Pagamenti (addebita,
+      # rimborsa); pagamenti.esiti: come sono andati.
+      TOPIC: >-
+        edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+        pagamenti.comandi pagamenti.esiti pagamenti.dlt notifiche.dlt
       PARTIZIONI: 3
       KAFKA_HEAP_OPTS: -Xmx128m
     # $$ = un "$" per la shell: Compose non prova a sostituirlo con una variabile
@@ -254,9 +270,12 @@ services:
       # validare la formulazione. Niente depends_on: se Ricette è giù, Edizioni
       # parte lo stesso e risponde 503 solo quando serve Ricette.
       RICETTE_URI: http://ricette:8082
-      # Pubblica EdizioneCreata, TiraturaRidotta, TiraturaAumentata e
-      # RicalcoloRifiutato su edizioni.eventi (outbox); legge ResaRicalcolata da
-      # produzione.eventi (consumer group "edizioni"), gli scarti su edizioni.dlt
+      # Pubblica EdizioneCreata, TiraturaRidotta, TiraturaAumentata,
+      # RicalcoloRifiutato, PrenotazioneConfermata e PrenotazioneAnnullata su
+      # edizioni.eventi e i comandi RichiestaPagamento e RichiestaRimborso su
+      # pagamenti.comandi (outbox); legge ResaRicalcolata da produzione.eventi e
+      # gli esiti di Pagamenti da pagamenti.esiti (consumer group "edizioni"),
+      # gli scarti su edizioni.dlt
       KAFKA_BOOTSTRAP: kafka:9092
     depends_on:
       edizioni-db:
@@ -374,30 +393,59 @@ services:
       DB_USER: pagamenti
       DB_PASSWORD: pagamenti
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Legge pagamenti.comandi (consumer group "pagamenti"), pubblica gli esiti
+      # su pagamenti.esiti e gli scarti su pagamenti.dlt
+      KAFKA_BOOTSTRAP: kafka:9092
+      # La chiave SEGRETA di test di Stripe, dal file .env (mai scritta qui).
+      # Vuota: pagamenti parte, ma gli addebiti finiscono in pagamenti.dlt.
+      # Le reti di Compose non sono "internal": pagamenti raggiunge
+      # api.stripe.com su Internet.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
     depends_on:
       pagamenti-db:
         condition: service_healthy
+      # Usa Kafka: parte quando i topic esistono
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8085/health"]
     networks:
       - backend
+      - kafka-net
       - pagamenti-db-net
 
   # ===========================================================================
-  # NOTIFICHE - NestJS (servizio "tecnico", per ora senza database)
+  # NOTIFICHE - NestJS: avvisi agli utenti, REST e WebSocket (/avvisi)
   # ===========================================================================
+  # Legge edizioni.eventi e pagamenti.esiti (consumer group "notifiche"), salva
+  # gli avvisi nel suo DB e li spinge sui WebSocket aperti. Le repliche si
+  # passano le notifiche nuove con LISTEN/NOTIFY sullo stesso DB.
   notifiche:
     build: ./notifiche
     restart: unless-stopped
     environment:
       PORT: 8086
+      DB_HOST: notifiche-db
+      DB_PORT: 5432
+      DB_NAME: notifiche
+      DB_USER: notifiche
+      DB_PASSWORD: notifiche
       JWKS_URI: http://gateway:8080/.well-known/jwks.json
+      # Gli scarti vanno in notifiche.dlt
+      KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      notifiche-db:
+        condition: service_healthy
+      kafka-topic:
+        condition: service_completed_successfully
     healthcheck:
       <<: *app-healthcheck
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8086/health"]
     networks:
       - backend
+      - kafka-net
+      - notifiche-db-net
 
   # ===========================================================================
   # GATEWAY - unico punto di ingresso dall'esterno
@@ -492,6 +540,7 @@ networks:
   produzione-db-net:
   magazzino-db-net:
   pagamenti-db-net:
+  notifiche-db-net:
 
 # -----------------------------------------------------------------------------
 # Volumi con nome: gestiti da Docker, persistono finché non si usa "down -v"
@@ -502,4 +551,5 @@ volumes:
   produzione-db-data:
   magazzino-db-data:
   pagamenti-db-data:
+  notifiche-db-data:
   kafka-data:

@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> configurazione NON segreta (indirizzi, nomi), come variabili
-#   2) Deployment  -> il pod con il container ginvault/edizioni:0.5
+#   2) Deployment  -> il pod con il container ginvault/edizioni:0.6
 #   3) Service     -> nome DNS stabile "edizioni" (lo usa il gateway)
 #
 # Le stesse variabili d'ambiente che docker-compose.yml passa al container:
@@ -90,7 +90,9 @@ spec:
           # 0.2 = storia di Marco: edizioni, tiratura, chiamata a Ricette
           # 0.5 = storia di Elena: consuma ResaRicalcolata, pubblica TiraturaRidotta,
           #       TiraturaAumentata e RicalcoloRifiutato
-          image: ginvault/edizioni:0.5
+          # 0.6 = storia di Giulia: prelazione, prenotazioni, SAGA del pagamento
+          #       (pagamenti.comandi -> pagamenti.esiti), numeri di bottiglia
+          image: ginvault/edizioni:0.6
           imagePullPolicy: Never
           ports:
             - name: http

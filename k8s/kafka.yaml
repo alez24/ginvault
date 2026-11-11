@@ -222,7 +222,7 @@ spec:
 ---
 # -----------------------------------------------------------------------------
 # 3) Job: un pod che esegue un compito e TERMINA (stato Completed), invece di
-#    restare acceso come quelli di un Deployment. Crea i tre topic con 3
+#    restare acceso come quelli di un Deployment. Crea i topic con 3
 #    partizioni; --if-not-exists lo rende ripetibile: i topic che esistono già
 #    non vengono toccati.
 #
@@ -270,8 +270,12 @@ spec:
           image: apache/kafka:4.3.0
           env:
             - name: TOPIC
-              # produzione.dlt ed edizioni.dlt: i dead letter topic di Produzione e di Edizioni (docs/eventi.md)
-              value: edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+              # Gli stessi di docker-compose.yml. pagamenti.comandi ed esiti: la SAGA del
+              # pagamento (storia di Giulia); produzione.dlt, edizioni.dlt,
+              # pagamenti.dlt e notifiche.dlt: i dead letter topic (docs/eventi.md)
+              value: >-
+                edizioni.eventi magazzino.eventi produzione.eventi produzione.dlt edizioni.dlt
+                pagamenti.comandi pagamenti.esiti pagamenti.dlt notifiche.dlt
             - name: PARTIZIONI
               value: "3"
             - name: KAFKA_HEAP_OPTS

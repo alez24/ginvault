@@ -12,6 +12,12 @@ export const NOMI_CANALI: Record<Canale, string> = {
   ONLINE: 'Vendita online',
 };
 
+/**
+ * In che fase di vendita è l'edizione: in prelazione prenotano solo i soci
+ * (quota SOCI), poi tutti dalla quota ONLINE, finché non è esaurita.
+ */
+export type StatoEdizione = 'IN_PRELAZIONE' | 'IN_VENDITA' | 'ESAURITA';
+
 /** EdizioneVista di Edizioni. */
 export interface Edizione {
   id: string;
@@ -25,6 +31,14 @@ export interface Edizione {
   quote: Record<Canale, number>;
   prenotate: Record<Canale, number>;
   creataIl: string;
+  /** Calcolato da Edizioni con l'ora di adesso. */
+  stato: StatoEdizione;
+  /** Quando finisce la prelazione; null (come i campi dell'annuncio) per le edizioni create prima. */
+  prelazioneFinoAl: string | null;
+  /** Com'era l'edizione all'annuncio, prima di ogni ricalcolo. */
+  tiraturaAnnunciata: number | null;
+  botanicaAnnunciataKg: number | null;
+  quoteAnnunciate: Record<Canale, number> | null;
 }
 
 export interface NuovaEdizione {

@@ -3,10 +3,14 @@ package it.ginvault.edizioni.api;
 import java.util.List;
 
 import it.ginvault.edizioni.applicazione.EdizioneNonTrovata;
+import it.ginvault.edizioni.applicazione.MetodoNonAccettato;
+import it.ginvault.edizioni.applicazione.PrenotazioneNonTrovata;
 import it.ginvault.edizioni.dominio.CatalogoRicetteNonDisponibile;
 import it.ginvault.edizioni.dominio.EdizioneNonValida;
 import it.ginvault.edizioni.dominio.FormulazioneGiaUsata;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
+import it.ginvault.edizioni.dominio.PagamentoNonPossibile;
+import it.ginvault.edizioni.dominio.PrenotazioneNonPossibile;
 import it.ginvault.edizioni.dominio.QuotaEsaurita;
 import it.ginvault.edizioni.dominio.TiraturaNonRiducibile;
 
@@ -29,10 +33,15 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
  * Nessuno stack trace esce dal servizio.
  *
  *   EdizioneNonTrovata               -> 404
+ *   PrenotazioneNonTrovata           -> 404 (anche quella di un altro)
  *   FormulazioneGiaUsata             -> 409 (una formulazione usata non si riusa)
  *   TiraturaNonRiducibile            -> 409 (toccherebbe SOCI o le prenotate, con la spiegazione)
- *   QuotaEsaurita                    -> 409 (bottiglie libere insufficienti nel canale)
+ *   QuotaEsaurita                    -> 409 (bottiglie libere insufficienti nel canale), motivo QUOTA_ESAURITA
+ *   PrenotazioneNonPossibile         -> 409, motivo PRELAZIONE_DEI_SOCI o LIMITE_PER_PERSONA
+ *   PagamentoNonPossibile            -> 409, motivo PAGAMENTO_GIA_RICHIESTO, PRENOTAZIONE_SCADUTA
+ *                                       o PRENOTAZIONE_CHIUSA
  *   modifica concorrente (blocco ottim.)-> 409
+ *   MetodoNonAccettato               -> 400, con metodiAccettati (le carte del menu)
  *   FormulazioneNonUtilizzabile      -> 422 (inesistente, non scelta, versione sbagliata)
  *   EdizioneNonValida                -> 422 (regole dell'edizione)
  *   CatalogoRicetteNonDisponibile    -> 503 + Retry-After (Ricette spento o lento)
@@ -53,6 +62,11 @@ class GestoreErrori extends ResponseEntityExceptionHandler {
         return problema(HttpStatus.NOT_FOUND, "Edizione non trovata", errore.getMessage());
     }
 
+    @ExceptionHandler(PrenotazioneNonTrovata.class)
+    ProblemDetail prenotazioneNonTrovata(PrenotazioneNonTrovata errore) {
+        return problema(HttpStatus.NOT_FOUND, "Prenotazione non trovata", errore.getMessage());
+    }
+
     @ExceptionHandler(FormulazioneGiaUsata.class)
     ProblemDetail giaUsata(FormulazioneGiaUsata errore) {
         return problema(HttpStatus.CONFLICT, "Formulazione già usata", errore.getMessage());
@@ -63,9 +77,34 @@ class GestoreErrori extends ResponseEntityExceptionHandler {
         return problema(HttpStatus.CONFLICT, "Tiratura non riducibile", errore.getMessage());
     }
 
+    /** Il motivo serve al front-end per scegliere cosa mostrare (come ORIGINE_DIVERSA in Produzione). */
     @ExceptionHandler(QuotaEsaurita.class)
     ProblemDetail quotaEsaurita(QuotaEsaurita errore) {
-        return problema(HttpStatus.CONFLICT, "Quota esaurita", errore.getMessage());
+        ProblemDetail problema = problema(HttpStatus.CONFLICT, "Quota esaurita", errore.getMessage());
+        problema.setProperty("motivo", "QUOTA_ESAURITA");
+        return problema;
+    }
+
+    @ExceptionHandler(PrenotazioneNonPossibile.class)
+    ProblemDetail prenotazioneNonPossibile(PrenotazioneNonPossibile errore) {
+        ProblemDetail problema = problema(HttpStatus.CONFLICT, "Prenotazione non possibile", errore.getMessage());
+        problema.setProperty("motivo", errore.motivo().name());
+        return problema;
+    }
+
+    @ExceptionHandler(PagamentoNonPossibile.class)
+    ProblemDetail pagamentoNonPossibile(PagamentoNonPossibile errore) {
+        ProblemDetail problema = problema(HttpStatus.CONFLICT, "Pagamento non possibile", errore.getMessage());
+        problema.setProperty("motivo", errore.motivo().name());
+        return problema;
+    }
+
+    @ExceptionHandler(MetodoNonAccettato.class)
+    ProblemDetail metodoNonAccettato(MetodoNonAccettato errore) {
+        ProblemDetail problema = problema(HttpStatus.BAD_REQUEST, "Metodo di pagamento non accettato",
+                errore.getMessage());
+        problema.setProperty("metodiAccettati", errore.accettati());
+        return problema;
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)

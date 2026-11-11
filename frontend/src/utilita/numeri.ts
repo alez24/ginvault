@@ -158,6 +158,22 @@ export function maiuscola(testo: string): string {
   return testo ? testo.charAt(0).toLocaleUpperCase('it-IT') + testo.slice(1) : testo;
 }
 
+const FORMATO_EURO = new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR' });
+
+/** "90,00 €" (Intl mette uno spazio unificatore prima di €: non va a capo). */
+export function euro(valore: number): string {
+  return FORMATO_EURO.format(valore);
+}
+
+/** Quanto manca a una scadenza, per chi deve pagare: "tra 14 minuti", "tra 1 minuto", "tra meno di un minuto". */
+export function traQuanto(scadenza: string, adesso: Date = new Date()): string {
+  const minuti = Math.floor((Date.parse(scadenza) - adesso.getTime()) / 60_000);
+  if (minuti < 1) {
+    return 'tra meno di un minuto';
+  }
+  return minuti === 1 ? 'tra 1 minuto' : `tra ${minuti} minuti`;
+}
+
 /** "1 bottiglia", "540 bottiglie". */
 export function bottiglie(n: number): string {
   return n === 1 ? '1 bottiglia' : `${numero(n)} bottiglie`;

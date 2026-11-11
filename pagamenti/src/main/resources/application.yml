@@ -1,11 +1,13 @@
-# Configurazione del microservizio Pagamenti.
+# Configurazione del microservizio Pagamenti (addebiti e rimborsi con Stripe in
+# modalità test: consuma i comandi di pagamenti.comandi, pubblica gli esiti su
+# pagamenti.esiti).
 #
 # Sintassi ${VARIABILE:default}: Spring usa la variabile d'ambiente se esiste,
 # altrimenti il valore dopo i due punti.
 #   - avvio da IntelliJ -> valgono i default (DB esposto da docker-compose.override.yml
 #     su localhost:5445, gateway su localhost:8080)
 #   - avvio con Docker Compose -> le variabili in docker-compose.yml puntano ai
-#     container (pagamenti-db:5432, gateway:8080)
+#     container (pagamenti-db:5432, gateway:8080, kafka:9092)
 
 spring:
   application:
@@ -20,12 +22,63 @@ spring:
 
   jpa:
     hibernate:
-      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity.
-      # Comodo in sviluppo; quando ci saranno le entità valuteremo Flyway.
+      # Hibernate crea/aggiorna le tabelle partendo dalle @Entity ("pagamento",
+      # "outbox", "comando_elaborato"), come negli altri servizi.
       ddl-auto: update
     # Disattiva l'"Open Session in View": la sessione JPA non resta aperta
     # durante tutta la richiesta HTTP (evita query nascoste nei controller)
     open-in-view: false
+
+  kafka:
+    # In Compose e su Kubernetes: kafka:9092 (rete kafka-net / NetworkPolicy)
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9092}
+
+    # PUBBLICARE: il publisher dell'outbox (gli esiti su pagamenti.esiti) e il
+    # dead letter topic. Come negli altri servizi.
+    producer:
+      client-id: pagamenti
+      # Chiave e valore come testo: il valore è il JSON della busta
+      # (docs/eventi.md), senza header __TypeId__ con nomi di classi Java
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Il broker conferma solo dopo aver scritto il messaggio
+      acks: all
+      properties:
+        # Niente doppioni causati dai tentativi interni del producer
+        enable.idempotence: true
+        # Con Kafka giù il publisher rinuncia dopo pochi secondi e riprova al
+        # giro successivo
+        max.block.ms: 2000
+        request.timeout.ms: 2000
+        delivery.timeout.ms: 4000
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+
+    # LEGGERE: pagamenti.comandi (ConsumerComandi)
+    consumer:
+      client-id: pagamenti
+      # Il consumer group: le partizioni si dividono tra le repliche di
+      # pagamenti, e Kafka ricorda per il gruppo fin dove si è letto
+      group-id: pagamenti
+      # Alla prima partenza (nessun offset salvato per il gruppo) si legge dal
+      # primo comando: quelli mandati mentre Pagamenti non c'era non si perdono
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # L'offset lo salva Spring, solo DOPO che il comando è stato elaborato
+      # (Stripe ha risposto e il database ha fatto commit)
+      enable-auto-commit: false
+      properties:
+        socket.connection.setup.timeout.ms: 1000
+        socket.connection.setup.timeout.max.ms: 5000
+    listener:
+      # Offset salvato dopo ogni comando: se Pagamenti cade, al riavvio
+      # ricomincia dal primo non confermato (al più uno rielaborato: lo scarta
+      # comando_elaborato, o Stripe con la chiave di idempotenza)
+      ack-mode: record
+      # 3 consumer, uno per partizione: un comando che aspetta Stripe non
+      # ferma le prenotazioni delle altre partizioni
+      concurrency: 3
 
   security:
     oauth2:
@@ -47,6 +100,40 @@ spring:
 server:
   # Porta fissa per servizio (8085 = pagamenti), uguale in locale e in Docker
   port: 8085
+
+pagamenti:
+  stripe:
+    # La chiave SEGRETA di test di Stripe (sk_test_...), dal file .env attraverso
+    # Docker Compose (e su Kubernetes dal Secret). Non è scritta qui né nei log.
+    # Vuota: il servizio parte, gli addebiti si riprovano e finiscono in
+    # pagamenti.dlt. Una chiave live (sk_live_...) fa fallire l'avvio.
+    chiave: ${STRIPE_SECRET_KEY:}
+    # L'API di Stripe; nei test uno Stripe finto (WireMock) su una porta locale
+    indirizzo: ${STRIPE_API_BASE:https://api.stripe.com}
+    # Stripe lento: dopo 2 s per connettersi o 10 s per la risposta la chiamata
+    # si interrompe e il comando si riprova (stessa chiave di idempotenza)
+    attesa-connessione: 2s
+    attesa-risposta: 10s
+  outbox:
+    # Ogni quanti millisecondi il publisher guarda se ci sono esiti da mandare
+    intervallo-ms: 1000
+    # Quanti eventi al massimo per giro
+    lotto: 50
+    # Quanto aspettare la conferma di Kafka per un evento, oltre -> nuovo tentativo
+    attesa-conferma: 5s
+  consumer:
+    # Comando non elaborato (Stripe giù, database occupato): nuovi tentativi
+    # dopo 1, 2, 4 e 8 secondi, poi il comando va in pagamenti.dlt
+    # (ConfigurazioneKafka). Una carta rifiutata non è un errore: è un esito.
+    tentativi: 4
+    attesa-iniziale: 1s
+    attesa-massima: 8s
+
+logging:
+  level:
+    # Come negli altri servizi: PubblicatoreOutbox scrive già un WARN al primo
+    # invio fallito e poi uno ogni 30
+    org.springframework.kafka.support.LoggingProducerListener: off
 
 management:
   endpoints:

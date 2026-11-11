@@ -60,6 +60,28 @@ public final class Richieste {
             BigDecimal botanicaDisponibileKg) {
     }
 
+    /**
+     * POST /edizioni/{id}/prenotazioni, ad esempio {"bottiglie": 2}. Il canale
+     * non si sceglie: SOCI in prelazione, ONLINE dopo (lo decide l'edizione).
+     * Il massimo per persona è una regola di vendita: oltre -> 409, non 400.
+     */
+    public record NuovaPrenotazione(
+            @NotNull(message = "il numero di bottiglie è obbligatorio")
+            @Positive(message = "si prenota almeno una bottiglia")
+            Integer bottiglie) {
+    }
+
+    /**
+     * POST /prenotazioni/{id}/pagamento, ad esempio {"metodo": "pm_card_visa"}.
+     * Le carte accettate sono in GET /regole-di-vendita (metodiDiPagamento):
+     * una carta fuori dal menu -> 400 dal servizio.
+     */
+    public record Pagamento(
+            @NotBlank(message = "serve il metodo di pagamento (es. pm_card_visa)")
+            @Size(max = 64, message = "al massimo 64 caratteri")
+            String metodo) {
+    }
+
     /** Il riferimento alla formulazione di Ricette. */
     public record Formulazione(
             @NotNull(message = "l'id della formulazione è obbligatorio")

@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -27,6 +28,7 @@ import it.ginvault.edizioni.dominio.CatalogoRicetteNonDisponibile;
 import it.ginvault.edizioni.dominio.FormulazioneGiaUsata;
 import it.ginvault.edizioni.dominio.FormulazioneNonUtilizzabile;
 import it.ginvault.edizioni.dominio.RiferimentoFormulazione;
+import it.ginvault.edizioni.dominio.StatoEdizione;
 import it.ginvault.edizioni.dominio.TiraturaNonRiducibile;
 import it.ginvault.edizioni.sicurezza.GatewayDiProva;
 import it.ginvault.edizioni.sicurezza.SecurityConfig;
@@ -46,7 +48,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 
 /**
  * Strato web di Edizioni: sicurezza per ruolo (401/403/200) su creazione,
- * ricalcolo e lettura, validazione dei corpi
+ * ricalcolo, apertura della vendita e lettura, validazione dei corpi
  * (400) e traduzione degli errori in 404/409/422/503 senza stack trace.
  * Il servizio applicativo è un mock: qui non ci sono né database né Ricette
  * (quelli sono nel test di integrazione con WireMock).
@@ -115,16 +117,21 @@ class EdizioniControllerTest {
     }
 
     @Test
-    void letturaPerDistillatoreEAdminMaNonPerIlSocio() throws Exception {
+    void letturaPerDistillatoreAdminSocioEClienteMaNonPerGliAcquisti() throws Exception {
         when(servizio.trova(EDIZIONE)).thenReturn(vista());
 
-        mvc.perform(come("ADMIN", get("/edizioni/{id}", EDIZIONE))).andExpect(status().isOk());
-        mvc.perform(come("DISTILLATORE", get("/edizioni/{id}", EDIZIONE))).andExpect(status().isOk());
-        mvc.perform(come("SOCIO", get("/edizioni/{id}", EDIZIONE))).andExpect(status().isForbidden());
+        for (String ruolo : List.of("ADMIN", "DISTILLATORE", "SOCIO", "CLIENTE")) {
+            mvc.perform(come(ruolo, get("/edizioni/{id}", EDIZIONE)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.stato").value("IN_PRELAZIONE"))
+                    .andExpect(jsonPath("$.tiraturaAnnunciata").value(600))
+                    .andExpect(jsonPath("$.quoteAnnunciate.ONLINE").value(150));
+        }
+        mvc.perform(come("RESP_ACQUISTI", get("/edizioni/{id}", EDIZIONE))).andExpect(status().isForbidden());
         mvc.perform(get("/edizioni/{id}", EDIZIONE)).andExpect(status().isUnauthorized());
     }
 
-    // ---------------------------------------------------------------- elenco: DISTILLATORE e ADMIN
+    // ---------------------------------------------------------------- elenco: chi gestisce e chi prenota
 
     @Test
     void elencoSenzaTokenRisponde401() throws Exception {
@@ -133,18 +140,16 @@ class EdizioniControllerTest {
     }
 
     @Test
-    void elencoComeSocioOClienteRisponde403() throws Exception {
-        for (String ruolo : List.of("SOCIO", "CLIENTE")) {
-            mvc.perform(come(ruolo, get("/edizioni"))).andExpect(status().isForbidden());
-        }
+    void elencoComeResponsabileAcquistiRisponde403() throws Exception {
+        mvc.perform(come("RESP_ACQUISTI", get("/edizioni"))).andExpect(status().isForbidden());
         verifyNoInteractions(servizio);
     }
 
     @Test
-    void elencoComeDistillatoreOAdminRisponde200() throws Exception {
+    void elencoPerDistillatoreAdminSocioEClienteRisponde200() throws Exception {
         when(servizio.elenco()).thenReturn(List.of(vista("10.800", 540, 90), vista()));
 
-        for (String ruolo : List.of("DISTILLATORE", "ADMIN")) {
+        for (String ruolo : List.of("DISTILLATORE", "ADMIN", "SOCIO", "CLIENTE")) {
             mvc.perform(come(ruolo, get("/edizioni")))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.length()").value(2))
@@ -152,6 +157,26 @@ class EdizioniControllerTest {
                     .andExpect(jsonPath("$[0].quote.ONLINE").value(90))
                     .andExpect(jsonPath("$[1].tiratura").value(600));
         }
+    }
+
+    // ---------------------------------------------------------------- apertura della vendita: solo DISTILLATORE
+
+    @Test
+    void aprireLaVenditaSpettaSoloAlDistillatore() throws Exception {
+        mvc.perform(post("/edizioni/{id}/vendita", EDIZIONE)).andExpect(status().isUnauthorized());
+        for (String ruolo : List.of("ADMIN", "SOCIO", "CLIENTE", "RESP_ACQUISTI")) {
+            mvc.perform(come(ruolo, post("/edizioni/{id}/vendita", EDIZIONE))).andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(servizio);
+    }
+
+    @Test
+    void ilDistillatoreApreLaVenditaERiceveLEdizione() throws Exception {
+        when(servizio.apriVendita(EDIZIONE)).thenReturn(vista("12.000", 600, 150, StatoEdizione.IN_VENDITA));
+
+        mvc.perform(come("DISTILLATORE", post("/edizioni/{id}/vendita", EDIZIONE)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stato").value("IN_VENDITA"));
     }
 
     // ---------------------------------------------------------------- ricalcolo: solo DISTILLATORE
@@ -298,9 +323,16 @@ class EdizioniControllerTest {
     }
 
     private static EdizioneVista vista(String kg, int tiratura, int online) {
+        return vista(kg, tiratura, online, StatoEdizione.IN_PRELAZIONE);
+    }
+
+    private static EdizioneVista vista(String kg, int tiratura, int online, StatoEdizione stato) {
+        Instant creata = Instant.now();
         return new EdizioneVista(EDIZIONE, new RiferimentoFormulazione(FORMULAZIONE, 2), "lavanda",
                 new BigDecimal("20.00"), new BigDecimal(kg), "Alta Val Varaita (Alpi Cozie)", tiratura,
                 Map.of(Canale.SOCI, 300, Canale.BAR, 150, Canale.ONLINE, online),
-                Map.of(Canale.SOCI, 0, Canale.BAR, 0, Canale.ONLINE, 0), Instant.now());
+                Map.of(Canale.SOCI, 0, Canale.BAR, 0, Canale.ONLINE, 0), creata,
+                stato, creata.plus(Duration.ofDays(7)), 600, new BigDecimal("12.000"),
+                Map.of(Canale.SOCI, 300, Canale.BAR, 150, Canale.ONLINE, 150));
     }
 }

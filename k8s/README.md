@@ -1,10 +1,9 @@
 # GinVault su Kubernetes (Minikube)
 
-Deploy **parziale**, ammesso dal piano ([`docs/piano.md`](../docs/piano.md)):
-front-end, gateway, edizioni, ricette, magazzino e i database dei tre servizi,
-esposti con un Ingress, e Kafka per gli eventi tra i servizi. Delle NetworkPolicy isolano i
-database, il front-end, il gateway e Kafka. Gli altri servizi arrivano nei
-passi successivi.
+Tutto GinVault su Minikube: front-end, gateway, i sei microservizi (edizioni,
+ricette, produzione, magazzino, pagamenti, notifiche), ciascuno con il suo
+database, esposti con un Ingress, e Kafka per gli eventi tra i servizi. Delle
+NetworkPolicy isolano i database, il front-end, il gateway e Kafka.
 
 ```
 browser
@@ -30,13 +29,21 @@ Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per 
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 
 Service kafka :9092 (headless) → pod kafka-0 (StatefulSet) → PVC dati-kafka-0 (1 GiB)
-   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi, produzione.dlt, edizioni.dlt (Job kafka-topic)
-   └─ i servizi che pubblicano o consumano eventi (edizioni, magazzino, produzione)
+   ▲  topic edizioni.eventi, magazzino.eventi, produzione.eventi, pagamenti.comandi,
+   │  pagamenti.esiti e i dead letter produzione.dlt, edizioni.dlt, pagamenti.dlt,
+   │  notifiche.dlt (Job kafka-topic)
+   └─ i servizi che pubblicano o consumano eventi (edizioni, magazzino, produzione,
+      pagamenti, notifiche)
+
+Service pagamenti :8085  → pod pagamenti ── HTTPS ──▶ api.stripe.com (modalità test)
+                              └─ JDBC ──▶ Service pagamenti-db :5432
+Service notifiche :8086  → 2 pod notifiche ◀── WebSocket /api/notifiche/avvisi (via gateway)
+                              └─ JDBC, LISTEN/NOTIFY ──▶ Service notifiche-db :5432
 
 NetworkPolicy: frontend accetta solo l'Ingress Controller; gateway l'Ingress
-Controller e i microservizi (JWKS); edizioni-db solo edizioni, ricette-db solo
-ricette, magazzino-db solo magazzino, produzione-db solo produzione; kafka
-solo i pod con la label ginvault/usa-kafka.
+Controller e i microservizi (JWKS); ogni database solo il suo servizio
+(edizioni-db solo edizioni, ..., notifiche-db solo notifiche); kafka solo i pod
+con la label ginvault/usa-kafka.
 ```
 
 Il gateway inoltra anche `/api/ricette/**` al Service `ricette` e
@@ -47,7 +54,10 @@ Allo stesso modo `/api/produzione/**` va al Service `produzione` (:8083), con
 il database `produzione-db`: consuma `edizioni.eventi` e `magazzino.eventi` e
 pubblica su `produzione.eventi` (vedi [Consumer di produzione](#consumer-di-produzione)).
 Edizioni, a sua volta, consuma `produzione.eventi` e ricalcola la tiratura
-(vedi [Consumer di edizioni](#consumer-di-edizioni)).
+(vedi [Consumer di edizioni](#consumer-di-edizioni)). Per la storia di Giulia
+`/api/pagamenti/**` va a `pagamenti` (:8085), che addebita con Stripe in
+modalità test, e `/api/notifiche/**` a `notifiche` (:8086), anche per il
+WebSocket degli avvisi (vedi [Pagamenti e Notifiche](#pagamenti-e-notifiche-storia-di-giulia)).
 
 Pagine e API hanno la stessa origine, `http://localhost`: i cookie del gateway
 valgono anche per le pagine e non serve CORS. Lo smistamento per path lo fa qui
@@ -67,7 +77,11 @@ proxy di Vite.
 | `magazzino.yaml` | ConfigMap, Deployment, Service (porte `http` 8084 e `grpc` 9084) |
 | `produzione-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `produzione.yaml` | ConfigMap, Deployment, Service |
-| `networkpolicy-db.yaml` | Quattro NetworkPolicy: ogni database accetta solo il suo servizio |
+| `pagamenti-db.yaml` | PersistentVolumeClaim, Deployment, Service |
+| `pagamenti.yaml` | ConfigMap, Deployment, Service (la chiave di Stripe dal Secret `pagamenti-stripe`) |
+| `notifiche-db.yaml` | PersistentVolumeClaim, Deployment, Service |
+| `notifiche.yaml` | ConfigMap, Deployment (2 repliche), Service |
+| `networkpolicy-db.yaml` | Sei NetworkPolicy: ogni database accetta solo il suo servizio |
 | `networkpolicy-frontend-gateway.yaml` | Due NetworkPolicy: il front-end accetta solo l'Ingress Controller, il gateway l'Ingress Controller e i microservizi |
 | `networkpolicy-kafka.yaml` | NetworkPolicy: Kafka accetta solo i pod con la label `ginvault/usa-kafka: "true"` |
 | `networkpolicy-magazzino.yaml` | NetworkPolicy: la porta gRPC di magazzino (9084) accetta solo produzione; la 8084 resta aperta |
@@ -76,7 +90,7 @@ proxy di Vite.
 | `frontend.yaml` | Deployment (2 repliche), Service |
 | `ingress.yaml` | Ingress: `/api`, `/auth`, `/oauth2`, `/login`, `/logout` → gateway; tutto il resto → frontend |
 | `kustomization.yaml` | Elenco dei file: `kubectl apply -k k8s/` li applica tutti |
-| `crea-secret.ps1` | Secret `gateway-segreti` (dal `.env`), `edizioni-db`, `ricette-db`, `magazzino-db` e `produzione-db` (password casuali) |
+| `crea-secret.ps1` | Secret `gateway-segreti` e `pagamenti-stripe` (dal `.env`), `edizioni-db`, `ricette-db`, `magazzino-db`, `produzione-db`, `pagamenti-db` e `notifiche-db` (password casuali) |
 
 I Secret non stanno in nessun file del repository: li crea lo script.
 
@@ -113,8 +127,10 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.5 .\edizioni
+minikube image build -t ginvault/edizioni:0.6 .\edizioni
 minikube image build -t ginvault/ricette:0.2  .\ricette
+minikube image build -t ginvault/pagamenti:0.1 .\pagamenti
+minikube image build -t ginvault/notifiche:0.1 .\notifiche
 #    magazzino e produzione hanno bisogno anche del modulo giacenze-api, che sta
 #    fuori dalla loro cartella: un secondo build context con nome, che
 #    minikube image build non sa passare. Si costruiscono con Docker Desktop
@@ -124,7 +140,7 @@ docker build --build-context giacenze-api=giacenze-api -t ginvault/produzione:0.
 minikube image load ginvault/magazzino:0.3
 minikube image load ginvault/produzione:0.4
 minikube image build -t ginvault/gateway:0.3  .\gateway
-minikube image build -t ginvault/frontend:0.3 .\frontend   # npm ci, test e build di Vite dentro l'immagine
+minikube image build -t ginvault/frontend:0.4 .\frontend   # npm ci, test e build di Vite dentro l'immagine
 
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
@@ -211,7 +227,9 @@ Coppie chiave/valore riservate, passate ai container come variabili d'ambiente.
 **Non sono cifrate**, i valori sono solo in base64: li protegge il controllo
 degli accessi (RBAC).
 
-- `gateway-segreti` (8 chiavi: OAuth e `RUOLI_*`) → al gateway con `envFrom`.
+- `gateway-segreti` (le chiavi del `.env`: OAuth e `RUOLI_*`) → al gateway con `envFrom`.
+- `pagamenti-stripe` (`STRIPE_SECRET_KEY`) → a pagamenti con `secretKeyRef`
+  (vedi [Pagamenti e Notifiche](#pagamenti-e-notifiche-storia-di-giulia)).
 - `edizioni-db` (`POSTGRES_USER`, `POSTGRES_PASSWORD`) → a Postgres con `envFrom`
   e a edizioni con `secretKeyRef` (diventano `DB_USER`, `DB_PASSWORD`): una sola
   fonte di verità per la password.
@@ -266,7 +284,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 | | edizioni-db | edizioni | gateway | frontend |
 |---|---|---|---|---|
-| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.5` | `ginvault/gateway:0.3` | `ginvault/frontend:0.3` (nginx) |
+| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.6` | `ginvault/gateway:0.3` | `ginvault/frontend:0.4` (nginx) |
 | Repliche | 1 | 1 (scalabile: è stateless) | 1 (sessione e chiave in memoria) | 2 (solo file statici) |
 | Strategia | `Recreate` (mai due Postgres sullo stesso volume) | `RollingUpdate` | `RollingUpdate` | `RollingUpdate`, `maxSurge 1`, `maxUnavailable 0` |
 | startupProbe | `pg_isready`, fino a 60 s | `/health/liveness`, fino a 2 min | `/health/liveness`, fino a 2 min | nessuna: nginx parte in un attimo |
@@ -276,10 +294,12 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 ricette e ricette-db sono come edizioni ed edizioni-db (`ginvault/ricette:0.2`),
 e così magazzino e magazzino-db (`ginvault/magazzino:0.3`), produzione e
-produzione-db (`ginvault/produzione:0.4`). La readiness di edizioni, magazzino e
-produzione include il database ma **non Kafka**: con Kafka giù i servizi
-lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer di
-produzione si ricollegano da soli.
+produzione-db (`ginvault/produzione:0.4`), pagamenti e pagamenti-db
+(`ginvault/pagamenti:0.1`). La readiness di edizioni, magazzino, produzione e
+pagamenti include il database ma **non Kafka**: con Kafka giù i servizi
+lavorano lo stesso, gli eventi aspettano nella tabella outbox e i consumer si
+ricollegano da soli. Notifiche (`ginvault/notifiche:0.1`, Node) ha due
+repliche e probe sue: [Pagamenti e Notifiche](#pagamenti-e-notifiche-storia-di-giulia).
 
 - **startupProbe**: tempo concesso per partire; finché non passa, le altre non contano.
 - **readinessProbe**: se fallisce, il pod esce dal Service (niente traffico) ma
@@ -521,6 +541,98 @@ kubectl logs -n ginvault deploy/edizioni --tail=30
 Dashboard: **Workloads → Deployments → edizioni** (log) e **Workloads → Jobs
 → kafka-topic** (il log elenca i topic creati).
 
+### Pagamenti e Notifiche (storia di Giulia)
+
+La SAGA del pagamento passa da tre servizi e due topic
+([`docs/eventi.md`](../docs/eventi.md)):
+
+```
+edizioni ── RichiestaPagamento ──▶ pagamenti.comandi ──▶ pagamenti ── HTTPS ──▶ api.stripe.com
+   ▲                                                         │         (modalità test)
+   └──── PagamentoRiuscito / PagamentoFallito ◀──── pagamenti.esiti ◀┘
+            │
+            └─▶ PrenotazioneConfermata (numeri 112 e 113) ──▶ edizioni.eventi ──▶ notifiche (2 pod)
+                                                                                  │ WebSocket
+                                                                                  ▼
+                                                                         browser di Giulia
+```
+
+**La chiave di Stripe.** Sta nel Secret `pagamenti-stripe`, con la sola chiave
+`STRIPE_SECRET_KEY`. Lo crea `crea-secret.ps1` dalla riga `STRIPE_SECRET_KEY=`
+del `.env`, e dice se la chiave c'è ed è di test senza stamparla. Il pod la
+riceve con `secretKeyRef`:
+
+```powershell
+.\k8s\crea-secret.ps1                                          # "chiave di test presente", oppure un AVVISO
+kubectl describe secret pagamenti-stripe -n ginvault           # la chiave e quanti byte, non il valore
+kubectl rollout restart deployment/pagamenti -n ginvault       # dopo aver cambiato il .env
+# Senza chiave pagamenti parte lo stesso e lo scrive nel log (Count 0 = la chiave c'è)
+kubectl logs -n ginvault deploy/pagamenti | Select-String -SimpleMatch 'STRIPE_SECRET_KEY non impostata' | Measure-Object
+```
+
+`gateway-segreti` invece si crea da tutto il `.env` (`--from-env-file`), quindi
+contiene anche questa chiave. Il pod del gateway la vede come variabile, ma non
+la usa.
+
+**Pagamenti esce su Internet.** Le NetworkPolicy filtrano solo il traffico in
+entrata, quindi pagamenti raggiunge `api.stripe.com:443`:
+
+```powershell
+kubectl exec -n ginvault deploy/pagamenti -- sh -c 'nc -z -w 5 api.stripe.com 443 && echo APERTO || echo BLOCCATO'
+```
+
+**I consumer group e i topic:**
+
+```powershell
+# pagamenti legge pagamenti.comandi; edizioni e notifiche leggono pagamenti.esiti
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group pagamenti
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifiche
+# Gli esiti, con le chiavi (l'id della prenotazione). Ctrl+C per uscire
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic pagamenti.esiti --from-beginning --property print.key=true
+# I pagamenti, con il riferimento di Stripe (pi_...)
+kubectl exec -n ginvault deploy/pagamenti-db -- psql -U pagamenti -d pagamenti -c 'select * from pagamento'
+# Gli avvisi salvati da notifiche
+kubectl exec -n ginvault deploy/notifiche-db -- psql -U notifiche -d notifiche -c 'select tipo, destinatario, titolo, creata_il, letta_il from notifica order by creata_il'
+```
+
+**Notifiche con due repliche.** Il Deployment `notifiche` ha due pod. Le sei
+partizioni dei suoi due topic (`edizioni.eventi` e `pagamenti.esiti`) si
+dividono tra i pod del gruppo `notifiche`, e ogni evento lo legge un pod solo.
+Il WebSocket di Giulia può però stare sull'altro. Per questo ogni avviso nuovo
+fa un `NOTIFY` su `notifiche-db`: tutti e due i pod sono in `LISTEN`, e ognuno
+consegna ai WebSocket che ha.
+
+```powershell
+# Nel log di ognuno: le sue partizioni ("Nel gruppo notifiche: ...") e "In ascolto sul canale notifiche_nuove"
+kubectl logs -n ginvault -l app.kubernetes.io/name=notifiche --prefix --tail=20
+# Le due connessioni in LISTEN, una per pod (dal database)
+kubectl exec -n ginvault deploy/notifiche-db -- psql -U notifiche -d notifiche -c 'select client_addr, state, query from pg_stat_activity where query like $$LISTEN%$$'
+```
+
+Il WebSocket passa dall'Ingress e dal gateway: `ws://localhost/api/notifiche/avvisi`.
+ingress-nginx inoltra l'upgrade senza annotazioni e chiude un WebSocket muto
+dopo 60 s (`proxy-read-timeout`); notifiche manda un `ping` ogni 25 s. Con
+`kubectl rollout restart deployment/notifiche -n ginvault` il pod che si spegne
+chiude i suoi WebSocket con 1001, e il front-end si ricollega da solo all'altro.
+
+**Le probe di notifiche:**
+
+- startup e readiness su `GET /health`, che risponde 503 se il database non
+  risponde;
+- liveness `tcpSocket`: con il DB giù riavviare Node non servirebbe.
+
+Al primo avvio un pod può riavviarsi una volta, se parte prima di
+`notifiche-db` (nel log precedente c'è `ECONNREFUSED`). Il caso degli
+avvisi senza Kafka è in [`docs/eventi.md`](../docs/eventi.md#il-consumer-di-notifiche).
+
+```powershell
+kubectl logs -n ginvault <pod notifiche> --previous --tail=5
+```
+
+Dashboard: **Workloads → Deployments → pagamenti / notifiche** (log e pod),
+**Config and Storage → Secrets → pagamenti-stripe** (attenzione all'icona a
+occhio), **Service → Services → notifiche** (i due endpoint).
+
 ### gRPC tra produzione e magazzino
 
 Quando Marco integra un lotto nel piano, produzione chiama il servizio gRPC
@@ -609,7 +721,8 @@ Pods** per il controller e i suoi log.
 
 Di default ogni pod del cluster può collegarsi a qualsiasi altro. In Compose
 l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
-`magazzino-db-net`, `produzione-db-net`, `frontend-net`, `kafka-net`); qui lo danno otto **NetworkPolicy**:
+`magazzino-db-net`, `produzione-db-net`, `pagamenti-db-net`, `notifiche-db-net`,
+`frontend-net`, `kafka-net`); qui lo danno dieci **NetworkPolicy**:
 
 | NetworkPolicy | Pod protetti | Sorgenti ammesse | Porta |
 |---|---|---|---|
@@ -617,9 +730,11 @@ l'isolamento lo danno le reti private (`edizioni-db-net`, `ricette-db-net`,
 | `ricette-db-solo-da-ricette` | ricette-db | i pod di ricette | 5432 |
 | `magazzino-db-solo-da-magazzino` | magazzino-db | i pod di magazzino | 5432 |
 | `produzione-db-solo-da-produzione` | produzione-db | i pod di produzione | 5432 |
+| `pagamenti-db-solo-da-pagamenti` | pagamenti-db | i pod di pagamenti | 5432 |
+| `notifiche-db-solo-da-notifiche` | notifiche-db | i due pod di notifiche (anche il LISTEN/NOTIFY tra loro) | 5432 |
 | `frontend-solo-da-ingress` | frontend | il controller ingress-nginx | 8080 |
 | `gateway-da-ingress-e-servizi` | gateway | il controller ingress-nginx; i pod con `app.kubernetes.io/component: microservizio` (scaricano la JWKS) | 8080 |
-| `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni, magazzino, produzione); Kafka stesso sulla 9093 del controller | 9092, 9093 |
+| `kafka-solo-da-chi-usa-kafka` | kafka | i pod con `ginvault/usa-kafka: "true"` (il Job dei topic, edizioni, magazzino, produzione, pagamenti, notifiche); Kafka stesso sulla 9093 del controller | 9092, 9093 |
 | `magazzino-grpc-solo-da-produzione` | magazzino | i pod di produzione sulla 9084 (gRPC); tutti sulla 8084 (HTTP, come prima) | 9084, 8084 |
 
 Come sono fatte:
@@ -652,8 +767,8 @@ kubectl describe networkpolicy gateway-da-ingress-e-servizi -n ginvault
 
 # Un pod qualsiasi NON raggiunge database, front-end, gateway e Kafka (timeout dopo 3 s)...
 # (virgolette semplici: con le doppie PowerShell sostituirebbe $s prima di passarlo)
-# (magazzino:9084 BLOCCATO anche lui; magazzino:8084 invece APERTO, è un servizio)
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 frontend:80 gateway:8080 kafka:9092 magazzino:9084 magazzino:8084; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+# (magazzino:9084 BLOCCATO anche lui; magazzino:8084, pagamenti:8085 e notifiche:8086 APERTI, sono servizi)
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 pagamenti-db:5432 notifiche-db:5432 frontend:80 gateway:8080 kafka:9092 magazzino:9084 magazzino:8084 pagamenti:8085 notifiche:8086; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
 # ...con la label di chi usa Kafka, Kafka risponde
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
 # Da edizioni (ha la label) sì, da ricette (non usa Kafka) no
@@ -663,6 +778,9 @@ kubectl exec -n ginvault deploy/ricette -- sh -c 'nc -z -w 3 kafka 9092 && echo 
 kubectl exec -n ginvault deploy/magazzino -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO; nc -z -w 3 edizioni-db 5432 && echo edizioni-db APERTO || echo edizioni-db BLOCCATO'
 # Produzione: Kafka, il suo database e la JWKS sì; il database di magazzino no
 kubectl exec -n ginvault deploy/produzione -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 produzione-db 5432 && echo produzione-db APERTO || echo produzione-db BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO'
+# Pagamenti e notifiche: Kafka, il proprio database e la JWKS sì; il database dell'altro no
+kubectl exec -n ginvault deploy/pagamenti -- sh -c 'for s in kafka:9092 pagamenti-db:5432 notifiche-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done; wget -q -T 3 -O /dev/null http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
+kubectl exec -n ginvault deploy/notifiche -- sh -c 'for s in kafka:9092 notifiche-db:5432 pagamenti-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done; wget -q -T 3 -O /dev/null http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
 # ...ma raggiunge ricette, che è un servizio
 kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 ricette 8082 && echo APERTO || echo BLOCCATO"
 
@@ -702,7 +820,7 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.3, gateway:0.3, edizioni:0.5, ricette:0.2, magazzino:0.3, produzione:0.4
+minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.6, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
 ```
 
 Per un'immagine che manca, il suo `minikube image build` (per magazzino e
@@ -719,9 +837,10 @@ kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s      
 kubectl get pods -n ginvault
 ```
 
-Dodici pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
+Diciassette pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
 `ricette`, `ricette-db`, `magazzino`, `magazzino-db`, `produzione`, `produzione-db`,
-`kafka-0`. In più il pod del Job `kafka-topic`,
+`pagamenti`, `pagamenti-db`, due `notifiche`, `notifiche-db`, `kafka-0`. In più il
+pod del Job `kafka-topic`,
 `0/1 Completed`: ha creato i topic ed è terminato. Il Job sparisce da solo
 un'ora dopo, e il prossimo `apply` lo ricrea.
 
@@ -792,6 +911,13 @@ Elena ordina 12 kg e ne registra 10,8, e l'edizione scende a 540 con gli
 eventi Kafka. Servono i ruoli DISTILLATORE e RESP_ACQUISTI (anche sullo stesso
 account). I passi sono in [`docs/demo-storia-elena.md`](../docs/demo-storia-elena.md).
 
+**6+. La storia di Giulia**, con lo stesso cluster: Giulia prenota 2 bottiglie
+in prelazione, prova la carta rifiutata, paga con la Visa di prova e riceve le
+bottiglie 112 e 113; poi la consegna ridotta di Elena le manda l'avviso in
+diretta. Servono la chiave di test di Stripe nel `.env` (Secret
+`pagamenti-stripe`) e i ruoli SOCIO, DISTILLATORE e RESP_ACQUISTI. I passi
+sono in [`docs/demo-storia-giulia.md`](../docs/demo-storia-giulia.md).
+
 **7. Fine.** **Esci** nel menu; Ctrl+C nel PowerShell del tunnel;
 `minikube stop` (oggetti e dati restano per la prossima volta).
 
@@ -834,8 +960,8 @@ kubectl scale deployment/edizioni -n ginvault --replicas=1
 **Rolling update** con una nuova versione dell'immagine:
 
 ```powershell
-minikube image build -t ginvault/edizioni:0.6 .\edizioni
-# cambiare il tag in k8s/edizioni.yaml (0.5 -> 0.6), poi:
+minikube image build -t ginvault/edizioni:0.7 .\edizioni
+# cambiare il tag in k8s/edizioni.yaml (0.6 -> 0.7), poi:
 kubectl apply -k k8s/
 kubectl rollout status deployment/edizioni -n ginvault   # il nuovo pod parte prima che il vecchio si spenga
 kubectl rollout history deployment/edizioni -n ginvault
@@ -961,5 +1087,5 @@ vanno perse.
 | `depends_on: condition: service_healthy` | nessun equivalente: si riavvia finché le dipendenze non ci sono, e la readiness tiene il pod fuori dal Service |
 | `ports: "80:8080"` del front-end | Ingress + `minikube tunnel` |
 | nginx del front-end smista `/api`, `/login`... verso il gateway | regole per path dell'Ingress |
-| reti private `<servizio>-db-net`, `frontend-net`, `kafka-net` | NetworkPolicy (`networkpolicy-db.yaml`, `networkpolicy-frontend-gateway.yaml`, `networkpolicy-kafka.yaml`) |
+| reti private `<servizio>-db-net` (sei), `frontend-net`, `kafka-net` | NetworkPolicy (`networkpolicy-db.yaml`, `networkpolicy-frontend-gateway.yaml`, `networkpolicy-kafka.yaml`) |
 | `docker compose up --build` | `minikube image build` + `kubectl apply -k k8s/` |

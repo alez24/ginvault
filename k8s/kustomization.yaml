@@ -27,6 +27,10 @@ resources:
   - magazzino.yaml
   - produzione-db.yaml
   - produzione.yaml
+  - pagamenti-db.yaml
+  - pagamenti.yaml
+  - notifiche-db.yaml
+  - notifiche.yaml
   - networkpolicy-db.yaml
   - networkpolicy-frontend-gateway.yaml
   - networkpolicy-kafka.yaml

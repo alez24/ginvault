@@ -5,15 +5,22 @@ e il punto esatto in cui siamo arrivati.
 
 ## In breve: dove siamo
 
-- **Branch:** `main`, allineato a `origin/main` (`3d00b6f`).
+- **Branch:** `storia-giulia`, creato l'11 novembre da `main` (`7af367a`).
 - **Storia di Elena finita e unita in `main`:** i 7 passi, da `86fe672` a
   `cbb04e5`, sono nella **PR #4**, unita il 10 novembre con il merge commit
-  `3d00b6f`. Il branch `storia-elena` è ancora su GitHub.
-- **Prossimo:** da decidere (vedi [Dopo la storia di Elena](#dopo-la-storia-di-elena-dal-piano-docspianomd)),
-  su un branch nuovo creato da `main`. Il giro della demo di Elena dal browser
-  sul cluster è ancora da fare.
-- Sul cluster girano `frontend:0.3`, `gateway:0.3`, `edizioni:0.5`,
-  `ricette:0.2`, `magazzino:0.3` e `produzione:0.4`.
+  `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
+  `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
+- **Storia di Giulia finita sul branch**, in 7 commit locali (vedi
+  [La storia di Giulia](#la-storia-di-giulia)): da `8443fb6` a `f4e7c9d`, più
+  quello del passo 7, l'integrazione e la demo. I passi 5, 6 e 7 sono fatti di
+  fila, senza fermarsi (richiesta dell'11 novembre). Niente push né PR: si
+  fanno quando lo dici.
+- **Da fare (utente):** la riga `STRIPE_SECRET_KEY=` nel `.env` (vedi
+  [passo 6](#passo-6-kubernetes-f4e7c9d)) e il giro dal browser, sul cluster,
+  delle demo di Elena e di Giulia.
+- Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.6`,
+  `ricette:0.2`, `magazzino:0.3`, `produzione:0.4`, `pagamenti:0.1` e
+  `notifiche:0.1` (2 repliche).
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
@@ -35,9 +42,482 @@ e il punto esatto in cui siamo arrivati.
 | `080310f` (PR #4) | 10 nov | **Elena, `AnnullaRiserva` e passo 5: Edizioni consuma `ResaRicalcolata`** (vedi sotto) |
 | `2c5b712` (PR #4) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
 | `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
+| `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
+| `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
+| `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
+| `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
+| `7b1edf3` | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
+| `33a1597` | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
+| `f4e7c9d` | 11 nov | **Giulia, passo 6: pagamenti e notifiche su Kubernetes** (vedi sotto) |
 
-Le PR #1, #2, #3 e #4 sono unite in `main` con merge commit; quello della PR #4
-è `3d00b6f`.
+Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
+#4 è `3d00b6f`, quello della PR #5 è `7af367a`.
+
+## La storia di Giulia
+
+> Giulia è socia del club. Marco annuncia l'edizione d'estate e Giulia, in
+> prelazione, prenota 2 bottiglie e le paga con Stripe. Il raccolto scarso di
+> Elena porta la tiratura da 600 a 540: a Giulia arriva l'avviso in diretta, e
+> le sue bottiglie, la 112 e la 113, restano sue.
+
+I sette passi, sul branch `storia-giulia`:
+
+| # | Passo | Stato |
+|---|---|---|
+| 1 | Edizioni: stato dell'edizione, prelazione dei soci, prenotazioni, Club finto | ✅ `8443fb6` |
+| 2 | Pagamenti con Stripe in modalità test: `pagamenti.comandi` → `pagamenti.esiti`, outbox, consumer idempotente | ✅ `dab4cda` |
+| 3 | La SAGA in Edizioni: conferma, annullamento con le bottiglie rilasciate, scadenza, rimborso se il pagamento arriva tardi; alla conferma i numeri di bottiglia, progressivi per edizione | ✅ `926e959` |
+| 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ `7b1edf3` |
+| 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ `33a1597` |
+| 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | ✅ `f4e7c9d` |
+| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | ✅ commit dopo `f4e7c9d` |
+
+Le scelte dell'utente (11 novembre):
+
+- **Stripe:** account vero in modalità test. La chiave segreta è già nel
+  `.env` come `STRIPE_SECRET_KEY`, e non si legge.
+- **Pagamento lato server** con le carte di prova `pm_card_visa` (va a buon
+  fine) e `pm_card_chargeDeclined` (rifiutata), scelte da un menu.
+- **Numeri di bottiglia alla conferma:** progressivi per edizione, senza buchi
+  né doppioni anche con conferme simultanee, con un test di concorrenza. La
+  storia finisce con le bottiglie 112 e 113.
+- **Lista d'attesa fuori:** dall'area soci si toglie.
+
+### Passo 1: prelazione e prenotazioni (`8443fb6`)
+
+- **Stato dell'edizione** (`StatoEdizione`):
+  - `IN_PRELAZIONE` dall'annuncio, per 7 giorni: prenotano solo i soci;
+  - poi `IN_VENDITA`, e `ESAURITA` quando la quota ONLINE è tutta prenotata;
+  - non si salva: si calcola dall'orologio e dalle quote, così la prelazione
+    finisce da sola, senza un giro periodico;
+  - il distillatore può aprire la vendita prima (`POST /edizioni/{id}/vendita`),
+    utile anche in demo.
+- **L'annuncio resta:** tiratura, kg e quote annunciati (`tiratura_annunciata`,
+  `botanica_annunciata_kg`, tabella `quota_annunciata`). I ricalcoli non li
+  toccano: i soci vedranno «da 600 a 540». Nelle edizioni create prima sono
+  vuoti, e quelle edizioni risultano già in vendita.
+- **Club finto** (`ClubPreimpostato`, il mock del piano):
+  - 7 giorni di prelazione e al massimo 2 bottiglie per socio;
+  - il ritiro è una masterclass in distilleria, il primo sabato dopo almeno sei
+    settimane dall'annuncio, dalle 18 alle 20 (annuncio l'8 luglio → sabato
+    22 agosto).
+- **Prenotazione:** un aggregato a parte (tabella `prenotazione`), che si
+  riferisce all'edizione per id.
+  - Nasce solo da `Edizione.prenota`, in attesa di pagamento, con scadenza a
+    15 minuti. Le bottiglie escono subito dalla quota.
+  - In prelazione: solo i soci, dalla quota SOCI, a 45 €.
+  - Dopo: soci e clienti, dalla quota ONLINE, a 52 €, al massimo 6 a persona.
+  - Il limite per persona conta le prenotazioni non annullate dello stesso canale.
+- **Concorrenza:** chi prenota legge l'edizione con il blocco della riga
+  (`EdizioneRepository.findPerModifica`, `PESSIMISTIC_WRITE`). Le prenotazioni
+  della stessa edizione vanno in fila, e bottiglie libere e limite per persona
+  tornano anche con molte richieste insieme.
+- **API** (dal gateway, sotto `/api/edizioni`):
+  - `POST /edizioni/{id}/prenotazioni` per SOCIO e CLIENTE, corpo `{"bottiglie": 2}`;
+  - `GET /prenotazioni` e `GET /prenotazioni/{id}`: solo le proprie (404 per
+    quelle degli altri);
+  - `GET /regole-di-vendita` per tutti i ruoli;
+  - la lettura delle edizioni è aperta anche a SOCIO e CLIENTE;
+  - i rifiuti sono 409 con `motivo`: `PRELAZIONE_DEI_SOCI`,
+    `LIMITE_PER_PERSONA`, `QUOTA_ESAURITA`.
+- **Configurazione:** `edizioni.vendita.*` in `application.yml` (prezzi,
+  bottiglie per cliente, tempo per pagare). Compose e K8s non cambiano.
+- **Verificato (11 nov):** 114 test di edizioni verdi, 34 nuovi:
+  - `PrenotazioneTest` (dominio): prelazione, vendita online, limiti, quota
+    esaurita, annuncio conservato dopo il ricalcolo;
+  - `ClubPreimpostatoTest`: annuncio l'8 luglio → masterclass del 22 agosto alle
+    18 (+02:00), d'inverno +01:00;
+  - `PrenotazioniControllerTest`: ruoli, acquirente dal `sub` e dal ruolo SOCIO,
+    400, 409 con il motivo, 404;
+  - `PrenotazioniIntegrazioneTest` (PostgreSQL e Kafka veri): la storia di
+    Giulia via HTTP e due prove di concorrenza. 12 clienti insieme per 5
+    bottiglie online: 5 prenotazioni, 7 `QuotaEsaurita`, prenotate = 5. Lo
+    stesso socio con 4 richieste insieme: 2 riescono, 2 oltre il limite.
+  - Nel log SQL il blocco è `select ... from edizione ... for no key update`.
+  - **Non fatto:** immagine `edizioni:0.6` e cluster (si aggiornano con i
+    passi di Kubernetes e integrazione).
+
+### Passo 2: Pagamenti con Stripe (`dab4cda`)
+
+- **Il flusso:** Edizioni (dal passo 3) manda un comando su
+  `pagamenti.comandi`; Pagamenti chiama Stripe e pubblica l'esito su
+  `pagamenti.esiti` con l'outbox. Chiave: l'id della prenotazione. I contratti
+  sono in [`docs/eventi.md`](eventi.md#i-messaggi-della-storia-di-giulia).
+  - `RichiestaPagamento` → `PagamentoRiuscito` o `PagamentoFallito`;
+  - `RichiestaRimborso` → `RimborsoEseguito`. Serve al passo 3 (pagamento
+    arrivato a prenotazione scaduta), ma è già qui: così Pagamenti è completo.
+- **Stripe** (`PagamentiStripe`, SDK `stripe-java` 34.1.0):
+  - un PaymentIntent creato e confermato dal server (`confirm=true`, niente
+    redirect), importo in centesimi;
+  - `pm_card_visa` → riuscito; `pm_card_chargeDeclined` → `CARTA_RIFIUTATA`,
+    `generic_decline`; una carta che chiede il 3D Secure →
+    `AUTENTICAZIONE_RICHIESTA`;
+  - chiave di idempotenza `ginvault-pagamento-<prenotazione>` (e
+    `ginvault-rimborso-<prenotazione>`): un comando rielaborato non addebita
+    due volte;
+  - 2 s per connettersi, 10 s per la risposta, nessun nuovo tentativo dentro
+    l'SDK. Rete giù, 5xx, 429 o chiave sbagliata → si riprova (1, 2, 4, 8 s),
+    poi `pagamenti.dlt`;
+  - a Stripe vanno solo gli id (metadata `prenotazioneId`, `edizioneId`), non
+    chi ha prenotato;
+  - la chiave arriva da `STRIPE_SECRET_KEY` e non va mai nei log. Una chiave
+    live fa fallire l'avvio; senza chiave il servizio parte, con un WARN.
+- **Stripe fuori dalla transazione:** prima la chiamata, poi in un solo commit
+  il pagamento, la riga di outbox e il comando elaborato.
+- **Doppioni fermati tre volte:** `comando_elaborato` (stesso `eventId`); un
+  pagamento per prenotazione (UNIQUE `prenotazione_id`: un altro comando
+  ripete l'esito senza richiamare Stripe); la chiave di idempotenza di Stripe.
+- **Tabelle:** `pagamento`, `outbox`, `comando_elaborato`.
+- **Compose:** i topic `pagamenti.comandi`, `pagamenti.esiti`,
+  `pagamenti.dlt`; pagamenti su `kafka-net`, con `KAFKA_BOOTSTRAP` e
+  `STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}`, e parte dopo `kafka-topic`.
+  `.env.example` ha la riga `STRIPE_SECRET_KEY=`. Kubernetes al passo 6.
+- **Verificato (11 nov):** 44 test di pagamenti, 41 verdi e 3 saltati:
+  - `PagamentoTest` (11, dominio);
+  - `PagamentiStripeTest` (14, Stripe finto con WireMock): parametri e header
+    mandati, 402, 3D Secure, 400, 500, 429, 401 senza la chiave nel messaggio,
+    Stripe lento (interrotto a 500 ms, una sola chiamata), chiave vuota, live
+    o pubblicabile, rimborso;
+  - `PagamentiIntegrazioneTest` (9, PostgreSQL e Kafka veri, Stripe finto):
+    - carta buona e carta rifiutata;
+    - lo stesso comando due volte: Stripe chiamato una volta;
+    - un altro comando per la stessa prenotazione: esito ripetuto;
+    - 500 e poi 200: pagato al secondo tentativo, con la stessa chiave;
+    - Stripe sempre giù: `pagamenti.dlt` dopo 4 chiamate, nessun pagamento;
+    - comandi illeggibili o sconosciuti: subito in `pagamenti.dlt`, e il
+      comando buono dopo passa;
+    - rimborso; rimborso di un pagamento rifiutato → `pagamenti.dlt`;
+  - `SicurezzaTest` (7), come prima;
+  - in Compose: pagamenti healthy, i 3 topic creati, il gruppo `pagamenti`
+    con 3 consumer, nessun messaggio sui topic veri.
+  - **Da fare:** `StripeVeroTest` (3 test contro lo Stripe vero in modalità
+    test) è saltato. Nel container `STRIPE_SECRET_KEY` arriva vuota, mentre
+    le variabili di GitHub arrivano: nel `.env` la riga di Stripe manca, è
+    vuota o ha un altro nome. Si rilancia con
+    `docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero`.
+
+### Passo 3: la SAGA in Edizioni (`926e959`)
+
+- **SAGA orchestrata da Edizioni**, con lo stato nella prenotazione. Il giro
+  completo è in [`docs/eventi.md`](eventi.md#la-saga-in-edizioni).
+  - `POST /prenotazioni/{id}/pagamento {"metodo": "pm_card_visa"}` → 202.
+    Nello stesso commit parte il comando `RichiestaPagamento` (outbox), con
+    l'importo in centesimi e la descrizione per la dashboard di Stripe.
+  - `PagamentoRiuscito` → `CONFERMATA` con i numeri di bottiglia →
+    `PrenotazioneConfermata`.
+  - `PagamentoFallito` → `ANNULLATA` (`PAGAMENTO_RIFIUTATO`), le bottiglie
+    tornano libere (compensazione) → `PrenotazioneAnnullata`.
+  - **Tempo finito:** `ScadenzaPrenotazioni` gira ogni 30 s e annulla
+    (`SCADUTA`) le prenotazioni in attesa oltre i 15 minuti, al massimo 100 per
+    giro, ognuna nella sua transazione.
+  - **Pagamento arrivato tardi:** a prenotazione annullata non la riapre. Parte
+    `RichiestaRimborso` (una volta sola), poi `RimborsoEseguito` lo segna.
+  - **Pagamento dopo l'ora ma prima della scadenza:** conferma, perché le
+    bottiglie erano ancora tenute.
+- **Numeri di bottiglia:** il contatore `bottiglie_numerate` nell'edizione
+  (`DEFAULT 0`, così ddl-auto aggiunge la colonna anche con righe), assegnati
+  in sequenza alla conferma. I numeri sono nella tabella `bottiglia_numerata`,
+  con `UNIQUE (edizione_id, numero)`.
+- **Regola dei blocchi:** ogni passo che cambia una prenotazione blocca prima
+  la riga dell'edizione e solo dopo la legge. Per questo le query
+  `edizioneDi` leggono solo l'id dell'edizione, senza caricare la
+  prenotazione. Conferme simultanee, scadenza e pagamento della stessa
+  prenotazione vanno così in fila.
+- **API:**
+  - errori: 400 se la carta non è nel menu (con `metodiAccettati`), 404 se non
+    è tua, 409 con `motivo` (`PAGAMENTO_GIA_RICHIESTO`, `PRENOTAZIONE_SCADUTA`,
+    `PRENOTAZIONE_CHIUSA`);
+  - `GET /regole-di-vendita` ha `metodiDiPagamento`;
+  - la prenotazione ha `pagamento`, `numeriBottiglia`, `annullamento` e
+    `rimborso`.
+- **Kafka:**
+  - il listener `edizioni-pagamenti` su `pagamenti.esiti`, nel gruppo
+    `edizioni`, con idempotenza, retry e `edizioni.dlt` come per le rese;
+  - `PrenotazioneNonTrovata` va subito nel dead letter;
+  - in `evento_elaborato` l'esito: `CONFERMATA`, `ANNULLATA`,
+    `RIMBORSO_RICHIESTO`, `RIMBORSATA` o `GIA_REGISTRATO`.
+- **Configurazione** (`edizioni.vendita.*`): `metodi-di-pagamento`,
+  `controllo-scadenze-ms`, `scadenze-per-giro`. In Compose i topic c'erano
+  già dal passo 2: cambia solo un commento.
+- **Verificato (11 nov):** 139 test di edizioni verdi (erano 114), 25 nuovi:
+  - `PagamentoDellaPrenotazioneTest` (13, dominio):
+    - dopo 111 bottiglie numerate, quelle di Giulia sono la 112 e la 113;
+    - un'annullata non lascia buchi nei numeri;
+    - carta rifiutata e scadenza liberano le bottiglie;
+    - rimborso del pagamento arrivato tardi;
+    - esiti ripetuti senza effetto;
+    - 409 con i tre motivi;
+  - `PrenotazioniControllerTest` (+5): 202, 401/403, 400 senza metodo o con
+    una carta fuori menu, 409 con il motivo, 404;
+  - `SagaPagamentoTest` (7, PostgreSQL e Kafka veri; la parte di Pagamenti la
+    fa il test sui topic dei Testcontainers):
+    - Giulia via HTTP: comando letto da `pagamenti.comandi`, esito su
+      `pagamenti.esiti`, bottiglie 112 e 113 nell'API e in
+      `PrenotazioneConfermata`;
+    - la carta rifiutata e la compensazione;
+    - la scadenza e poi il rimborso del pagamento tardivo;
+    - un esito ripetuto con lo stesso `eventId` o con uno nuovo;
+    - gli errori HTTP;
+    - un esito sconosciuto subito in `edizioni.dlt`;
+    - **concorrenza:** 20 conferme nello stesso istante prendono i numeri da 1
+      a 40, senza buchi né doppioni, e ogni prenotazione due numeri vicini.
+  - In Compose: edizioni healthy con il nuovo schema (`bottiglie_numerate`
+    NOT NULL DEFAULT 0, `bottiglia_numerata` con il vincolo UNIQUE, indice
+    `ix_prenotazione_scadenza`). Il database di Compose era vuoto, quindi
+    l'aggiunta della colonna a righe esistenti non è stata provata. Compose è
+    di nuovo spento.
+  - **Non fatto:** il giro con Pagamenti e lo Stripe vero (serve la riga del
+    `.env`, vedi passo 2) e l'immagine per il cluster (passo 6).
+
+### Passo 4: Notifiche (`7b1edf3`)
+
+- **Cosa fa:** Notifiche (NestJS) legge `edizioni.eventi` e `pagamenti.esiti`
+  nel gruppo `notifiche`, salva gli avvisi nel suo PostgreSQL (`notifiche-db`)
+  e li spinge sui WebSocket aperti. Il contratto e il protocollo sono in
+  [`docs/eventi.md`](eventi.md#il-consumer-di-notifiche).
+- **Avvisi**, in italiano, a chi riguardano:
+  - `PrenotazioneConfermata`: l'importo e i numeri ("Le tue bottiglie sono la
+    112 e la 113.");
+  - `PrenotazioneAnnullata`: carta rifiutata o tempo finito, con la
+    spiegazione di Edizioni;
+  - `TiraturaRidotta` e `TiraturaAumentata`: a ognuno che ha bottiglie
+    confermate dell'edizione, con i suoi numeri ("Le tue bottiglie, la 112 e
+    la 113, restano tue.");
+  - `RimborsoEseguito`: l'importo restituito;
+  - `EdizioneCreata` serve solo alla proiezione (il nome della botanica). Gli
+    altri tipi si ignorano.
+- **Proiezione** (`edizione`, `prenotazione_confermata`): Notifiche non chiama
+  Edizioni. Limite noto: chi ha una prenotazione ancora da pagare non riceve
+  l'avviso della tiratura.
+- **Consumer:** kafkajs 2.2.4, che con Kafka 4.3 funziona (lo provano i test).
+  Le regole dei consumer Spring:
+  - una transazione con `evento_elaborato`, l'offset dopo il commit;
+  - retry dopo 1, 2, 4 e 8 secondi;
+  - `notifiche.dlt` nella stessa partizione, con gli header `kafka_dlt-*`;
+  - con Kafka spento il servizio parte e risponde lo stesso: `/health` è UP con
+    `"kafka":"NON_COLLEGATO"` e il consumer si ricollega.
+- **Fan-out tra repliche:** ogni notifica fa un `NOTIFY` nella sua
+  transazione; ogni replica è in `LISTEN` e consegna ai WebSocket che ha lei.
+- **WebSocket** `/api/notifiche/avvisi` (adapter `ws` di Nest):
+  - il JWT del gateway si verifica all'handshake: 4401 se manca o non è valido;
+  - alla scadenza del JWT (5 minuti) si chiude con 4001 e il client si
+    ricollega con uno nuovo;
+  - messaggi `connesso` (con `nonLette`), `notifica` e `ping` ogni 25 s
+    (nginx chiude dopo 60 s di silenzio).
+- **REST:** `GET /api/notifiche/notifiche` (le ultime 50 e `nonLette`),
+  `POST .../{id}/letta` (204, 404 se è di un altro) e `POST .../lette`. Il
+  `ProvaController` provvisorio è tolto.
+- **Compose:**
+  - `notifiche-db`, con la porta 5446 nell'override;
+  - `notifiche` anche su `kafka-net` e `notifiche-db-net`;
+  - `notifiche.dlt` tra i topic di `kafka-topic`.
+- **Dettagli tecnici:**
+  - nel `CMD` c'è `--disable-warning=TimeoutNegativeWarning`: kafkajs chiama
+    `setTimeout` con un ritardo negativo e Node 24 lo segnala a ogni volta;
+  - il producer del dead letter non è idempotente;
+  - `@testcontainers/kafka` funziona solo con le immagini Confluent: i test
+    usano `apache/kafka:4.3.0` con un `GenericContainer`.
+- **Verificato (11 nov):** 19 test verdi (`npm test`, con Docker Desktop
+  acceso):
+  - 11 di unità: i testi degli avvisi e il lettore degli eventi;
+  - 8 di integrazione, con PostgreSQL e Kafka dei Testcontainers, due istanze
+    di Notifiche e un finto gateway con la sua JWKS:
+    - Giulia con la 112 e la 113: la conferma, poi la tiratura da 600 a 540 in
+      diretta; Anna ha il suo avviso, Marco nessuno;
+    - fan-out: collegata all'istanza che non legge Kafka, riceve lo stesso;
+    - lo stesso evento due volte dà una notifica sola; `RicalcoloRifiutato` si
+      ignora;
+    - scadenza e rimborso;
+    - dead letter: JSON rotto subito, errore del database dopo i tentativi, e
+      la partizione non si blocca;
+    - WebSocket chiuso con 4401 (senza JWT, firma sbagliata, issuer sbagliato)
+      e con 4001 alla scadenza;
+    - REST 401, 404, 400, letta e tutte lette;
+    - `/health`.
+  - In Compose (solo notifiche, il suo DB e Kafka; nessun messaggio sui topic
+    veri):
+    - healthy, schema creato;
+    - gruppo `notifiche` con le 3 partizioni dei due topic, `notifiche.dlt` con
+      3 partizioni;
+    - un WebSocket senza JWT si chiude con 4401, REST risponde 401;
+    - con Kafka fermo `/health` resta UP, e il consumer rientra nel gruppo
+      quando Kafka torna;
+    - Compose di nuovo spento.
+  - **Non fatto:** il giro dal browser con il gateway (passo 5) e il cluster
+    (passo 6, compreso `notifiche.dlt` nel Job `kafka-topic`).
+
+### Passo 5: il front-end dell'area soci (`33a1597`)
+
+- **Dati veri:** l'area soci legge Edizioni (`/api/edizioni/prenotazioni`,
+  `/edizioni`, `/regole-di-vendita`) e Notifiche. `src/mock/soci.ts` e il suo
+  test sono cancellati.
+- **`/soci`:**
+  - gli avvisi non letti, in diretta; chiuderne uno lo segna come letto, e con
+    più di uno c'è «Segna tutti come letti»;
+  - le prenotazioni, con lo stato (da pagare, confermata, annullata), la
+    scadenza («entro le 10:15, tra 14 minuti»), i numeri e il ritiro;
+  - «Da prenotare»: le edizioni in cui chi guarda può ancora prenotare;
+  - le regole del club, dai numeri di Edizioni.
+- **`/soci/edizioni/{id}`:**
+  - il modulo per prenotare: quante bottiglie, fino a quante se ne possono
+    ancora prenotare; la regola di `Edizione.prenota` è copiata in
+    `possibilita()`, ma decide il servizio;
+  - il pagamento: il menu delle carte di prova (`pm_card_visa`,
+    `pm_card_chargeDeclined`), il totale e il conto alla rovescia;
+  - dopo la POST (202) «Pagamento in corso». La pagina rilegge a ogni avviso
+    dell'edizione, e da sola ogni 2 secondi (ogni 10 dopo il primo minuto),
+    finché la prenotazione è confermata o annullata;
+  - l'esito: i numeri delle bottiglie, oppure il perché dell'annullamento e
+    l'eventuale rimborso;
+  - poi le bottiglie con il cartellino, il ritiro, la tracciabilità e la
+    tiratura da 600 a 540 con le quote che calano.
+- **Avvisi in diretta** (`src/sessione/Avvisi.tsx`): un WebSocket per tutta
+  l'area soci.
+  - A ogni `connesso` rilegge l'elenco REST.
+  - Le notifiche si aggiungono senza doppioni.
+  - Ricollegamento: subito dopo 4001, mai dopo 4401, altrimenti dopo 1, 2, 5
+    e 10 secondi, poi ogni 30.
+  - Il proxy di Vite ha `ws: true`. nginx l'upgrade lo faceva già.
+- **Tracciabilità:** solo dai dati dell'edizione: la versione della ricetta, i
+  grammi, la provenienza e i kg rispetto a quelli annunciati.
+  - Le dosi non ci sono: Ricette le mostra solo a DISTILLATORE e ADMIN.
+  - Il controllo qualità non c'è: l'imbottigliamento non esiste.
+- **Lista d'attesa tolta:** dalla descrizione del ruolo CLIENTE, dal piano
+  (ruoli e class diagram) e dalle pagine.
+- **Verificato (11 nov):**
+  - `npm test`: 106 test verdi. Nuovi: `api/soci.test.ts` (fasi, limiti per
+    canale, quota esaurita, numeri, carte) e `api/notifiche.test.ts`
+    (messaggi, ricollegamento, stato degli avvisi), più gli euro e le scadenze
+    in `numeri.test.ts`;
+  - `npm run build`: tipi e build a posto;
+  - il giro nel browser, con il login OAuth, è nella demo del passo 7.
+
+### Passo 6: Kubernetes (`f4e7c9d`)
+
+- **Manifest nuovi**, come quelli di magazzino:
+  - `pagamenti-db.yaml`, `notifiche-db.yaml`: PVC, Deployment (`Recreate`) e
+    Service;
+  - `pagamenti.yaml`: ConfigMap, Deployment, Service :8085;
+  - `notifiche.yaml`: ConfigMap, Deployment con **2 repliche**, Service :8086.
+- **Label:** tutti e due hanno `app.kubernetes.io/component: microservizio`
+  (scaricano la JWKS del gateway) e `ginvault/usa-kafka: "true"`.
+- **Chiave di Stripe:** Secret a parte, `pagamenti-stripe`, con la sola
+  `STRIPE_SECRET_KEY`.
+  - `crea-secret.ps1` la legge dalla riga del `.env` (spazi e virgolette come
+    Compose) e dice se c'è ed è di test, senza stamparla.
+  - Lo script crea anche `pagamenti-db` e `notifiche-db` con password casuali.
+  - `gateway-segreti` resta fatto da tutto il `.env`: contiene anche la chiave,
+    che il gateway non usa.
+- **NetworkPolicy:** `pagamenti-db-solo-da-pagamenti` e
+  `notifiche-db-solo-da-notifiche` in `networkpolicy-db.yaml` (dieci in tutto).
+  Pagamenti esce su Internet verso `api.stripe.com`: le policy filtrano solo
+  l'entrata.
+- **Kafka:** il Job `kafka-topic` crea anche `pagamenti.comandi`,
+  `pagamenti.esiti`, `pagamenti.dlt` e `notifiche.dlt`, gli stessi topic di
+  Compose.
+- **Notifiche:**
+  - startup e readiness su `/health`, che dà 503 senza DB;
+  - liveness `tcpSocket`, perché con il DB giù riavviare Node non serve;
+  - `runAsUser: 1000`: con il solo nome utente `node` e `runAsNonRoot` il pod
+    non partirebbe.
+- **Immagini:** `edizioni:0.6`, `pagamenti:0.1`, `notifiche:0.1`,
+  `frontend:0.4` (`minikube image build`). Il gateway resta `0.3`: il suo
+  codice non è cambiato, e la route di notifiche faceva già da WebSocket.
+- **`k8s/README.md`:**
+  - la sezione «Pagamenti e Notifiche (storia di Giulia)»: la SAGA, la chiave,
+    i consumer group, le due repliche con LISTEN/NOTIFY, le probe, la
+    dashboard;
+  - aggiornati i file, l'avvio, i Secret, le NetworkPolicy con il test e la
+    demo.
+- **Verificato sul cluster (11 nov):**
+  - 17 pod `1/1 Running` e il Job `kafka-topic` `Completed`. Al primo avvio i
+    due pod di notifiche si sono riavviati una volta: erano partiti prima di
+    `notifiche-db` (`ECONNREFUSED`);
+  - consumer group:
+    - `pagamenti` su `pagamenti.comandi`;
+    - `edizioni` su `pagamenti.esiti` e `produzione.eventi`;
+    - `notifiche` con le 6 partizioni divise tra i due pod;
+  - su `notifiche-db` due connessioni `LISTEN notifiche_nuove`, una per pod;
+  - test busybox, dopo le policy nuove:
+    - da un pod qualsiasi i sei DB, il front-end, il gateway, Kafka e
+      `magazzino:9084` sono BLOCCATI; `magazzino:8084`, `pagamenti:8085` e
+      `notifiche:8086` sono APERTI;
+    - pagamenti raggiunge Kafka, il suo DB e la JWKS, non `notifiche-db` né
+      `edizioni-db`; notifiche lo stesso, a parti invertite;
+    - ricette non raggiunge Kafka;
+    - `api.stripe.com:443` è raggiungibile da pagamenti;
+  - dall'Ingress, da un pod nel cluster: `/soci` dà la pagina del front-end
+    0.4; `/api/notifiche/notifiche`, `/api/edizioni/regole-di-vendita` e
+    l'handshake WebSocket su `/api/notifiche/avvisi` senza sessione danno 401
+    dal gateway.
+- **Da sistemare (utente):** nel `.env` non c'è la riga `STRIPE_SECRET_KEY=`.
+  Lo dice `crea-secret.ps1`, e `gateway-segreti` ha 8 chiavi, cioè solo OAuth
+  e ruoli. Per questo la chiave arrivava vuota anche in Compose. Pagamenti lo
+  scrive nel log («STRIPE_SECRET_KEY non impostata»). Dopo aver aggiunto la
+  riga:
+  - rilanciare `.\k8s\crea-secret.ps1`;
+  - `kubectl rollout restart deployment/pagamenti -n ginvault`.
+
+### Passo 7: integrazione e demo
+
+- **[`docs/demo-storia-giulia.md`](demo-storia-giulia.md):** la demo dal
+  browser su Minikube, come quella di Elena.
+  - Prerequisiti: la riga `STRIPE_SECRET_KEY=` nel `.env`, poi
+    `crea-secret.ps1` e il riavvio di pagamenti; un account con SOCIO,
+    DISTILLATORE e RESP_ACQUISTI.
+  - Marco annuncia l'edizione: 600 bottiglie, in prelazione.
+  - L'antefatto: 111 bottiglie già confermate da 56 soci.
+  - Giulia prova la carta rifiutata, poi paga con la Visa e ha le bottiglie
+    112 e 113, con l'avviso in diretta.
+  - Elena registra la consegna da 10,8 kg: la tiratura scende a 540 e a
+    Giulia arriva l'avviso con i suoi numeri.
+  - Poi: dietro le quinte (topic, consumer group, tabelle), le due repliche
+    di Notifiche, la scadenza, il riepilogo dei casi e la stessa demo con
+    Compose.
+- **[`docs/demo-storia-giulia-antefatto.sql`](demo-storia-giulia-antefatto.sql):**
+  l'antefatto scritto nel database di Edizioni, in una transazione sola:
+  - 55 prenotazioni da 2 e una da 1, confermate, con i numeri da 1 a 111;
+  - la quota dei soci e il contatore dell'edizione aggiornati, come in
+    `Edizione.conferma`;
+  - si ferma se l'edizione non è in prelazione o se nella quota dei soci non
+    ci sono 111 bottiglie libere.
+  Serve perché nel browser c'è un account solo, e un socio ne prenota al
+  massimo 2.
+- **README:**
+  - lo stato, lo schema (`notifiche-db`, `kafka-net`, Stripe, WebSocket) e la
+    tabella dei servizi;
+  - la sezione «Prenotazioni, pagamenti e notifiche», i test della storia e
+    tre limiti noti nuovi: l'`Origin` del WebSocket, Stripe solo in modalità
+    test, l'avviso della tiratura solo a chi ha confermato;
+  - la riga 7, con gli spazi già cambiati prima del passo, non è nel commit.
+- **`k8s/README.md`:** la storia di Giulia nella Demo completa. Nello schema
+  della SAGA c'era `PagamentoRifiutato`: l'evento si chiama `PagamentoFallito`.
+- **Verificato (11 nov), in Docker Compose con il codice del branch.** Al
+  posto del gateway un container «finti» con la sua JWKS e i JWT di prova; al
+  posto di Stripe uno Stripe finto con le risposte della modalità test
+  (`STRIPE_API_BASE`). Il container e gli script sono rimasti fuori dal
+  repository.
+  - La storia completa, con 56 soci via API:
+    - 111 bottiglie numerate da 1 a 111 in 2,3 s;
+    - Giulia confermata in 1,6 s con 112 e 113, con l'avviso sul WebSocket;
+    - Anna con la carta rifiutata, annullata in 1,6 s; Giulia non riceve il
+      suo avviso;
+    - la consegna da 10,8 kg: 540 in 1,9 s (SOCI 300, ONLINE 90), e l'avviso
+      a Giulia con «la 112 e la 113»;
+    - 409 `LIMITE_PER_PERSONA` e `PAGAMENTO_GIA_RICHIESTO`, 400 per la carta
+      fuori menu, 4401 senza JWT;
+    - gli avvisi segnati come letti; i dead letter topic vuoti.
+  - Il giro della demo, con un account solo e l'antefatto SQL: la carta
+    rifiutata annullata in 3,2 s, la nuova prenotazione, la Visa confermata
+    in 1,3 s con 112 e 113, la tiratura a 540 in 1,9 s con l'avviso.
+  - Compose è spento, ma i suoi volumi hanno i dati di queste prove:
+    `docker compose down -v` li cancella (lo decide l'utente).
+  - Sul cluster: 17 pod Ready dopo il riavvio di minikube.
+- **Da fare (utente):**
+  - la riga `STRIPE_SECRET_KEY=sk_test_...` nel `.env`, poi
+    `.\k8s\crea-secret.ps1` e il riavvio di pagamenti;
+  - il giro dal browser, con il login OAuth e lo Stripe vero in modalità test;
+  - il push del branch e la PR, quando lo dici.
 
 ## La storia di Elena
 
@@ -509,8 +989,12 @@ git status
 git log --oneline -5
 gh pr list --state all --limit 5
 
-# Test di un servizio senza giacenze-api (edizioni, ricette)
+# Test di un servizio senza giacenze-api (edizioni, ricette, pagamenti)
 docker run --rm -v "${PWD}/edizioni:/workspace" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /workspace maven:3.9-eclipse-temurin-21 mvn -B test
+# Notifiche (NestJS): test di unità e di integrazione, con Docker Desktop acceso
+cd notifiche; npm test; cd ..
+# Pagamenti contro lo Stripe vero (modalità test): la chiave la passa Compose dal .env
+docker compose -f pagamenti/stripe-vero.yml --env-file .env run --rm stripe-vero
 # Magazzino e produzione: prima il modulo condiviso
 docker run --rm -v "${PWD}:/repo" -v ginvault-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal -w /repo maven:3.9-eclipse-temurin-21 sh -c 'mvn -B -q -f giacenze-api/pom.xml install && mvn -B -f magazzino/pom.xml test && mvn -B -f produzione/pom.xml test'
 
@@ -519,6 +1003,7 @@ minikube start
 kubectl get pods -n ginvault
 kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group produzione
 kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group edizioni
+kubectl exec -n ginvault kafka-0 -- /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group notifiche
 kubectl logs -n ginvault deploy/produzione --tail=20
 ```
 
@@ -527,10 +1012,7 @@ PowerShell come amministratore, con Compose spento.
 
 ## Dopo la storia di Elena (dal piano, `docs/piano.md`)
 
-- **Storia di Giulia:**
-  - prenotazione con SAGA e Stripe;
-  - `TiraturaRidotta` consumata da Notifiche, con WebSocket;
-  - l'area soci con i dati veri al posto di quelli finti.
+- **Storia di Giulia:** finita sul branch `storia-giulia`, da unire con una PR.
 - **Kubernetes:** Istio e circuit breaker.
 - **Plus rimanenti:** repliche del consumer Kafka.
 - **Documentazione e prova generale:** diagrammi, presentazione, checklist.

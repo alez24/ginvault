@@ -3,6 +3,7 @@ package it.ginvault.edizioni.infrastruttura.eventi;
 import java.time.Duration;
 
 import it.ginvault.edizioni.applicazione.EdizioneNonTrovata;
+import it.ginvault.edizioni.applicazione.PrenotazioneNonTrovata;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -27,9 +28,11 @@ import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
  *    crescenti, 1 s, 2 s, 4 s, 8 s (edizioni.consumer.* in application.yml).
  *    Mentre si riprova, gli altri messaggi della stessa partizione aspettano:
  *    l'ordine delle rese di un'edizione non cambia;
- *  - errori che non passano: EventoNonValido (messaggio illeggibile) ed
+ *  - errori che non passano: EventoNonValido (messaggio illeggibile),
  *    EdizioneNonTrovata (una resa arriva sempre dopo la sua edizione, che
- *    quindi non arriverà più). Nessun nuovo tentativo;
+ *    quindi non arriverà più) e PrenotazioneNonTrovata (un esito di Pagamenti
+ *    arriva sempre dopo la prenotazione: il comando parte nello stesso commit).
+ *    Nessun nuovo tentativo;
  *  - finiti i tentativi, il messaggio va nel DEAD LETTER TOPIC edizioni.dlt,
  *    nella stessa partizione, con gli header kafka_dlt-*. Non si perde: lo si
  *    può leggere, correggere e rimandare.
@@ -43,6 +46,10 @@ import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
 public class ConfigurazioneKafka {
 
     public static final String PRODUZIONE = "produzione.eventi";
+    /** Gli esiti di Pagamenti: PagamentoRiuscito, PagamentoFallito, RimborsoEseguito. */
+    public static final String PAGAMENTI = "pagamenti.esiti";
+    /** Dove vanno i comandi per Pagamenti (il topic lo possiede Pagamenti, che li riceve). */
+    public static final String COMANDI_PAGAMENTI = "pagamenti.comandi";
     public static final String DEAD_LETTER = "edizioni.dlt";
 
     private static final Logger LOG = LoggerFactory.getLogger(ConfigurazioneKafka.class);
@@ -60,7 +67,8 @@ public class ConfigurazioneKafka {
         attese.setMaxInterval(massima.toMillis());
 
         DefaultErrorHandler gestore = new DefaultErrorHandler(deadLetter, attese);
-        gestore.addNotRetryableExceptions(EventoNonValido.class, EdizioneNonTrovata.class);
+        gestore.addNotRetryableExceptions(EventoNonValido.class, EdizioneNonTrovata.class,
+                PrenotazioneNonTrovata.class);
         gestore.setRetryListeners(new RetryListener() {
 
             @Override

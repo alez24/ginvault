@@ -6,6 +6,7 @@ import {
   differenza,
   data,
   edizioneDellaStagione,
+  euro,
   giornoConNome,
   giornoDopo,
   giorni,
@@ -21,6 +22,7 @@ import {
   orario,
   partiDelGiorno,
   perCampo,
+  traQuanto,
 } from './numeri';
 
 describe('numeri scritti dall’utente', () => {
@@ -143,5 +145,20 @@ describe('giorni senza ora (le date del magazzino)', () => {
     expect(kg(10.8)).toBe('10,8 kg');
     expect(giorni(1)).toBe('1 giorno');
     expect(giorni(6)).toBe('6 giorni');
+  });
+});
+
+describe('prezzi e scadenze del pagamento', () => {
+  it('euro all’italiana, con lo spazio che non va a capo', () => {
+    expect(euro(45)).toBe('45,00 €');
+    expect(euro(2 * 52)).toBe('104,00 €');
+  });
+
+  it('quanto manca per pagare, in minuti interi', () => {
+    const adesso = new Date('2026-06-02T09:00:30Z');
+    expect(traQuanto('2026-06-02T09:15:00Z', adesso)).toBe('tra 14 minuti');
+    expect(traQuanto('2026-06-02T09:02:00Z', adesso)).toBe('tra 1 minuto');
+    expect(traQuanto('2026-06-02T09:01:00Z', adesso)).toBe('tra meno di un minuto');
+    expect(traQuanto('2026-06-02T08:59:00Z', adesso)).toBe('tra meno di un minuto');
   });
 });
