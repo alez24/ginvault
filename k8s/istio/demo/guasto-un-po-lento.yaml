@@ -1,0 +1,46 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): Ricette un po' lento, per riempire la coda.
+#
+# Come guasto-lento.yaml (stesso nome, guasto-ricette), ma 0,5 secondi: meno
+# degli 0,8 s di un tentativo, quindi nessun timeout e nessun errore per
+# l'outlier detection. Serve a vedere il connectionPool: con 25 richieste
+# insieme 10 occupano le connessioni, 5 aspettano in coda, le altre ricevono
+# subito 503 (statistica upstream_rq_pending_overflow).
+#
+#   kubectl label pod -n ginvault -l app.kubernetes.io/name=ricette ginvault/guasto=si
+#   kubectl apply -f k8s/istio/demo/guasto-un-po-lento.yaml
+#   kubectl delete envoyfilter guasto-ricette -n ginvault
+# =============================================================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: guasto-ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: ricette
+      ginvault/guasto: "si"
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.fault
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+            delay:
+              fixed_delay: 0.5s
+              percentage:
+                numerator: 100
+                denominator: HUNDRED

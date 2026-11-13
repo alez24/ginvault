@@ -1,0 +1,51 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): il fault.delay di Istio, nel VirtualService.
+#
+# Il VirtualService "ricette" vero più un ritardo di 3 secondi sulla route di
+# edizioni. Il ritardo lo fa il sidecar di EDIZIONI prima di inoltrare la
+# richiesta, e il timeout della route (1,8 s) parte solo dopo: non lo ferma.
+# Lo ferma il timeout dell'applicazione: edizioni smette di aspettare dopo 2 s
+# e risponde 503 "Ricette non risponde... più lento di 2 secondi".
+#   kubectl apply -f k8s/istio/demo/vs-fault-delay.yaml
+#   kubectl apply -k k8s/istio/          per tornare al VirtualService vero
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  hosts:
+    - ricette
+  http:
+    - name: da-edizioni
+      match:
+        - sourceLabels:
+            app.kubernetes.io/name: edizioni
+      timeout: 1.8s
+      fault:
+        delay:
+          fixedDelay: 3s
+          percentage:
+            value: 100
+      retries:
+        attempts: 1
+        perTryTimeout: 0.8s
+        # Solo gli errori per cui un altro pod può andare meglio: 502, 503, 504,
+        # tentativo scaduto, connessione fallita o rifiutata. Un 500 è un errore
+        # dell'applicazione: riprovare non serve
+        retryOn: gateway-error,connect-failure,refused-stream
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082
+    # Tutti gli altri (il gateway): come senza VirtualService
+    - name: altri
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082

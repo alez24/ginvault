@@ -1,0 +1,118 @@
+# =============================================================================
+# Circuit breaker, timeout e retry sulle chiamate a Ricette.
+#
+# Edizioni chiama Ricette due volte quando Marco crea un'edizione:
+#   GET  /formulazioni/{id}            legge la formulazione
+#   POST /formulazioni/{id}/utilizzo   la segna usata (idempotente per la stessa
+#                                      edizione: ripeterla non fa danni)
+# e nel codice (CatalogoRicetteRest) aspetta al massimo 2 secondi: poi risponde
+# 503 "Ricette non disponibile" e non crea l'edizione.
+#
+# Qui c'è la parte che decide il mesh, senza toccare il codice: ogni sidecar
+# che chiama Ricette (edizioni e gateway) la applica per conto suo.
+#
+# 1) DestinationRule "ricette": COME si parla con i pod di Ricette.
+#    - connectionPool: quante connessioni e richieste in coda al massimo. Oltre,
+#      Envoy risponde subito 503 invece di accodare (statistica
+#      upstream_rq_pending_overflow): una paratia (bulkhead) che protegge
+#      Ricette da un picco.
+#    - outlierDetection: il circuit breaker vero e proprio. Un pod che dà 3
+#      errori 5xx di fila (contano anche i timeout e le connessioni fallite) è
+#      escluso per 30 secondi; poi torna da solo. maxEjectionPercent: 100 vuol
+#      dire che si possono escludere anche tutti e due i pod: allora Envoy
+#      risponde subito 503 "no healthy upstream", senza chiamare Ricette.
+#      L'esclusione è decisa da ogni sidecar per sé: quello di edizioni non sa
+#      che cosa vede quello del gateway.
+#
+# 2) VirtualService "ricette": QUANTO aspettare e SE riprovare, solo per le
+#    chiamate di edizioni (sourceLabels). Il gateway (/api/ricette/** dal
+#    browser) resta con i default di Istio.
+#    I numeri stanno dentro i 2 secondi di edizioni:
+#      un tentativo     al massimo 0,8 s (perTryTimeout)
+#      un retry         su un ALTRO pod (Istio esclude quello appena provato)
+#      in tutto         al massimo 1,8 s (timeout)  <  2 s di edizioni
+#    Così edizioni riceve sempre una risposta da Envoy (un 504 se scade il
+#    timeout) prima di arrendersi da sola, ed Envoy non riprova mai per una
+#    richiesta che edizioni ha già abbandonato.
+#
+#   kubectl get destinationrule,virtualservice -n ginvault
+#   istioctl proxy-config cluster  deploy/edizioni -n ginvault --fqdn ricette.ginvault.svc.cluster.local -o json
+#   istioctl proxy-config route    deploy/edizioni -n ginvault --name 8082 -o json
+#   istioctl proxy-config endpoint deploy/edizioni -n ginvault --cluster "outbound|8082||ricette.ginvault.svc.cluster.local"
+#
+# Spiegazione completa (timeout dell'applicazione e timeout del mesh) in
+# k8s/README.md, sezione «Istio: circuit breaker su Edizioni → Ricette».
+# Per vederlo all'opera, con i guasti su Ricette (k8s/istio/demo/):
+# docs/demo-istio.md.
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: ricette
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  host: ricette
+  # Niente "tls": resta l'mTLS automatico tra i sidecar (peer-authentication.yaml)
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        # Connessioni contemporanee da un sidecar verso tutti i pod di Ricette.
+        # HTTP/1.1: una richiesta per connessione alla volta
+        maxConnections: 10
+        # Dentro il cluster una connessione si apre in meno di un millisecondo:
+        # mezzo secondo basta (il default di Istio è 10 s, più dei 2 di edizioni)
+        connectTimeout: 0.5s
+      http:
+        # Richieste in attesa di una connessione libera; oltre, 503 immediato
+        http1MaxPendingRequests: 5
+        # Richieste attive in tutto, e retry attivi in tutto. I default di Istio
+        # sono praticamente infiniti
+        http2MaxRequests: 10
+        maxRetries: 2
+    outlierDetection:
+      consecutive5xxErrors: 3
+      # Ogni quanto Envoy riammette i pod esclusi da almeno 30 s (e riduce il
+      # moltiplicatore: un pod escluso più volte di fila resta fuori 30 s, poi
+      # 60, 90...). Con 1 s il circuito si richiude a 30 s, non a 30-40
+      interval: 1s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+      # Mai il "panic mode" di Envoy (mandare richieste anche ai pod esclusi
+      # quando ne restano pochi): 0 è già il default di Istio, scritto per chiarezza
+      minHealthPercent: 0
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ricette
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  hosts:
+    - ricette
+  http:
+    - name: da-edizioni
+      match:
+        - sourceLabels:
+            app.kubernetes.io/name: edizioni
+      timeout: 1.8s
+      retries:
+        attempts: 1
+        perTryTimeout: 0.8s
+        # Solo gli errori per cui un altro pod può andare meglio: 502, 503, 504,
+        # tentativo scaduto, connessione fallita o rifiutata. Un 500 è un errore
+        # dell'applicazione: riprovare non serve
+        retryOn: gateway-error,connect-failure,refused-stream
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082
+    # Tutti gli altri (il gateway): come senza VirtualService
+    - name: altri
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082

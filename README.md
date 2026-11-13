@@ -28,7 +28,8 @@ Il piano completo è in [`docs/piano.md`](docs/piano.md).
 > ([`k8s/README.md`](k8s/README.md)). Le demo:
 > [storia di Marco](docs/demo-storia-marco.md),
 > [storia di Elena](docs/demo-storia-elena.md),
-> [storia di Giulia](docs/demo-storia-giulia.md).
+> [storia di Giulia](docs/demo-storia-giulia.md),
+> [Istio, mTLS e circuit breaker](docs/demo-istio.md).
 
 ## Architettura
 
@@ -278,6 +279,7 @@ Marco ──POST /api/edizioni/edizioni──▶ gateway ──JWT──▶ ediz
 | formulazione inesistente, non scelta o versione diversa | 422              | no               |
 | già usata (dalla GET, dalla `/utilizzo` o dal vincolo)  | 409              | no               |
 | Ricette spento, irraggiungibile o oltre i 2 s           | 503 + `Retry-After`, messaggio chiaro, nessuno stack trace | no |
+| Ricette fermo per Istio: 502, 503 o 504 del sidecar     | 503 + `Retry-After`, "Ricette non è disponibile in questo momento" | no |
 | nessun JWT / ruolo diverso da DISTILLATORE              | 401 / 403 (Ricette non viene chiamato) | no |
 
 **Limiti, voluti per ora:**
@@ -289,9 +291,13 @@ Marco ──POST /api/edizioni/edizioni──▶ gateway ──JWT──▶ ediz
   mano. Con Kafka diventerà una **SAGA**: Edizioni salva l'edizione e pubblica
   l'evento `EdizioneCreata`, Ricette la segna USATA. Se Ricette non può, pubblica
   un evento che fa annullare l'edizione (compensazione).
-- **Niente circuit breaker nel codice: arriverà con Istio.** Timeout, retry e
-  *outlier detection* diventeranno configurazione del sidecar Envoy. Per ora
-  ogni richiesta prova Ricette e al peggio aspetta 2 secondi.
+- **Niente circuit breaker nel codice: lo fa Istio.** Su Kubernetes timeout,
+  un retry sull'altra replica di Ricette e *outlier detection* sono
+  configurazione del sidecar Envoy di Edizioni (vedi
+  [k8s/README.md](k8s/README.md#istio-circuit-breaker-su-edizioni--ricette)).
+  Edizioni traduce i 502, 503 e 504 del sidecar nel suo 503 "Ricette non
+  disponibile". In Compose, senza Istio, ogni richiesta prova Ricette e al
+  peggio aspetta 2 secondi.
 
 ## Edizione: tiratura, quote e ricalcolo
 
@@ -811,6 +817,7 @@ avviato in IntelliJ.
     (idempotente). C'è un log ERROR, ma nessun job che riprova da solo;
   - il bilanciamento è per connessione, e va bene con una replica;
   - in Compose la porta 9084 non è filtrata per porta: la protegge solo il JWT.
-- **Edizioni → Ricette non è transazionale** e non ha circuit breaker: vedi
+- **Edizioni → Ricette non è transazionale**: vedi
   [Edizioni chiama Ricette](#edizioni-chiama-ricette-validazione-rest).
-  Arriveranno la SAGA con Kafka (`EdizioneCreata`) e il circuit breaker con Istio.
+  Arriverà la SAGA con Kafka (`EdizioneCreata`). Il circuit breaker c'è solo su
+  Kubernetes, con Istio; in Compose no.

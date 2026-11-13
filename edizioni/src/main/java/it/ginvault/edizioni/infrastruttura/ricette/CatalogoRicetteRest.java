@@ -31,6 +31,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -51,11 +52,14 @@ import org.springframework.web.client.RestClientException;
  *  - TOKEN RELAY: inoltra lo stesso JWT dell'utente che ha chiamato Edizioni,
  *    quindi Ricette applica le SUE regole sui ruoli (DISTILLATORE).
  *
- * CIRCUIT BREAKER: qui non c'è, arriverà con Istio. Il sidecar Envoy davanti a
- * Ricette applicherà timeout, retry e "outlier detection" (smette di mandare
- * richieste a un'istanza che continua a fallire) come configurazione della
- * mesh, senza librerie nel codice. Per ora ogni richiesta prova Ricette e, al
- * peggio, aspetta 2 secondi.
+ * CIRCUIT BREAKER: non è nel codice, lo fa Istio (k8s/istio/
+ * circuit-breaker-ricette.yaml). Su Kubernetes il sidecar Envoy di Edizioni
+ * applica un timeout di 1,8 s, un retry sull'altro pod di Ricette e la
+ * "outlier detection": un pod che sbaglia 3 volte di fila resta fuori 30 s, e
+ * con tutti i pod fuori Envoy risponde subito 503 senza chiamare Ricette.
+ * Questa classe vede allora un 503 o un 504 del sidecar, non un timeout, e lo
+ * tratta come "Ricette non disponibile", come 502. In Compose, senza Istio,
+ * ogni richiesta prova Ricette e al peggio aspetta i 2 secondi qui sopra.
  */
 @Component
 public class CatalogoRicetteRest implements CatalogoRicette {
@@ -103,8 +107,14 @@ public class CatalogoRicetteRest implements CatalogoRicette {
             throw nonDisponibile("Ricette non risponde (spento, irraggiungibile o più lento di " + secondi
                     + " secondi): l'edizione non è stata creata. Riprova tra poco.",
                     irraggiungibile.toString());
+        } catch (HttpServerErrorException.BadGateway | HttpServerErrorException.ServiceUnavailable
+                 | HttpServerErrorException.GatewayTimeout fermo) {
+            // Con Istio: nessun pod sano ("no healthy upstream"), circuito
+            // aperto o timeout del sidecar ("upstream request timeout")
+            throw nonDisponibile("Ricette non è disponibile in questo momento: l'edizione non è stata creata."
+                    + " Riprova tra poco.", fermo.toString());
         } catch (RestClientException inattesa) {
-            // 5xx, 401/403 (configurazione sbagliata), JSON illeggibile...
+            // 500, 401/403 (configurazione sbagliata), JSON illeggibile...
             throw rispostaInattesa("alla lettura della formulazione " + formulazioneId, inattesa.toString());
         }
         return Optional.of(traduci(letta, formulazioneId));
@@ -131,6 +141,12 @@ public class CatalogoRicetteRest implements CatalogoRicette {
             // non transazionali (vedi ServizioEdizioni.crea).
             throw nonDisponibile("Ricette non ha confermato l'utilizzo della formulazione entro " + secondi
                     + " secondi: l'edizione non è stata creata. Riprova tra poco.", irraggiungibile.toString());
+        } catch (HttpServerErrorException.BadGateway | HttpServerErrorException.ServiceUnavailable
+                 | HttpServerErrorException.GatewayTimeout fermo) {
+            // Stesso esito incerto con un 504 del sidecar: la POST può essere
+            // arrivata a Ricette. Con un 503 "no healthy upstream" no
+            throw nonDisponibile("Ricette non è disponibile e non ha confermato l'utilizzo della formulazione:"
+                    + " l'edizione non è stata creata. Riprova tra poco.", fermo.toString());
         } catch (RestClientException inattesa) {
             throw rispostaInattesa("all'utilizzo della formulazione " + formulazione.id(), inattesa.toString());
         }

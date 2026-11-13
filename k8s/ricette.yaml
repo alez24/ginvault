@@ -35,7 +35,10 @@ metadata:
     app.kubernetes.io/component: microservizio
     app.kubernetes.io/part-of: ginvault
 spec:
-  replicas: 1
+  # Due repliche: se una sbaglia o è lenta, il sidecar di chi chiama la esclude
+  # (outlier detection) e riprova sull'altra (k8s/istio/circuit-breaker-ricette.yaml).
+  # Ricette non ha stato in memoria né lavori pianificati: tutto è nel database
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: ricette
@@ -99,9 +102,11 @@ spec:
 ---
 # Service: http://ricette:8082 dentro il cluster (RICETTE_URI di gateway ed
 # edizioni). Con "kubectl scale deployment/ricette --replicas=0" il Service
-# resta ma non ha pod dietro: le connessioni non vengono rifiutate, restano
-# appese. Edizioni smette di aspettare dopo il suo timeout (2 s) e risponde 503
-# (docs/demo-storia-marco.md).
+# resta ma non ha pod dietro. Con Istio il sidecar di chi chiama lo sa (gli
+# endpoint glieli manda istiod) e risponde subito 503 "no healthy upstream";
+# edizioni lo traduce nel suo 503 "Ricette non disponibile"
+# (docs/demo-storia-marco.md). Senza Istio (Compose) le connessioni restano
+# appese finché non scade il timeout di edizioni (2 s).
 apiVersion: v1
 kind: Service
 metadata:

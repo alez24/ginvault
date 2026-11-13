@@ -48,6 +48,9 @@ spec:
         app.kubernetes.io/name: produzione-db
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: ginvault
+        # Niente sidecar di Istio (k8s/istio/): il database non è un
+        # microservizio, e i servizi ci arrivano in TCP semplice
+        sidecar.istio.io/inject: "false"
     spec:
       enableServiceLinks: false
       containers:
@@ -110,3 +113,5 @@ spec:
     - name: postgres
       port: 5432
       targetPort: postgres
+      # Per i sidecar di Istio: TCP semplice, senza indovinare il protocollo
+      appProtocol: tcp

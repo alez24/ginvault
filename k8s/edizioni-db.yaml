@@ -72,6 +72,9 @@ spec:
         app.kubernetes.io/name: edizioni-db
         app.kubernetes.io/component: database
         app.kubernetes.io/part-of: ginvault
+        # Niente sidecar di Istio (k8s/istio/): il database non è un
+        # microservizio, e i servizi ci arrivano in TCP semplice
+        sidecar.istio.io/inject: "false"
     spec:
       # Senza questa riga Kubernetes inietta in ogni container variabili come
       # EDIZIONI_DB_PORT=tcp://10.x.x.x:5432 per ogni Service del namespace
@@ -167,3 +170,5 @@ spec:
     - name: postgres
       port: 5432            # porta del Service
       targetPort: postgres  # porta del container (per nome, vedi "ports" sopra)
+      # Per i sidecar di Istio: TCP semplice, senza indovinare il protocollo
+      appProtocol: tcp

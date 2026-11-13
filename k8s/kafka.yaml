@@ -39,12 +39,16 @@ spec:
   selector:
     app.kubernetes.io/name: kafka
   ports:
+    # appProtocol tcp: per i sidecar di Istio, il protocollo di Kafka passa
+    # così com'è, senza che Envoy provi a indovinarlo
     - name: client
       port: 9092
       targetPort: client
+      appProtocol: tcp
     - name: controller
       port: 9093
       targetPort: controller
+      appProtocol: tcp
 
 ---
 # -----------------------------------------------------------------------------
@@ -80,6 +84,9 @@ spec:
         app.kubernetes.io/name: kafka
         app.kubernetes.io/component: broker
         app.kubernetes.io/part-of: ginvault
+        # Niente sidecar di Istio (k8s/istio/): Kafka non è un microservizio,
+        # e i client ci arrivano in TCP semplice
+        sidecar.istio.io/inject: "false"
     spec:
       # Qui serve davvero: l'immagine trasforma ogni variabile KAFKA_* in una
       # riga di configurazione, e Kubernetes inietterebbe KAFKA_PORT,
@@ -254,6 +261,9 @@ spec:
         app.kubernetes.io/component: job
         app.kubernetes.io/part-of: ginvault
         ginvault/usa-kafka: "true"
+        # Niente sidecar di Istio: il Job crea i topic e finisce, il mesh non
+        # gli serve
+        sidecar.istio.io/inject: "false"
     spec:
       # Never: un tentativo fallito resta visibile come pod in Error, e il Job
       # ne crea un altro

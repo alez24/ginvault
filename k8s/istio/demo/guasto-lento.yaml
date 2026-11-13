@@ -1,0 +1,49 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): Ricette diventa LENTO, senza toccare il codice.
+#
+# Come guasto-503.yaml (stesso nome, guasto-ricette: lo sostituisce), ma il
+# filtro "fault" di Envoy nel sidecar di ricette trattiene ogni richiesta per
+# 1,5 secondi prima di passarla all'applicazione (il fault.delay di Istio, qui
+# dalla parte di ricette).
+# 1,5 s è più degli 0,8 s di un tentativo (circuit-breaker-ricette.yaml): il
+# sidecar di edizioni smette di aspettare, riprova sull'altro pod e alla fine
+# risponde 504 "upstream request timeout" dopo circa 1,6 s. I tentativi scaduti
+# contano come errori 5xx per l'outlier detection.
+#
+#   kubectl label pod -n ginvault -l app.kubernetes.io/name=ricette ginvault/guasto=si
+#   kubectl apply -f k8s/istio/demo/guasto-lento.yaml
+#   kubectl delete envoyfilter guasto-ricette -n ginvault
+# =============================================================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: guasto-ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: ricette
+      ginvault/guasto: "si"
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.fault
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+            delay:
+              fixed_delay: 1.5s
+              percentage:
+                numerator: 100
+                denominator: HUNDRED

@@ -1,0 +1,75 @@
+# =============================================================================
+# mTLS tra i microservizi: PeerAuthentication.
+#
+# Una PeerAuthentication dice al sidecar che cosa ACCETTARE in entrata:
+#   STRICT      solo mTLS: il client deve avere un sidecar (certificato di Istio)
+#   PERMISSIVE  mTLS o testo in chiaro (il default di Istio)
+# In uscita non serve configurare niente: con l'"auto mTLS" il sidecar del
+# client usa mTLS verso i pod con il sidecar (label security.istio.io/tlsMode)
+# e il testo in chiaro verso quelli senza.
+#
+# 1) "default", senza selector: STRICT per tutto il namespace ginvault. I pod
+#    senza sidecar (i sei database, kafka-0, il Job dei topic) non hanno un
+#    Envoy che la applichi: restano raggiungibili in TCP semplice, come prima.
+# 2) frontend e gateway: STRICT anche loro, tranne la porta 8080, dove arriva
+#    l'Ingress di nginx. Il controller ingress-nginx non ha il sidecar (è un
+#    addon di Minikube, nel suo namespace): con STRICT le sue richieste
+#    sarebbero rifiutate e il sito non risponderebbe. Su quella porta il
+#    gateway riceve anche le chiamate dei microservizi (JWKS), che arrivano
+#    comunque in mTLS dai loro sidecar. Chi altro può arrivarci in chiaro lo
+#    decidono le NetworkPolicy (networkpolicy-frontend-gateway.yaml).
+#
+#   kubectl get peerauthentication -n ginvault
+#   istioctl x describe pod <pod> -n ginvault     "Workload mTLS mode: STRICT"
+#
+# Il certificato di ogni sidecar lo firma istiod, con l'identità SPIFFE della
+# ServiceAccount del pod (spiffe://cluster.local/ns/ginvault/sa/<nome>), dura
+# 24 ore e si rinnova da solo. Per ora tutti i pod usano la ServiceAccount
+# "default": stessa identità per tutti.
+#   istioctl proxy-config secret deploy/ricette -n ginvault
+# Come vedere che edizioni -> ricette è cifrato: k8s/README.md, sezione
+# «Istio: mTLS tra i microservizi».
+# =============================================================================
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  mtls:
+    mode: STRICT
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: frontend-da-ingress
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: frontend
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    # la porta del container (nginx), non quella del Service (80). Tra
+    # virgolette: kustomize non accetta una chiave numerica
+    "8080":
+      mode: PERMISSIVE
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: gateway-da-ingress
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gateway
+  mtls:
+    mode: STRICT
+  portLevelMtls:
+    "8080":
+      mode: PERMISSIVE

@@ -47,7 +47,7 @@ di Pagamenti, il consumer di Notifiche e il protocollo del WebSocket.
   [`k8s/README.md`](../k8s/README.md#demo-completa), passi 1–4, con queste immagini:
 
   ```powershell
-  minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.6, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
+  minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.7, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
   ```
 
 - `minikube tunnel` aperto in una PowerShell **da amministratore**.
@@ -80,7 +80,7 @@ di Pagamenti, il consumer di Notifiche e il protocollo del WebSocket.
 Controlli prima di cominciare:
 
 ```powershell
-kubectl get pods -n ginvault        # 17 pod 1/1 Running (2 del front-end, 2 di notifiche, kafka-0) e il Job kafka-topic Completed
+kubectl get pods -n ginvault        # 18 pod Running: 2/2 i servizi e il front-end (2 frontend, 2 ricette, 2 notifiche), 1/1 i DB e kafka-0; il Job kafka-topic Completed
 curl.exe -s http://localhost/api/pagamenti/health     # {"status":"UP"}
 curl.exe -s http://localhost/api/notifiche/health     # {"status":"UP","database":"UP","kafka":"IN_ASCOLTO"}
 curl.exe -s -o NUL -w '%{http_code}' http://localhost/api/edizioni/prenotazioni   # 401: senza login niente dati

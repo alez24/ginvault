@@ -3,7 +3,7 @@
 #
 # Tre oggetti:
 #   1) ConfigMap   -> configurazione NON segreta (indirizzi, nomi), come variabili
-#   2) Deployment  -> il pod con il container ginvault/edizioni:0.6
+#   2) Deployment  -> il pod con il container ginvault/edizioni:0.7
 #   3) Service     -> nome DNS stabile "edizioni" (lo usa il gateway)
 #
 # Le stesse variabili d'ambiente che docker-compose.yml passa al container:
@@ -81,6 +81,21 @@ spec:
         # Pubblica e consuma eventi: la NetworkPolicy di Kafka lo fa entrare
         # (networkpolicy-kafka.yaml), come la rete kafka-net di Compose
         ginvault/usa-kafka: "true"
+      annotations:
+        # Istio (k8s/istio/): di tutte le statistiche di Envoy il sidecar ne
+        # espone poche, per risparmiare memoria. Qui si accendono quelle del
+        # cluster verso Ricette, per vedere il circuit breaker
+        # (circuit-breaker-ricette.yaml): outlier_detection.*,
+        # upstream_rq_pending_overflow, upstream_rq_retry, upstream_rq_timeout...
+        # Il nome di Istio per quel cluster finisce con ";" (es.
+        # cluster.outbound|8082||ricette.ginvault.svc.cluster.local;.upstream_rq_total):
+        # il prefisso si ferma prima.
+        #   kubectl exec -n ginvault deploy/edizioni -c istio-proxy -- pilot-agent request GET stats
+        # Senza Istio l'annotazione non fa niente.
+        proxy.istio.io/config: |
+          proxyStatsMatcher:
+            inclusionPrefixes:
+              - "cluster.outbound|8082||ricette.ginvault.svc.cluster.local"
     spec:
       enableServiceLinks: false   # vedi edizioni-db.yaml
       containers:
@@ -92,7 +107,7 @@ spec:
           #       TiraturaAumentata e RicalcoloRifiutato
           # 0.6 = storia di Giulia: prelazione, prenotazioni, SAGA del pagamento
           #       (pagamenti.comandi -> pagamenti.esiti), numeri di bottiglia
-          image: ginvault/edizioni:0.6
+          image: ginvault/edizioni:0.7
           imagePullPolicy: Never
           ports:
             - name: http
