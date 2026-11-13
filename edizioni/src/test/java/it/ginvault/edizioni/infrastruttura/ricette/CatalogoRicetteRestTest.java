@@ -1,9 +1,11 @@
 package it.ginvault.edizioni.infrastruttura.ricette;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.okJson;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.serverError;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,11 +20,14 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 
 import it.ginvault.edizioni.dominio.CatalogoRicetteNonDisponibile;
 import it.ginvault.edizioni.dominio.FormulazioneInCatalogo;
+import it.ginvault.edizioni.dominio.RiferimentoFormulazione;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -30,8 +35,8 @@ import org.springframework.web.client.RestClient;
 
 /**
  * L'adapter da solo, senza Spring: traduzione del JSON di Ricette nel modello
- * di Edizioni, token relay e cosa succede quando Ricette è spento o risponde
- * in modo inatteso.
+ * di Edizioni, token relay e cosa succede quando Ricette è spento, è fermo
+ * dietro un proxy (502, 503, 504) o risponde in modo inatteso.
  */
 class CatalogoRicetteRestTest {
 
@@ -116,6 +121,26 @@ class CatalogoRicetteRestTest {
                 """.formatted(ID))));
         assertThatThrownBy(() -> adapter.trova(ID))
                 .isInstanceOf(CatalogoRicetteNonDisponibile.class).hasMessageContaining("in modo inatteso");
+    }
+
+    /** Le risposte del sidecar di Istio: "no healthy upstream" (503), "upstream request timeout" (504). */
+    @ParameterizedTest
+    @ValueSource(ints = {502, 503, 504})
+    void ricetteFermoDietroIlProxyDiventaNonDisponibile(int codice) {
+        CatalogoRicetteRest adapter = adapterVerso(RICETTE.baseUrl());
+        RICETTE.stubFor(get(urlEqualTo("/formulazioni/" + ID))
+                .willReturn(aResponse().withStatus(codice).withBody("no healthy upstream")));
+        RICETTE.stubFor(post(urlEqualTo("/formulazioni/" + ID + "/utilizzo"))
+                .willReturn(aResponse().withStatus(codice).withBody("upstream request timeout")));
+
+        assertThatThrownBy(() -> adapter.trova(ID))
+                .isInstanceOf(CatalogoRicetteNonDisponibile.class)
+                .hasMessage("Ricette non è disponibile in questo momento: l'edizione non è stata creata."
+                        + " Riprova tra poco.");
+        assertThatThrownBy(() -> adapter.segnaUsata(new RiferimentoFormulazione(ID, 1), UUID.randomUUID()))
+                .isInstanceOf(CatalogoRicetteNonDisponibile.class)
+                .hasMessageStartingWith("Ricette non è disponibile e non ha confermato l'utilizzo")
+                .hasMessageContaining("l'edizione non è stata creata");
     }
 
     private static CatalogoRicetteRest adapterVerso(String indirizzo) {

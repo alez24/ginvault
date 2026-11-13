@@ -218,9 +218,8 @@ await api('GET', `/api/edizioni/edizioni/${e.id}`);
 Atteso:
 
 - la POST risponde **503** con `Retry-After: 5`, titolo "Ricette non disponibile"
-  e un messaggio chiaro ("Ricette ha risposto in modo inatteso alla lettura
-  della formulazione ...: l'edizione non è stata creata. Riprova tra poco."),
-  senza stack trace. Arriva **subito**: il sidecar Istio di Edizioni sa da
+  e un messaggio chiaro ("Ricette non è disponibile in questo momento:
+  l'edizione non è stata creata. Riprova tra poco."), senza stack trace. Arriva **subito**: il sidecar Istio di Edizioni sa da
   istiod che il Service non ha pod e risponde da solo 503 `no healthy upstream`,
   che Edizioni traduce nel suo 503. Lo si vede anche senza login:
   `kubectl exec -n ginvault deploy/edizioni -c edizioni -- wget -qO- -T 5 http://ricette:8082/health`

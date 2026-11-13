@@ -158,7 +158,7 @@ Da PowerShell, nella cartella del progetto:
 
 ```powershell
 # 1) Immagini, costruite DENTRO il nodo Minikube (nessun registry)
-minikube image build -t ginvault/edizioni:0.6 .\edizioni
+minikube image build -t ginvault/edizioni:0.7 .\edizioni
 minikube image build -t ginvault/ricette:0.2  .\ricette
 minikube image build -t ginvault/pagamenti:0.1 .\pagamenti
 minikube image build -t ginvault/notifiche:0.1 .\notifiche
@@ -320,7 +320,7 @@ mostrano: `edizioni` → `edizioni-69d76847b5` (hash del template) →
 
 | | edizioni-db | edizioni | gateway | frontend |
 |---|---|---|---|---|
-| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.6` | `ginvault/gateway:0.3` | `ginvault/frontend:0.4` (nginx) |
+| Immagine | `postgres:17-alpine` | `ginvault/edizioni:0.7` | `ginvault/gateway:0.3` | `ginvault/frontend:0.4` (nginx) |
 | Repliche | 1 | 1 (scalabile: è stateless) | 1 (sessione e chiave in memoria) | 2 (solo file statici) |
 | Strategia | `Recreate` (mai due Postgres sullo stesso volume) | `RollingUpdate` | `RollingUpdate` | `RollingUpdate`, `maxSurge 1`, `maxUnavailable 0` |
 | startupProbe | `pg_isready`, fino a 60 s | `/health/liveness`, fino a 2 min | `/health/liveness`, fino a 2 min | nessuna: nginx parte in un attimo |
@@ -1068,7 +1068,8 @@ ogni chiamata:
 - se riprovare;
 - se vale ancora la pena chiamare un pod.
 
-Il codice di edizioni non cambia.
+Nel codice di edizioni non c'è niente di tutto questo: traduce solo i 502, 503
+e 504 di Envoy nel suo 503 (vedi sotto).
 
 ```
 edizioni (applicazione)   aspetta 2 s, poi 503 "Ricette non disponibile" a Marco
@@ -1159,10 +1160,13 @@ Che cosa succede a una chiamata di edizioni:
 
 In tutti i casi di errore Marco riceve lo stesso 503 "Ricette non disponibile",
 con `Retry-After: 5`, e nessuna edizione viene creata. Il testo cambia:
-- per un 503 o 504 di Envoy il codice dice "Ricette ha risposto in modo
-  inatteso…", perché tratta ogni 5xx come una risposta inattesa;
+- per un 502, 503 o 504 di Envoy (`CatalogoRicetteRest`, da edizioni 0.7):
+  "Ricette non è disponibile in questo momento: l'edizione non è stata creata.
+  Riprova tra poco." Nel log di edizioni c'è la causa, per esempio
+  `503 Service Unavailable: "no healthy upstream"`;
 - "Ricette non risponde… più lento di 2 secondi" resta per il suo timeout, per
-  esempio in Compose, dove Istio non c'è.
+  esempio in Compose, dove Istio non c'è;
+- "Ricette ha risposto in modo inatteso…" resta per un 500 vero di ricette.
 
 ```powershell
 kubectl get destinationrule,virtualservice -n ginvault
@@ -1247,7 +1251,7 @@ impostazioni. Se il cluster non c'è ancora: [Prerequisiti](#prerequisiti-una-vo
 **2. Immagini e Secret**, solo se mancano o se il codice è cambiato:
 
 ```powershell
-minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.6, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
+minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.7, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
 ```
 
 Per un'immagine che manca, il suo `minikube image build` (per magazzino e
@@ -1511,10 +1515,6 @@ vanno perse.
   con i default di Istio.
 - **Il gateway verso Ricette ha i default di Istio**: nessun timeout e fino a 2
   retry su connessione fallita e 503, anche per le POST dal browser.
-- **Il messaggio di edizioni per un 503 o 504 di Envoy** è "Ricette ha risposto
-  in modo inatteso": il risultato è giusto (503, nessuna edizione), il testo
-  meno preciso. Si correggerebbe in `CatalogoRicetteRest`, trattando 502, 503 e
-  504 come "non disponibile".
 - **Limiti del `connectionPool` bassi** (10 connessioni, 5 in coda): bastano
   per il traffico di GinVault e rendono visibile la paratia nella demo, ma 25
   richieste nello stesso istante ne fanno già traboccare qualcuna. In un

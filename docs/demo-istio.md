@@ -299,9 +299,12 @@ ma quanto può aspettare l'utente lo decide l'applicazione.
 ## 9. Dal browser, con il login (facoltativo)
 
 Con un guasto attivo, Marco nel back-office prova a creare un'edizione
-([demo di Marco](demo-storia-marco.md)):
-- **senza circuit breaker** (sezione 4): l'errore "momentaneamente fermo" dopo
-  circa 1,6 s, a ogni tentativo;
+([demo di Marco](demo-storia-marco.md)). L'errore è "Ricette non disponibile",
+con il testo "Ricette non è disponibile in questo momento: l'edizione non è
+stata creata. Riprova tra poco." (edizioni 0.7 traduce così i 502, 503 e 504
+di Envoy):
+- **senza circuit breaker** (sezione 4): l'errore dopo circa 1,6 s, a ogni
+  tentativo;
 - **con il circuito aperto** (sezione 5): l'errore subito;
 - **tolto il guasto**, dopo 30 s l'edizione si crea.
 
@@ -314,9 +317,8 @@ kubectl logs -n ginvault deploy/edizioni -c edizioni --tail=20 | Select-String '
 ```
 
 Anche le pagine delle formulazioni non rispondono: il gateway chiama Ricette, e
-il guasto è sul sidecar di Ricette, quindi vale per tutti. Questa parte non è
-provata senza login: i messaggi sono quelli previsti dal codice
-(`CatalogoRicetteRest`).
+il guasto è sul sidecar di Ricette, quindi vale per tutti. Il testo di edizioni
+per i 502, 503 e 504 è coperto da `CatalogoRicetteRestTest`.
 
 ## 10. Pulizia
 

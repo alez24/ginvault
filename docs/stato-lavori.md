@@ -21,12 +21,13 @@ e il punto esatto in cui siamo arrivati.
   [Istio e circuit breaker](#istio-e-circuit-breaker)) sono fatti sul cluster
   e nei file. Il passo 4 l'ho fatto senza fermarmi, su richiesta dell'utente
   del 12 novembre («fai tutti i passi senza ok»). Il 13 novembre l'utente ha
-  dato l'ok: un commit per Istio, poi un secondo per il messaggio di edizioni
-  (`CatalogoRicetteRest`), push e PR verso `main`.
+  dato l'ok: `7f359c1` per Istio, poi un secondo commit per il messaggio di
+  edizioni (`CatalogoRicetteRest`, edizioni 0.7), push e **PR #7** verso
+  `main`. Dopo il merge: le AuthorizationPolicy.
 - **Fatto dall'utente il 13 novembre:** il login e le demo dal browser, sul
   cluster, funzionano. La chiave Stripe è nel Secret `pagamenti-stripe`
   (controllato il 12 novembre, senza leggerne il valore).
-- Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.6`,
+- Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.7`,
   `ricette:0.2` (2 repliche), `magazzino:0.3`, `produzione:0.4`,
   `pagamenti:0.1` e `notifiche:0.1` (2 repliche), con Istio 1.31.4 (istiod, i
   sidecar nei microservizi e nel front-end, mTLS STRICT tra i sidecar, circuit
@@ -60,6 +61,8 @@ e il punto esatto in cui siamo arrivati.
 | `33a1597` (PR #6) | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
 | `f4e7c9d` (PR #6) | 11 nov | **Giulia, passo 6: pagamenti e notifiche su Kubernetes** (vedi sotto) |
 | `a82d44b` (PR #6) | 11 nov | **Giulia, passo 7: integrazione e demo** (vedi sotto) |
+| `7f359c1` (PR #7) | 13 nov | **Istio e circuit breaker**: i 4 passi (vedi sotto) |
+| (PR #7) | 13 nov | **Edizioni: i 502, 503 e 504 di Istio diventano «Ricette non disponibile»** (edizioni 0.7, vedi sotto) |
 
 Le PR dalla #1 alla #6 sono unite in `main` con merge commit: quello della PR
 #4 è `3d00b6f`, quello della PR #5 è `7af367a`, quello della PR #6 è `1d63dad`
@@ -72,10 +75,10 @@ volta, stop per l'ok, commit solo su richiesta, `.env` mai letto.
 
 | # | Passo | Stato |
 |---|---|---|
-| 1 | Installazione: istioctl, profilo minimal (solo istiod), sidecar solo nei microservizi e nel front-end; NetworkPolicy, probe, test busybox, le tre demo | ✅ commit «Istio e circuit breaker» |
-| 2 | mTLS: PeerAuthentication STRICT tra i microservizi; DB e Kafka senza sidecar raggiungibili; come vedere che edizioni → ricette è cifrato | ✅ commit «Istio e circuit breaker» |
-| 3 | Circuit breaker su Edizioni → Ricette: ricette a 2 repliche, DestinationRule (connectionPool, outlierDetection), VirtualService con timeout e un retry; nel README timeout dell'applicazione e timeout del mesh | ✅ commit «Istio e circuit breaker» |
-| 4 | Demo della resilienza con la fault injection (abort e delay): senza circuit breaker, con il circuito aperto, la richiusura dopo 30 s; `docs/demo-istio.md` | ✅ commit «Istio e circuit breaker» |
+| 1 | Installazione: istioctl, profilo minimal (solo istiod), sidecar solo nei microservizi e nel front-end; NetworkPolicy, probe, test busybox, le tre demo | ✅ `7f359c1` |
+| 2 | mTLS: PeerAuthentication STRICT tra i microservizi; DB e Kafka senza sidecar raggiungibili; come vedere che edizioni → ricette è cifrato | ✅ `7f359c1` |
+| 3 | Circuit breaker su Edizioni → Ricette: ricette a 2 repliche, DestinationRule (connectionPool, outlierDetection), VirtualService con timeout e un retry; nel README timeout dell'applicazione e timeout del mesh | ✅ `7f359c1` |
+| 4 | Demo della resilienza con la fault injection (abort e delay): senza circuit breaker, con il circuito aperto, la richiusura dopo 30 s; `docs/demo-istio.md` | ✅ `7f359c1` |
 
 Vincolo dell'utente: **la memoria**. Minikube ha 8 GiB e si cambiano solo
 ricreando il cluster: prima di installare si misura e si sceglie la
@@ -302,12 +305,14 @@ configurazione più leggera; se ne servisse di più, si chiede prima.
   - `docs/demo-storia-giulia.md`: i pod `2/2`;
   - `README.md`: il circuit breaker non «arriverà con Istio», c'è (righe
     toccate: solo le due frasi; la riga 7 dell'utente resta fuori).
-- **Proposte, non fatte:**
+- **Proposte:**
   - `CatalogoRicetteRest` tratta un 503 o 504 di Envoy come «risposta
     inattesa»: si potrebbero trattare 502, 503 e 504 come «non disponibile»
     (edizioni 0.7). Il suo Javadoc dice ancora che il circuit breaker
-    «arriverà con Istio»;
-  - una ServiceAccount per servizio, dal passo 2.
+    «arriverà con Istio». **Fatto il 13 novembre**, vedi
+    [Il messaggio di edizioni](#il-messaggio-di-edizioni-edizioni-07);
+  - una ServiceAccount per servizio, dal passo 2: si fa dopo il merge, con le
+    AuthorizationPolicy.
 
 ### Passo 4: la demo con i guasti
 
@@ -384,6 +389,50 @@ configurazione più leggera; se ne servisse di più, si chiede prima.
     frequenti;
   - le demo di Elena e di Marco: 18 pod, `2/2`.
 - **Dal browser, con il login:** fatto dall'utente il 13 novembre, funziona.
+
+### Il messaggio di edizioni (edizioni 0.7)
+
+Secondo commit della PR #7, su richiesta dell'utente del 13 novembre.
+
+- **`CatalogoRicetteRest`:**
+  - 502, 503 e 504 (`HttpServerErrorException.BadGateway`,
+    `ServiceUnavailable` e `GatewayTimeout`) diventano «Ricette non è
+    disponibile in questo momento: l'edizione non è stata creata. Riprova tra
+    poco.»; per la POST `/utilizzo`, «Ricette non è disponibile e non ha
+    confermato l'utilizzo della formulazione…»;
+  - prima erano «Ricette ha risposto in modo inatteso…», che resta per il 500
+    vero, per i 401 e 403 e per il JSON illeggibile;
+  - nel log la causa, per esempio `503 Service Unavailable: "no healthy
+    upstream"`;
+  - per Marco non cambia niente: sempre 503 con `Retry-After: 5`, nessuna
+    edizione creata. Cambia solo il testo;
+  - il Javadoc ora dice che il circuit breaker lo fa Istio, con i numeri della
+    DestinationRule e del VirtualService.
+- **`CatalogoRicetteRestTest`:** un test parametrico per 502, 503 e 504, sulla
+  GET della formulazione e sulla POST `/utilizzo`.
+- **Immagine `edizioni:0.7`:**
+  - `k8s/edizioni.yaml`;
+  - il comando di build e la tabella in `k8s/README.md`;
+  - l'elenco delle immagini in `k8s/README.md` e nella demo di Giulia.
+- **Documentazione:**
+  - `k8s/README.md`: il testo per ogni caso nella sezione del circuit
+    breaker; tolto il limite «il messaggio di edizioni»;
+  - `README.md`: una riga nella tabella dei casi di Edizioni chiama Ricette, e
+    una frase sul circuit breaker (la riga 7 dell'utente resta fuori);
+  - `docs/demo-storia-marco.md`, Ricette spento: il nuovo messaggio;
+  - `docs/demo-istio.md`, sezione 9: il messaggio vero di edizioni, quello che
+    il front-end mostra dal Problem Detail. Prima c'era scritto
+    «momentaneamente fermo», che è il testo di riserva del front-end per un
+    503 senza Problem Detail.
+- **Verificato (13 nov):**
+  - 142 test di edizioni verdi (erano 139), con Maven in Docker;
+  - `edizioni:0.7` costruita con `minikube image build`, `kubectl apply -k k8s/`;
+  - il pod `2/2`, avviato in circa 10 s;
+  - da edizioni a ricette `/health` 200, attraverso il sidecar;
+  - nessun EnvoyFilter, `kubectl diff -k k8s/istio/` vuoto;
+  - dall'Ingress `/`, `/soci` e i sei `/health` 200, un'API 401.
+- **Non verificato sul cluster:** il nuovo testo con un guasto vero, perché
+  serve la POST di Marco con il login. Lo coprono i test.
 
 ## La storia di Giulia
 

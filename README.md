@@ -279,6 +279,7 @@ Marco ──POST /api/edizioni/edizioni──▶ gateway ──JWT──▶ ediz
 | formulazione inesistente, non scelta o versione diversa | 422              | no               |
 | già usata (dalla GET, dalla `/utilizzo` o dal vincolo)  | 409              | no               |
 | Ricette spento, irraggiungibile o oltre i 2 s           | 503 + `Retry-After`, messaggio chiaro, nessuno stack trace | no |
+| Ricette fermo per Istio: 502, 503 o 504 del sidecar     | 503 + `Retry-After`, "Ricette non è disponibile in questo momento" | no |
 | nessun JWT / ruolo diverso da DISTILLATORE              | 401 / 403 (Ricette non viene chiamato) | no |
 
 **Limiti, voluti per ora:**
@@ -294,8 +295,9 @@ Marco ──POST /api/edizioni/edizioni──▶ gateway ──JWT──▶ ediz
   un retry sull'altra replica di Ricette e *outlier detection* sono
   configurazione del sidecar Envoy di Edizioni (vedi
   [k8s/README.md](k8s/README.md#istio-circuit-breaker-su-edizioni--ricette)).
-  In Compose, senza Istio, ogni richiesta prova Ricette e al peggio aspetta 2
-  secondi.
+  Edizioni traduce i 502, 503 e 504 del sidecar nel suo 503 "Ricette non
+  disponibile". In Compose, senza Istio, ogni richiesta prova Ricette e al
+  peggio aspetta 2 secondi.
 
 ## Edizione: tiratura, quote e ricalcolo
 

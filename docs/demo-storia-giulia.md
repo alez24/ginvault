@@ -47,7 +47,7 @@ di Pagamenti, il consumer di Notifiche e il protocollo del WebSocket.
   [`k8s/README.md`](../k8s/README.md#demo-completa), passi 1–4, con queste immagini:
 
   ```powershell
-  minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.6, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
+  minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizioni:0.7, ricette:0.2, magazzino:0.3, produzione:0.4, pagamenti:0.1, notifiche:0.1
   ```
 
 - `minikube tunnel` aperto in una PowerShell **da amministratore**.
