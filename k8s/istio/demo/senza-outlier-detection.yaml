@@ -1,0 +1,37 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): la DestinationRule "ricette" SENZA outlierDetection.
+#
+# Stessi timeout, retry e connectionPool, ma nessun circuit breaker: con
+# Ricette lento ogni chiamata aspetta il timeout, anche la centesima.
+#   kubectl apply -f k8s/istio/demo/senza-outlier-detection.yaml
+# Si torna alla configurazione vera con:
+#   kubectl apply -k k8s/istio/
+# (kubectl apply toglie outlierDetection perché non c'è in questo file; il
+# secondo apply lo rimette.)
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  host: ricette
+  # Niente "tls": resta l'mTLS automatico tra i sidecar (peer-authentication.yaml)
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        # Connessioni contemporanee da un sidecar verso tutti i pod di Ricette.
+        # HTTP/1.1: una richiesta per connessione alla volta
+        maxConnections: 10
+        # Dentro il cluster una connessione si apre in meno di un millisecondo:
+        # mezzo secondo basta (il default di Istio è 10 s, più dei 2 di edizioni)
+        connectTimeout: 0.5s
+      http:
+        # Richieste in attesa di una connessione libera; oltre, 503 immediato
+        http1MaxPendingRequests: 5
+        # Richieste attive in tutto, e retry attivi in tutto. I default di Istio
+        # sono praticamente infiniti
+        http2MaxRequests: 10
+        maxRetries: 2

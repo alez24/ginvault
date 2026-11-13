@@ -1,0 +1,27 @@
+# =============================================================================
+# Sidecar "default" del namespace ginvault: cosa conosce ogni Envoy.
+#
+# Senza questo oggetto istiod manda a ogni sidecar la configurazione di TUTTI
+# i Service del cluster (kube-system, ingress-nginx, istio-system...). Così
+# invece ogni Envoy conosce solo i Service di ginvault ("./*") e istiod
+# ("istio-system/*"): meno memoria per sidecar e aggiornamenti più piccoli.
+#
+# Il traffico verso destinazioni che Envoy non conosce passa lo stesso
+# (outboundTrafficPolicy ALLOW_ANY, il default di Istio): per esempio
+# pagamenti -> https://api.stripe.com.
+#
+#   kubectl get sidecar -n ginvault
+#   istioctl proxy-config cluster deploy/edizioni -n ginvault
+#                         i Service che il sidecar di edizioni conosce
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: Sidecar
+metadata:
+  name: default
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  egress:
+    - hosts:
+        - "./*"
+        - "istio-system/*"

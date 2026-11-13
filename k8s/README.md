@@ -3,7 +3,12 @@
 Tutto GinVault su Minikube: front-end, gateway, i sei microservizi (edizioni,
 ricette, produzione, magazzino, pagamenti, notifiche), ciascuno con il suo
 database, esposti con un Ingress, e Kafka per gli eventi tra i servizi. Delle
-NetworkPolicy isolano i database, il front-end, il gateway e Kafka.
+NetworkPolicy isolano i database, il front-end, il gateway e Kafka. Istio (solo
+istiod) mette un sidecar Envoy accanto a ogni microservizio e al front-end, non
+ai database, a Kafka e ai Job: vedi [Istio](#istio-istiod-e-i-sidecar). Tra i
+sidecar il traffico è cifrato con mTLS: vedi [mTLS](#istio-mtls-tra-i-microservizi).
+Sulle chiamate da Edizioni a Ricette (due repliche) il sidecar applica timeout,
+un retry e il circuit breaker: vedi [circuit breaker](#istio-circuit-breaker-su-edizioni--ricette).
 
 ```
 browser
@@ -24,7 +29,7 @@ Service gateway :8080    →  pod gateway     login OAuth2, sessione, firma del 
 Service edizioni :8081   →  pod edizioni ────┘ (chiave pubblica per verificare il JWT)
    │  JDBC          │ REST + stesso JWT (validazione della formulazione, timeout 2 s)
    │                ▼
-   │             Service ricette :8082  →  pod ricette  ── JDBC ──▶ Service ricette-db :5432
+   │             Service ricette :8082  →  2 pod ricette  ── JDBC ──▶ Service ricette-db :5432
    ▼
 Service edizioni-db :5432 → pod Postgres  →  PersistentVolumeClaim (1 GiB)
 
@@ -44,6 +49,13 @@ NetworkPolicy: frontend accetta solo l'Ingress Controller; gateway l'Ingress
 Controller e i microservizi (JWKS); ogni database solo il suo servizio
 (edizioni-db solo edizioni, ..., notifiche-db solo notifiche); kafka solo i pod
 con la label ginvault/usa-kafka.
+
+Istio: istiod nel namespace istio-system; un sidecar Envoy (istio-proxy) nei pod
+dei microservizi e del front-end (2/2), nessuno nei DB, in Kafka e nel Job.
+Tra due sidecar solo mTLS (STRICT); verso DB e Kafka TCP in chiaro, come prima;
+dall'Ingress in chiaro sulla 8080 di frontend e gateway.
+edizioni → ricette: timeout 1,8 s, un retry sull'altro pod, circuit breaker
+(un pod con 3 errori di fila resta fuori 30 s).
 ```
 
 Il gateway inoltra anche `/api/ricette/**` al Service `ricette` e
@@ -68,11 +80,11 @@ proxy di Vite.
 
 | File | Oggetti |
 |---|---|
-| `namespace.yaml` | Namespace `ginvault` |
+| `namespace.yaml` | Namespace `ginvault`, con la label `istio-injection=enabled` |
 | `edizioni-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `edizioni.yaml` | ConfigMap, Deployment, Service |
 | `ricette-db.yaml` | PersistentVolumeClaim, Deployment, Service |
-| `ricette.yaml` | ConfigMap, Deployment, Service |
+| `ricette.yaml` | ConfigMap, Deployment (2 repliche), Service |
 | `magazzino-db.yaml` | PersistentVolumeClaim, Deployment, Service |
 | `magazzino.yaml` | ConfigMap, Deployment, Service (porte `http` 8084 e `grpc` 9084) |
 | `produzione-db.yaml` | PersistentVolumeClaim, Deployment, Service |
@@ -91,6 +103,12 @@ proxy di Vite.
 | `ingress.yaml` | Ingress: `/api`, `/auth`, `/oauth2`, `/login`, `/logout` → gateway; tutto il resto → frontend |
 | `kustomization.yaml` | Elenco dei file: `kubectl apply -k k8s/` li applica tutti |
 | `crea-secret.ps1` | Secret `gateway-segreti` e `pagamenti-stripe` (dal `.env`), `edizioni-db`, `ricette-db`, `magazzino-db`, `produzione-db`, `pagamenti-db` e `notifiche-db` (password casuali) |
+| `istio/installazione.yaml` | La configurazione di Istio per `istioctl install`: profilo minimal, risorse ridotte. Non è in nessun kustomization |
+| `istio/sidecar.yaml` | Sidecar `default`: ogni Envoy conosce solo i Service di ginvault e istiod |
+| `istio/peer-authentication.yaml` | mTLS `STRICT` tra i sidecar; la porta 8080 di frontend e gateway accetta anche l'Ingress in chiaro |
+| `istio/circuit-breaker-ricette.yaml` | DestinationRule (connectionPool, outlierDetection) e VirtualService (timeout, un retry) per le chiamate a Ricette |
+| `istio/kustomization.yaml` | Le risorse di Istio: `kubectl apply -k k8s/istio/`, dopo l'installazione |
+| `istio/demo/` | I guasti per la demo del circuit breaker ([`docs/demo-istio.md`](../docs/demo-istio.md)): EnvoyFilter sul sidecar di Ricette, la DestinationRule senza outlier detection, il `fault` del VirtualService. Non sono in nessun kustomization |
 
 I Secret non stanno in nessun file del repository: li crea lo script.
 
@@ -109,6 +127,19 @@ I Secret non stanno in nessun file del repository: li crea lo script.
 4. Redirect URI registrati sulle app OAuth:
    - Google: `http://localhost/login/oauth2/code/google`
    - GitHub: `http://localhost/login/oauth2/code/github`
+5. `istioctl` 1.31.4, fuori dal repository. Istio 1.31 supporta Kubernetes da
+   1.32 a 1.37 (il cluster è 1.37):
+   ```powershell
+   $v = '1.31.4'; $d = "$HOME\istio"
+   New-Item -ItemType Directory -Force "$d\download", "$d\$v" | Out-Null
+   curl.exe -sSL -o "$d\download\istioctl-$v-win-amd64.zip" "https://github.com/istio/istio/releases/download/$v/istioctl-$v-win-amd64.zip"
+   curl.exe -sSL "https://github.com/istio/istio/releases/download/$v/istioctl-$v-win-amd64.zip.sha256"   # lo sha256 atteso...
+   (Get-FileHash "$d\download\istioctl-$v-win-amd64.zip" -Algorithm SHA256).Hash                         # ...uguale a questo
+   Expand-Archive "$d\download\istioctl-$v-win-amd64.zip" -DestinationPath "$d\$v" -Force
+   Set-Alias istioctl "$d\$v\istioctl.exe"    # per questa PowerShell; per sempre, la cartella nel PATH
+   istioctl version --remote=false            # client version: 1.31.4
+   istioctl x precheck                        # No issues found
+   ```
 
 Note sul cluster:
 
@@ -145,10 +176,15 @@ minikube image build -t ginvault/frontend:0.4 .\frontend   # npm ci, test e buil
 # 2) Namespace e Secret (legge il .env, non stampa i valori)
 .\k8s\crea-secret.ps1
 
-# 3) Tutti gli altri oggetti (la prima volta il nodo scarica apache/kafka:4.3.0 da Docker Hub)
-kubectl apply -k k8s/
+# 3) Istio: istiod in istio-system, una volta per cluster (istioctl: vedi Prerequisiti).
+#    Prima dei pod, così nascono già con il sidecar
+istioctl install -f k8s\istio\installazione.yaml -y
 
-# 4) Attendere che i pod siano pronti
+# 4) Tutti gli altri oggetti (la prima volta il nodo scarica apache/kafka:4.3.0 da Docker Hub)
+kubectl apply -k k8s/
+kubectl apply -k k8s/istio/     # Sidecar, PeerAuthentication (mTLS STRICT), circuit breaker su ricette
+
+# 5) Attendere che i pod siano pronti
 kubectl wait -n ginvault --for=condition=Ready pod -l '!job-name' --timeout=180s   # tutti i pod, tranne quelli dei Job
 kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s         # il Job dei topic Kafka è terminato
 kubectl get pods -n ginvault
@@ -456,7 +492,7 @@ kubectl exec -n ginvault deploy/magazzino-db -- psql -U magazzino -d magazzino -
 kubectl scale statefulset kafka -n ginvault --replicas=0
 
 # 2) Dal browser Elena registra una consegna: risposta 201, come sempre.
-#    magazzino resta 1/1 Ready (la readiness non dipende da Kafka)
+#    magazzino resta 2/2 Ready (la readiness non dipende da Kafka)
 kubectl get pods -n ginvault -l app.kubernetes.io/name=magazzino
 #    La riga è in attesa: pubblicato_il vuoto, tentativi che sale ogni pochi secondi
 #    (stessa query di sopra). Nel log un WARN al primo tentativo, poi uno ogni 30
@@ -765,27 +801,35 @@ non gli serve: le chiamate del browser arrivano al gateway dall'Ingress.
 kubectl get networkpolicy -n ginvault
 kubectl describe networkpolicy gateway-da-ingress-e-servizi -n ginvault
 
+# Con Istio i pod di prova nascono SENZA sidecar (label sidecar.istio.io/inject=false):
+# con il sidecar nc -z direbbe sempre APERTO, perché la connessione la accetta Envoy.
 # Un pod qualsiasi NON raggiunge database, front-end, gateway e Kafka (timeout dopo 3 s)...
 # (virgolette semplici: con le doppie PowerShell sostituirebbe $s prima di passarlo)
-# (magazzino:9084 BLOCCATO anche lui; magazzino:8084, pagamenti:8085 e notifiche:8086 APERTI, sono servizi)
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 pagamenti-db:5432 notifiche-db:5432 frontend:80 gateway:8080 kafka:9092 magazzino:9084 magazzino:8084 pagamenti:8085 notifiche:8086; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
+# (magazzino:9084 BLOCCATO anche lui; magazzino:8084, pagamenti:8085, notifiche:8086 e ricette:8082 APERTI: sono servizi.
+#  APERTO vuol dire che la NetworkPolicy lascia passare: la connessione TCP la accetta Envoy,
+#  ma con l'mTLS STRICT una richiesta HTTP in chiaro viene rifiutata, vedi la sezione mTLS)
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=sidecar.istio.io/inject=false -- sh -c 'for s in edizioni-db:5432 ricette-db:5432 magazzino-db:5432 produzione-db:5432 pagamenti-db:5432 notifiche-db:5432 frontend:80 gateway:8080 kafka:9092 magazzino:9084 magazzino:8084 pagamenti:8085 notifiche:8086 ricette:8082; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done'
 # ...con la label di chi usa Kafka, Kafka risponde
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
-# Da edizioni (ha la label) sì, da ricette (non usa Kafka) no
-kubectl exec -n ginvault deploy/edizioni -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
-kubectl exec -n ginvault deploy/ricette -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
-# Magazzino raggiunge Kafka e il suo database, ma non quello di edizioni
-kubectl exec -n ginvault deploy/magazzino -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO; nc -z -w 3 edizioni-db 5432 && echo edizioni-db APERTO || echo edizioni-db BLOCCATO'
-# Produzione: Kafka, il suo database e la JWKS sì; il database di magazzino no
-kubectl exec -n ginvault deploy/produzione -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO; nc -z -w 3 produzione-db 5432 && echo produzione-db APERTO || echo produzione-db BLOCCATO; nc -z -w 3 magazzino-db 5432 && echo magazzino-db APERTO || echo magazzino-db BLOCCATO'
-# Pagamenti e notifiche: Kafka, il proprio database e la JWKS sì; il database dell'altro no
-kubectl exec -n ginvault deploy/pagamenti -- sh -c 'for s in kafka:9092 pagamenti-db:5432 notifiche-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done; wget -q -T 3 -O /dev/null http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
-kubectl exec -n ginvault deploy/notifiche -- sh -c 'for s in kafka:9092 notifiche-db:5432 pagamenti-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} && echo $s APERTO || echo $s BLOCCATO; done; wget -q -T 3 -O /dev/null http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
-# ...ma raggiunge ricette, che è un servizio
-kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 -- sh -c "nc -z -w 3 ricette 8082 && echo APERTO || echo BLOCCATO"
+kubectl run prova-rete -n ginvault --rm -it --restart=Never --image=busybox:1.36 --labels=sidecar.istio.io/inject=false,ginvault/usa-kafka=true -- sh -c 'nc -z -w 3 kafka 9092 && echo kafka APERTO || echo kafka BLOCCATO'
+
+# Dai microservizi si prova dal container istio-proxy: è lo stesso pod (stesso IP, stesse
+# label per le NetworkPolicy), ma il suo traffico (utente 1337) non passa da Envoy.
+# Da edizioni (ha la label) Kafka sì, da ricette (non usa Kafka) no
+kubectl exec -n ginvault deploy/edizioni -c istio-proxy -- sh -c 'nc -z -w 3 kafka 9092 2>/dev/null && echo APERTO || echo BLOCCATO'
+kubectl exec -n ginvault deploy/ricette -c istio-proxy -- sh -c 'nc -z -w 3 kafka 9092 2>/dev/null && echo APERTO || echo BLOCCATO'
+# Ogni servizio: Kafka e il proprio database sì, quello di un altro no (produzione anche magazzino:9084)
+kubectl exec -n ginvault deploy/magazzino -c istio-proxy -- sh -c 'for s in kafka:9092 magazzino-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} 2>/dev/null && echo $s APERTO || echo $s BLOCCATO; done'
+kubectl exec -n ginvault deploy/produzione -c istio-proxy -- sh -c 'for s in kafka:9092 produzione-db:5432 magazzino-db:5432 magazzino:9084; do nc -z -w 3 ${s%:*} ${s#*:} 2>/dev/null && echo $s APERTO || echo $s BLOCCATO; done'
+# Pagamenti e notifiche: anche la JWKS del gateway
+kubectl exec -n ginvault deploy/pagamenti -c istio-proxy -- sh -c 'for s in kafka:9092 pagamenti-db:5432 notifiche-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} 2>/dev/null && echo $s APERTO || echo $s BLOCCATO; done; curl -sf -o /dev/null -m 3 http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
+kubectl exec -n ginvault deploy/notifiche -c istio-proxy -- sh -c 'for s in kafka:9092 notifiche-db:5432 pagamenti-db:5432 edizioni-db:5432; do nc -z -w 3 ${s%:*} ${s#*:} 2>/dev/null && echo $s APERTO || echo $s BLOCCATO; done; curl -sf -o /dev/null -m 3 http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO'
 
 # Da edizioni (label microservizio) la JWKS del gateway è raggiungibile, il front-end no
-kubectl exec -n ginvault deploy/edizioni -- sh -c "wget -q -T 3 -O /dev/null http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO; wget -q -T 3 -O /dev/null http://frontend/ && echo FRONTEND APERTO || echo FRONTEND BLOCCATO"
+kubectl exec -n ginvault deploy/edizioni -c istio-proxy -- sh -c 'curl -sf -o /dev/null -m 3 http://gateway:8080/.well-known/jwks.json && echo JWKS APERTO || echo JWKS BLOCCATO; curl -sf -o /dev/null -m 3 http://frontend/ && echo FRONTEND APERTO || echo FRONTEND BLOCCATO'
+
+# Il falso positivo, per vederlo: dal container dell'applicazione la connessione la accetta
+# Envoy, e nc dice APERTO anche verso Kafka, che per ricette è bloccato
+kubectl exec -n ginvault deploy/ricette -c ricette -- sh -c 'nc -z -w 3 kafka 9092 && echo APERTO || echo BLOCCATO'
 
 # I servizi raggiungono il proprio database: sono Ready, e la readiness include "db"
 kubectl get pods -n ginvault
@@ -793,10 +837,393 @@ kubectl get pods -n ginvault
 
 Il gateway si fida di una **label**: chi può creare pod nel namespace può darsi
 `component: microservizio` e raggiungerlo. Lo stesso vale per qualsiasi
-NetworkPolicy basata su label; con Istio l'identità diventerà un certificato
-(mTLS) invece di una label.
+NetworkPolicy basata su label. Con l'mTLS di Istio ogni sidecar ha anche un
+certificato, ma per ora tutti i pod usano la ServiceAccount `default` e quindi
+la stessa identità (vedi [mTLS](#istio-mtls-tra-i-microservizi)): per
+autorizzare per identità servirebbe una ServiceAccount per servizio.
 
 Dashboard: **Service → Network Policies**.
+
+### Istio: istiod e i sidecar
+
+Istio 1.31.4, profilo **minimal**: solo il control plane, **istiod**, nel
+namespace `istio-system`. L'Ingress resta quello di nginx, senza ingress
+gateway di Istio. La configurazione è in
+[`istio/installazione.yaml`](istio/installazione.yaml).
+
+```
+kube-apiserver ── crea un pod in ginvault ──▶ webhook istio-sidecar-injector (istiod :15017)
+                                              che aggiunge istio-init e istio-proxy al pod
+pod di edizioni
+  istio-init   init container: regole iptables, il traffico del pod passa da Envoy
+  istio-proxy  sidecar nativo: Envoy, :15001 in uscita, :15006 in entrata, :15020 probe
+               └─ collegato a istiod :15012 (xDS): Service, endpoint, certificati
+  edizioni     l'applicazione, che non sa niente di Istio
+```
+
+Gli oggetti:
+
+- **istiod** (`Deployment` in `istio-system`): calcola la configurazione di
+  ogni Envoy (xDS) e firma i certificati dei sidecar. Una replica, senza
+  autoscaling, con 100m / 256Mi richiesti; ne usa circa 60 MiB.
+- **`MutatingWebhookConfiguration` `istio-sidecar-injector`**: per ogni pod
+  nuovo l'API server chiede a istiod di completarlo.
+  - La label `istio-injection=enabled` del namespace (in `namespace.yaml`) lo
+    accende per ginvault.
+  - La label `sidecar.istio.io/inject: "false"` nel template del pod lo spegne
+    per quel pod: i sei database, `kafka-0` e il Job `kafka-topic`.
+- **Il sidecar `istio-proxy`** (Envoy). Con Kubernetes 1.37 è un **sidecar
+  nativo**: sta tra gli `initContainers` con `restartPolicy: Always`, parte
+  prima dell'applicazione e si ferma dopo, e un Job con il sidecar
+  finirebbe lo stesso.
+  - `istio-init` scrive le regole iptables che mandano a Envoy il traffico del
+    pod; quello dell'utente 1337 (Envoy stesso) resta fuori.
+  - Risorse: 10m / 48Mi richiesti, limite 500m / 256Mi, un thread. Ognuno usa
+    27-30 MiB.
+  - `holdApplicationUntilProxyStarts`: l'applicazione parte quando Envoy è
+    pronto, perché i servizi Java si collegano subito a DB, Kafka e JWKS.
+- **Le probe**: il webhook le riscrive verso l'agente del sidecar,
+  `:15020/app-health/<container>/readyz` (e `livez`, `startupz`), che le passa
+  all'applicazione. Arrivano dal kubelet come prima: kindnet le lascia passare
+  anche verso frontend, gateway e magazzino, che hanno una NetworkPolicy.
+- **`Sidecar` `default`** ([`istio/sidecar.yaml`](istio/sidecar.yaml)): ogni
+  Envoy conosce solo i Service di ginvault e istiod. Le destinazioni fuori,
+  come api.stripe.com, passano lo stesso (`outboundTrafficPolicy` `ALLOW_ANY`).
+- **`appProtocol: tcp`** sulle porte dei database e di Kafka: Envoy passa i
+  byte così come sono, senza provare a riconoscere il protocollo.
+
+Per le applicazioni non cambia niente: `edizioni → ricette:8082` diventa
+edizioni → Envoy di edizioni → Envoy di ricette → ricette. Tra i due Envoy il
+traffico è in mTLS, e dalla [PeerAuthentication](#istio-mtls-tra-i-microservizi)
+in poi solo in mTLS.
+
+```powershell
+istioctl version                                  # client, control plane e data plane 1.31.4
+kubectl get pods -n istio-system                  # istiod 1/1 Running
+istioctl proxy-status                             # gli 11 sidecar, sincronizzati con istiod
+kubectl get pods -n ginvault                      # 2/2 i microservizi e il front-end, 1/1 DB e Kafka
+kubectl get pod -n ginvault -l app.kubernetes.io/name=edizioni -o jsonpath='{.items[0].spec.initContainers[*].name}'          # istio-init istio-proxy
+kubectl get pod -n ginvault -l app.kubernetes.io/name=gateway -o jsonpath='{.items[0].spec.containers[0].readinessProbe.httpGet}'  # porta 15020
+kubectl top pods -n ginvault --containers | Select-String istio-proxy
+istioctl proxy-config cluster deploy/edizioni -n ginvault     # i Service che il sidecar di edizioni conosce
+kubectl logs -n ginvault deploy/edizioni -c istio-proxy --tail=20
+# Le richieste di edizioni a ricette, contate dal sidecar (metriche di Istio)
+kubectl exec -n ginvault deploy/edizioni -c istio-proxy -- pilot-agent request GET stats/prometheus | Select-String 'istio_requests_total.*destination_service_name="ricette"'
+```
+
+Un pod creato prima dell'installazione non ha il sidecar: `kubectl rollout
+restart deployment/<nome> -n ginvault`, due alla volta, perché ogni pod nuovo
+parte prima che il vecchio si fermi. Di tutte le statistiche di Envoy Istio
+ne espone poche, per risparmiare memoria: quelle del circuit breaker si
+accendono solo sul sidecar di edizioni.
+
+**Verificato l'11 novembre**, dopo l'installazione:
+
+- memoria del container minikube da 3,66 a 4,1 GiB su 8: istiod 57 MiB, i 10
+  sidecar 281 MiB in tutto;
+- NetworkPolicy: il test qui sopra dà gli stessi risultati di prima di Istio;
+- dall'Ingress: le pagine `200`, `/api/<servizio>/health` `200` per i sei
+  servizi, le API `401` senza sessione;
+- edizioni → ricette: `server: envoy` nella risposta, e la richiesta in
+  `istio_requests_total`;
+- produzione → magazzino:9084 in gRPC: `grpcurl` dal pod di produzione (un
+  container effimero, `kubectl debug`) riceve `UNAUTHENTICATED` da magazzino,
+  e il sidecar di magazzino conta la chiamata (`source_workload="produzione"`,
+  `grpc_response_status="16"`);
+- WebSocket: dal pod di notifiche l'upgrade di `/avvisi` riceve `101` da Envoy
+  e poi la chiusura 4401 dell'applicazione;
+- Kafka: i consumer group di edizioni, produzione, pagamenti e notifiche con i
+  loro membri; pagamenti → api.stripe.com attraverso Envoy.
+
+Dashboard:
+- namespace `istio-system` → **Workloads → Deployments → istiod**;
+- namespace `ginvault` → **Workloads → Pods →** un pod: tra i container ci
+  sono `istio-init` e `istio-proxy`;
+- **Custom Resource Definitions → sidecars.networking.istio.io**: il `Sidecar`
+  `default`.
+
+### Istio: mTLS tra i microservizi
+
+Con l'**mTLS** (TLS reciproco) client e server si mostrano a vicenda un
+certificato: il traffico è cifrato e ognuno sa che dall'altra parte c'è un
+sidecar del mesh. Lo fanno i due Envoy. Le applicazioni continuano a parlare
+HTTP e gRPC in chiaro, ma solo dentro il proprio pod.
+
+```
+pod di edizioni                                         pod di ricette
+  edizioni ─ HTTP in chiaro ─▶ Envoy ══ mTLS, eth0 ══▶ Envoy ─ HTTP in chiaro, lo ─▶ ricette
+
+pod senza sidecar (busybox) ─ HTTP in chiaro ─▶ Envoy di ricette: connessione chiusa
+edizioni ─▶ Envoy ─ TCP in chiaro ─▶ edizioni-db, kafka       (dall'altra parte nessun sidecar)
+ingress-nginx ─ HTTP in chiaro ─▶ Envoy di frontend e gateway, porta 8080 (PERMISSIVE)
+```
+
+Gli oggetti, in [`istio/peer-authentication.yaml`](istio/peer-authentication.yaml):
+
+- **PeerAuthentication `default`**, senza selector: `STRICT` per tutto il
+  namespace. Il sidecar di ogni microservizio accetta solo connessioni mTLS,
+  cioè da un altro sidecar.
+- **`frontend-da-ingress` e `gateway-da-ingress`**: `STRICT` anche loro, tranne
+  la porta 8080 (quella del container, non del Service), che è `PERMISSIVE`.
+  - Il controller ingress-nginx non ha il sidecar: con `STRICT` le sue
+    richieste sarebbero rifiutate e `http://localhost` risponderebbe 502.
+  - Sulla stessa porta i microservizi scaricano la JWKS del gateway, e arrivano
+    comunque in mTLS.
+  - Chi altro può arrivarci in chiaro lo decidono le NetworkPolicy.
+
+Una PeerAuthentication decide solo che cosa un sidecar accetta **in entrata**.
+In uscita ci pensa l'**auto mTLS**: il sidecar del client usa mTLS verso i pod
+con la label `security.istio.io/tlsMode: istio` (la mette il webhook insieme al
+sidecar), TCP in chiaro verso gli altri. Per questo:
+- database e Kafka, senza sidecar, si raggiungono come prima: dall'altra parte
+  non c'è un Envoy che possa rifiutare la connessione;
+- le probe non cambiano: il kubelet chiama la 15020 dell'agente, che la
+  PeerAuthentication non tocca;
+- `kubectl port-forward` e `kubectl exec` funzionano come prima: entrano nel pod
+  da localhost, senza passare da Envoy.
+
+**I certificati.** Li firma istiod, che fa da CA del mesh (`O=cluster.local`;
+la sua radice dura 10 anni), con l'identità SPIFFE della ServiceAccount del pod.
+Durano 24 ore e il sidecar li rinnova da solo, senza riavvii. Tutti i pod di
+ginvault usano la ServiceAccount `default`, quindi hanno tutti la stessa
+identità, `spiffe://cluster.local/ns/ginvault/sa/default`. L'mTLS cifra e
+garantisce che il client sia nel mesh, ma non distingue edizioni dal gateway.
+Con una ServiceAccount per servizio, una `AuthorizationPolicy` potrebbe dire
+"ricette accetta solo edizioni e il gateway".
+
+**Come verificare che edizioni → ricette è cifrato.** Tre prove: la
+configurazione, le metriche del sidecar di ricette, i pacchetti sul filo.
+
+```powershell
+# La configurazione
+kubectl get peerauthentication -n ginvault          # default, frontend-da-ingress, gateway-da-ingress: STRICT
+$r = kubectl get pod -n ginvault -l app.kubernetes.io/name=ricette -o jsonpath='{.items[0].metadata.name}'
+istioctl x describe pod $r -n ginvault              # "Workload mTLS mode: STRICT"
+$g = kubectl get pod -n ginvault -l app.kubernetes.io/name=gateway -o jsonpath='{.items[0].metadata.name}'
+istioctl x describe pod $g -n ginvault              # STRICT, "8080: PERMISSIVE"
+istioctl proxy-config secret deploy/ricette -n ginvault   # "default" (il certificato, 24 ore) e "ROOTCA"
+
+# Le metriche: le richieste ricevute dal sidecar di ricette, una riga per chiamante.
+# Da edizioni e dal gateway: mutual_tls, con l'identità del chiamante.
+# I contatori ripartono da zero quando il pod si riavvia. Una riga "unknown none" è
+# di prima della PeerAuthentication: con STRICT il chiaro non arriva a una richiesta.
+kubectl exec -n ginvault deploy/ricette -c istio-proxy -- pilot-agent request GET stats/prometheus 2>$null | Select-String 'istio_requests_total\{reporter="destination"' | ForEach-Object { if ($_.Line -match 'source_workload="([^"]*)".*source_principal="([^"]*)".*response_code="([^"]*)".*connection_security_policy="([^"]*)"\} (\d+)') { '{0,-10} {1,-11} {2} {3} {4}' -f $Matches[1], $Matches[4], $Matches[3], $Matches[5], $Matches[2] } }
+#   edizioni   mutual_tls  200 6 spiffe://cluster.local/ns/ginvault/sa/default
+#   gateway    mutual_tls  200 2 spiffe://cluster.local/ns/ginvault/sa/default
+
+# I pacchetti: tcpdump in un container effimero nel pod di ricette. Con --profile=netadmin
+# può catturare; parte da solo e cattura per 60 s. Ogni container effimero vuole un nome
+# nuovo e resta nella spec del pod (terminato) finché il pod non si ricrea.
+$c = "cattura-$(Get-Random -Maximum 100000)"
+kubectl debug -n ginvault $r --image=alpine:3.22 --profile=netadmin --container=$c --quiet -- sh -c 'apk add -q tcpdump && timeout 60 tcpdump -i any -nn -A -l tcp port 8082 and greater 100' | Out-Null
+do { Start-Sleep -Seconds 1 } until ((kubectl logs -n ginvault $r -c $c 2>$null) -match 'listening on')
+# Entro i 60 s, due richieste. Da un pod senza sidecar, in chiaro: la NetworkPolicy lascia
+# passare (ricette non ne ha), ma Envoy chiude la connessione: "Connection reset by peer", RIFIUTATA
+kubectl run prova-chiaro -n ginvault --rm -i --restart=Never --image=busybox:1.36 --labels=sidecar.istio.io/inject=false -- sh -c 'wget -q -T 3 -O /dev/null http://ricette:8082/health && echo RISPOSTA || echo RIFIUTATA'
+# Da edizioni, attraverso il suo sidecar: RISPOSTA
+kubectl exec -n ginvault deploy/edizioni -c edizioni -- sh -c 'wget -q -O /dev/null http://ricette:8082/health && echo RISPOSTA || echo RIFIUTATA'
+# Che cosa ha visto la scheda di rete
+kubectl logs -n ginvault $r -c $c | Select-String -Pattern 'Flags', 'GET /health'
+```
+
+Nella cattura (gli IP cambiano; `kubectl get pods -n ginvault -o wide`):
+
+| Riga | Che cos'è |
+|---|---|
+| `eth0 In IP 10.244.0.55.… > 10.244.0.35.8082`, poi `GET /health HTTP/1.1` | busybox: la richiesta passa sul filo in chiaro, e viene rifiutata |
+| `eth0 In IP 10.244.0.50.… > 10.244.0.35.8082`, più pacchetti, nessun `GET` | edizioni: handshake TLS e dati cifrati, illeggibili |
+| `lo In IP 127.0.0.6.… > 10.244.0.35.8082`, poi `GET /health HTTP/1.1` | l'Envoy di ricette passa all'applicazione la richiesta di edizioni, decifrata, dentro il pod |
+| `lo In IP 127.0.0.6.…`, poi `GET /health/readiness` o `/health/liveness` | le probe, che l'agente del sidecar passa all'applicazione |
+
+**Verificato il 12 novembre**, con la PeerAuthentication applicata:
+- `istioctl x describe`: STRICT su ricette; sul gateway STRICT e la 8080 PERMISSIVE;
+- da un pod senza sidecar, HTTP in chiaro verso ricette, magazzino, pagamenti e
+  notifiche: `Connection reset by peer`;
+- dall'Ingress: `/` e `/soci` `200`, `/api/<servizio>/health` `200` per i sei
+  servizi, le API `401` senza sessione;
+- edizioni riavviato sotto STRICT: database, Kafka (6 partizioni) e JWKS a
+  posto, nessun errore;
+- le metriche: edizioni e il gateway verso ricette in `mutual_tls`; gRPC
+  produzione → magazzino (`grpc_response_status="16"`) e WebSocket verso
+  notifiche (`101`) in `mutual_tls`;
+- la cattura qui sopra: edizioni cifrato su `eth0`, busybox in chiaro e
+  rifiutato;
+- `kubectl port-forward` verso ricette: `200`;
+- memoria del container minikube: 4,33 GiB su 8.
+
+Dashboard: **Custom Resource Definitions → peerauthentications.security.istio.io**,
+namespace `ginvault`: le tre PeerAuthentication.
+
+### Istio: circuit breaker su Edizioni → Ricette
+
+Quando Marco crea un'edizione, edizioni chiama ricette due volte e aspetta al
+massimo 2 secondi:
+- `GET /formulazioni/{id}`, la lettura della formulazione;
+- `POST /formulazioni/{id}/utilizzo`, che la segna usata. Per la stessa
+  edizione si può ripetere senza danni.
+
+Su Kubernetes ricette ha **due repliche**, e il sidecar di edizioni decide per
+ogni chiamata:
+- quanto aspettare;
+- se riprovare;
+- se vale ancora la pena chiamare un pod.
+
+Il codice di edizioni non cambia.
+
+```
+edizioni (applicazione)   aspetta 2 s, poi 503 "Ricette non disponibile" a Marco
+  └─ Envoy di edizioni    VirtualService:   1,8 s in tutto, 0,8 s a tentativo, 1 retry su un ALTRO pod
+       │                  DestinationRule:  al massimo 10 connessioni e 5 richieste in coda;
+       │                                    3 errori 5xx di fila → pod escluso per 30 s
+       ├──▶ ricette, pod A
+       └──▶ ricette, pod B
+```
+
+Gli oggetti, in [`istio/circuit-breaker-ricette.yaml`](istio/circuit-breaker-ricette.yaml):
+
+- **DestinationRule `ricette`**: *come* si parla con i pod di ricette. La
+  applica ogni sidecar che chiama ricette, quindi anche quello del gateway.
+  - `connectionPool`:
+    - al massimo 10 connessioni e 5 richieste in attesa; oltre, Envoy risponde
+      subito 503 invece di accodare (`upstream_rq_pending_overflow`). È una
+      paratia (*bulkhead*): un picco di edizioni non affoga ricette;
+    - `connectTimeout` 0,5 s, invece dei 10 s di default, che sarebbero più
+      dei 2 s di edizioni;
+    - al massimo 2 retry in corso. I default di Istio sono praticamente
+      infiniti.
+  - `outlierDetection`, il **circuit breaker**:
+    - un pod con 3 errori 5xx di fila è escluso per 30 s. Contano anche i
+      tentativi scaduti e le connessioni fallite, quindi viene escluso anche
+      un pod lento, non solo uno che sbaglia;
+    - con `maxEjectionPercent: 100` si possono escludere tutti e due i pod. Il
+      circuito è aperto: Envoy risponde 503 `no healthy upstream` senza
+      chiamare ricette;
+    - `interval: 1s`: Envoy ricontrolla ogni secondo, quindi un pod escluso
+      torna dopo 30 s, non dopo 30-40;
+    - un pod escluso più volte di fila resta fuori 30, poi 60, poi 90 s;
+    - `minHealthPercent: 0`: niente *panic mode*, cioè Envoy non torna a
+      chiamare i pod esclusi quando ne restano pochi.
+- **VirtualService `ricette`**: *quanto* aspettare e *se* riprovare.
+  - La route `da-edizioni` vale solo per le chiamate del sidecar di edizioni
+    (`sourceLabels`):
+    - `timeout: 1.8s` in tutto;
+    - `perTryTimeout: 0.8s` a tentativo;
+    - `attempts: 1`, un solo retry, su un pod diverso: Istio esclude quello
+      appena provato (`previous_hosts`);
+    - `retryOn`: solo 502, 503, 504, tentativo scaduto, connessione fallita o
+      rifiutata. Un 500 è un errore dell'applicazione e sarebbe uguale anche
+      sull'altro pod.
+  - La route `altri` è quella del gateway (`/api/ricette/**` dal browser):
+    restano i default di Istio, cioè nessun timeout e fino a 2 retry su
+    connessione fallita e 503.
+- In [`ricette.yaml`](ricette.yaml) `replicas: 2`: ricette non ha stato in
+  memoria né lavori pianificati, tutto è nel database.
+- In [`edizioni.yaml`](edizioni.yaml) l'annotazione `proxy.istio.io/config`
+  accende, solo sul sidecar di edizioni, le statistiche di Envoy del cluster
+  verso ricette (`outlier_detection.*`, `upstream_rq_*`). Di default Istio
+  non le espone.
+
+**Timeout dell'applicazione e timeout del mesh: chi decide cosa.**
+
+| | Timeout dell'applicazione | Timeout del mesh |
+|---|---|---|
+| Dove | `ricette.timeout: 2s` in [`edizioni/.../application.yml`](../edizioni/src/main/resources/application.yml), usato da `CatalogoRicetteRest` | `timeout` e `retries` nel VirtualService, `connectTimeout` nella DestinationRule |
+| Chi lo decide | Chi scrive edizioni: quanto può aspettare Marco e che cosa rispondergli se Ricette non c'è (503 con `Retry-After`, nessuna edizione creata) | Chi gestisce la piattaforma: quanto aspettare un pod, se riprovare su un altro, quando smettere di chiamare un pod che sbaglia |
+| Che cosa sa | Il significato della chiamata: 404 vuol dire formulazione inesistente (422 a Marco), 409 già usata | Solo il trasporto: codici 5xx, timeout, connessioni. Non sa che cos'è una formulazione |
+| Come si cambia | Nuova immagine o variabile d'ambiente, e riavvio del pod | `kubectl apply`, attivo in pochi secondi, senza riavvii |
+| Dove vale | Ovunque: Compose, test, Kubernetes | Solo su Kubernetes con Istio |
+
+La regola è che **il timeout del mesh, retry compresi, sta dentro quello
+dell'applicazione**: 0,8 + 0,8 s, più circa 25 ms tra i due tentativi, fa meno
+di 1,8 s, che è meno di 2 s. Così:
+- edizioni riceve sempre una risposta da Envoy prima di arrendersi da sola: al
+  peggio un 504 `upstream request timeout`, che traduce nel suo 503;
+- Envoy non riprova mai per una richiesta che edizioni ha già abbandonato. Al
+  contrario, con il mesh a 5 s e l'applicazione a 2 s, Marco avrebbe già il suo
+  503 e ricette, già in difficoltà, riceverebbe lo stesso i retry;
+- i retry non si moltiplicano, perché edizioni non riprova per conto suo. Con
+  un retry nel codice e uno nel mesh, una chiamata diventerebbe fino a 4
+  tentativi.
+
+Che cosa succede a una chiamata di edizioni:
+
+| Situazione | Envoy di edizioni | edizioni riceve |
+|---|---|---|
+| Tutto bene | Sceglie uno dei due pod (*least request*) | La risposta di ricette |
+| Un pod risponde 503 o non risponde entro 0,8 s | Riprova sull'altro pod | La risposta dell'altro pod, nessun errore |
+| Un pod sbaglia 3 volte di fila | Lo esclude per 30 s e manda tutto all'altro | Nessun errore |
+| Sbagliano tutti e due | Dopo 3 errori a testa li esclude tutti e due: circuito aperto | Per circa 1 s ancora errori, poi 503 `no healthy upstream` in 1-2 ms, senza chiamare ricette |
+| Dopo 30 s | Riammette i pod. Se sbagliano ancora li riesclude, per 60 s | Di nuovo le risposte di ricette |
+| Nessun pod (`--replicas=0`) | Lo sa da istiod: la lista degli endpoint è vuota | 503 `no healthy upstream` subito |
+| Più di 10 richieste insieme, più 5 in coda | Rifiuta subito le altre (`upstream_rq_pending_overflow`) | 503 |
+
+In tutti i casi di errore Marco riceve lo stesso 503 "Ricette non disponibile",
+con `Retry-After: 5`, e nessuna edizione viene creata. Il testo cambia:
+- per un 503 o 504 di Envoy il codice dice "Ricette ha risposto in modo
+  inatteso…", perché tratta ogni 5xx come una risposta inattesa;
+- "Ricette non risponde… più lento di 2 secondi" resta per il suo timeout, per
+  esempio in Compose, dove Istio non c'è.
+
+```powershell
+kubectl get destinationrule,virtualservice -n ginvault
+kubectl get pods -n ginvault -l app.kubernetes.io/name=ricette       # due pod 2/2
+istioctl analyze -n ginvault                                        # No validation issues found
+# Che cosa è arrivato al sidecar di edizioni
+istioctl proxy-config cluster deploy/edizioni -n ginvault --fqdn ricette.ginvault.svc.cluster.local -o json   # circuitBreakers, outlierDetection, "connectTimeout": "0.500s"
+istioctl proxy-config route deploy/edizioni -n ginvault --name 8082 -o json   # route "da-edizioni": "timeout": "1.800s", retryPolicy
+istioctl proxy-config route deploy/gateway -n ginvault --name 8082 -o json    # il gateway ha solo la route "altri"
+# I due pod visti da edizioni: OUTLIER CHECK OK, oppure FAILED se escluso
+istioctl proxy-config endpoint deploy/edizioni -n ginvault --cluster "outbound|8082||ricette.ginvault.svc.cluster.local"
+
+# Venti chiamate da edizioni, poi le statistiche del suo sidecar e come si sono divise tra i pod
+kubectl exec -n ginvault deploy/edizioni -c edizioni -- sh -c 'for i in $(seq 1 20); do wget -q -O /dev/null http://ricette:8082/health; done'
+kubectl exec -n ginvault deploy/edizioni -c istio-proxy -- pilot-agent request GET stats 2>$null | Select-String 'ricette.*\.(outlier_detection\.ejections_active|upstream_rq_total|upstream_rq_retry|upstream_rq_per_try_timeout|upstream_rq_pending_overflow|upstream_cx_none_healthy|membership_healthy):'
+kubectl get pod -n ginvault -l app.kubernetes.io/name=ricette -o name | ForEach-Object { $_; kubectl exec -n ginvault $_ -c istio-proxy -- pilot-agent request GET stats/prometheus 2>$null | Select-String 'istio_requests_total\{reporter="destination".*source_workload="edizioni"' | ForEach-Object { if ($_.Line -match 'response_code="(\d+)".*connection_security_policy="([^"]*)"\} (\d+)') { "  $($Matches[1]) $($Matches[2]): $($Matches[3])" } } }
+```
+
+Le statistiche sono contatori dall'avvio del sidecar: si guarda come
+cambiano. `ejections_active` dice quanti pod sono esclusi in questo momento,
+`upstream_cx_none_healthy` quante volte Envoy ha risposto `no healthy
+upstream`.
+
+**Verificato il 12 novembre:**
+- configurazione:
+  - `istioctl analyze` senza problemi;
+  - nel sidecar di edizioni i valori della DestinationRule, la route
+    `da-edizioni` con 1,8 s, un retry da 0,8 s e `previous_hosts`;
+  - nel gateway la route `altri`, con i default;
+  - l'mTLS resta: la DestinationRule non tocca `tls`;
+- traffico normale: 20 chiamate da edizioni, tutte 200, divise 12 e 8 tra i
+  due pod, in `mutual_tls`, nessun retry;
+- ricette a zero repliche: 503 `no healthy upstream` in 3 ms. Prima di Istio
+  si aspettavano i 2 s del timeout di edizioni;
+- i guasti della [demo](../docs/demo-istio.md):
+  - un pod guasto nascosto dal retry e poi escluso;
+  - senza circuit breaker 504 dopo 1,6 s a ogni chiamata;
+  - con il circuit breaker `no healthy upstream` in 1 ms e Ricette non più
+    chiamato;
+  - il circuito di nuovo chiuso dopo 30 s;
+  - la coda piena;
+- memoria del container minikube: 4,82 GiB su 8.
+
+**Provare i guasti.** La demo completa, con i comandi, è in
+[`docs/demo-istio.md`](../docs/demo-istio.md). I guasti stanno in
+[`istio/demo/`](istio/demo/) e si mettono dalla **parte di Ricette**: un
+EnvoyFilter aggiunge al suo sidecar, in entrata, il filtro `fault` di Envoy
+(503 o un ritardo). Il `fault.abort` e il `fault.delay` di un VirtualService
+non servono a questo, perché agiscono nel sidecar di chi chiama, prima che
+scelga un pod:
+- con `fault.abort` arriva subito un 503, ma Ricette non viene chiamato e
+  l'outlier detection non conta niente;
+- con `fault.delay` il ritardo passa intero (3 s), perché il timeout della
+  route parte dopo. Lo ferma solo il timeout di edizioni.
+
+Verificato tutte e due le cose.
+
+Dashboard:
+- **Custom Resource Definitions** → `destinationrules.networking.istio.io` e
+  `virtualservices.networking.istio.io`, namespace `ginvault`;
+- **Workloads → Deployments → ricette**: 2/2 pod.
 
 ## Demo completa
 
@@ -826,23 +1253,26 @@ minikube image ls | Select-String ginvault    # frontend:0.4, gateway:0.3, edizi
 Per un'immagine che manca, il suo `minikube image build` (per magazzino e
 produzione `docker build` + `minikube image load`) di
 [Avvio da cluster vuoto](#avvio-da-cluster-vuoto). Su un cluster nuovo anche
-`.\k8s\crea-secret.ps1`.
+`.\k8s\crea-secret.ps1` e `istioctl install -f k8s\istio\installazione.yaml -y`.
 
 **3. Apply.**
 
 ```powershell
 kubectl apply -k k8s/
+kubectl apply -k k8s/istio/
 kubectl wait -n ginvault --for=condition=Ready pod -l '!job-name' --timeout=180s   # tutti i pod, tranne quelli dei Job
 kubectl wait -n ginvault --for=condition=Complete job --all --timeout=180s         # il Job dei topic Kafka è terminato
 kubectl get pods -n ginvault
 ```
 
-Diciassette pod `1/1 Running`: due `frontend`, `gateway`, `edizioni`, `edizioni-db`,
-`ricette`, `ricette-db`, `magazzino`, `magazzino-db`, `produzione`, `produzione-db`,
-`pagamenti`, `pagamenti-db`, due `notifiche`, `notifiche-db`, `kafka-0`. In più il
-pod del Job `kafka-topic`,
-`0/1 Completed`: ha creato i topic ed è terminato. Il Job sparisce da solo
-un'ora dopo, e il prossimo `apply` lo ricrea.
+Diciotto pod `Running`:
+- `2/2`, cioè l'applicazione e il sidecar di Istio: due `frontend`, `gateway`,
+  `edizioni`, due `ricette`, `magazzino`, `produzione`, `pagamenti`, due `notifiche`;
+- `1/1`, senza sidecar: `edizioni-db`, `ricette-db`, `magazzino-db`,
+  `produzione-db`, `pagamenti-db`, `notifiche-db`, `kafka-0`.
+
+In più il pod del Job `kafka-topic`, `0/1 Completed`: ha creato i topic ed è
+terminato. Il Job sparisce da solo un'ora dopo, e il prossimo `apply` lo ricrea.
 
 **4. Tunnel**, in un **PowerShell come amministratore** da lasciare aperto:
 
@@ -896,12 +1326,13 @@ a metà.
    (versione 1), poi nel modulo **Crea l'edizione** scrivi `9` kg (600
    bottiglie) e dividi le quote, ma non crearla ancora.
 2. Spegni Ricette: `kubectl scale deployment/ricette -n ginvault --replicas=0`.
-3. **Crea l'edizione** → dopo circa 2 s (il timeout di Edizioni verso Ricette)
-   compare l'errore "momentaneamente fermo" con **Riprova**. La pagina resta
-   com'era, e in **Edizioni** c'è ancora una sola edizione.
+3. **Crea l'edizione** → compare subito l'errore "momentaneamente fermo" con
+   **Riprova**: il sidecar di Edizioni sa che Ricette non ha pod e risponde 503
+   da solo (senza Istio arriverebbe dopo i 2 s del timeout di Edizioni). La
+   pagina resta com'era, e in **Edizioni** c'è ancora una sola edizione.
 4. Riaccendi Ricette:
    ```powershell
-   kubectl scale deployment/ricette -n ginvault --replicas=1
+   kubectl scale deployment/ricette -n ginvault --replicas=2
    kubectl rollout status deployment/ricette -n ginvault    # aspetta che sia Ready
    ```
 5. **Riprova**: l'edizione viene creata.
@@ -943,7 +1374,7 @@ kubectl exec -n ginvault deploy/edizioni-db -- psql -U edizioni -d edizioni -c "
 
 ```powershell
 kubectl scale deployment/edizioni-db -n ginvault --replicas=0
-kubectl get pods -n ginvault -w          # edizioni passa a 0/1, RESTARTS resta 0
+kubectl get pods -n ginvault -w          # edizioni passa a 1/2 (il sidecar è pronto, l'applicazione no), RESTARTS resta 0
 kubectl get endpointslice -n ginvault -l kubernetes.io/service-name=edizioni
 kubectl scale deployment/edizioni-db -n ginvault --replicas=1
 ```
@@ -956,6 +1387,9 @@ kubectl scale deployment/edizioni -n ginvault --replicas=2
 kubectl get endpointslice -n ginvault -l kubernetes.io/service-name=edizioni   # due IP
 kubectl scale deployment/edizioni -n ginvault --replicas=1
 ```
+
+**Istio**: sidecar, mTLS e circuit breaker con i guasti su Ricette, in
+[`docs/demo-istio.md`](../docs/demo-istio.md).
 
 **Rolling update** con una nuova versione dell'immagine:
 
@@ -1004,7 +1438,7 @@ $b64 = kubectl get secret edizioni-db -n ginvault -o jsonpath='{.data.POSTGRES_U
 | Pod in `ErrImageNeverPull` | Immagine non costruita nel nodo, o tag diverso | `minikube image build ...`, controllare con `minikube image ls` |
 | Pod in `CreateContainerConfigError` | Manca un Secret o una ConfigMap | `.\k8s\crea-secret.ps1`; dettagli in `kubectl describe pod` |
 | Pod in `CrashLoopBackOff` | L'applicazione termina all'avvio | `kubectl logs -n ginvault <pod> --previous` |
-| Pod `0/1 Running` a lungo | La readiness fallisce (edizioni: DB giù?) | Eventi in `kubectl describe pod` |
+| Pod `0/1` o `1/2 Running` a lungo | La readiness fallisce (edizioni: DB giù?) | Eventi in `kubectl describe pod` |
 | `http://localhost` non risponde | Tunnel chiuso | `minikube tunnel` da amministratore |
 | 404 di nginx | Aperto `127.0.0.1` o un host diverso da `localhost` | Usare `http://localhost` |
 | `redirect_uri_mismatch` | URI non registrato sull'app OAuth | Vedi Prerequisiti |
@@ -1018,13 +1452,23 @@ $b64 = kubectl get secret edizioni-db -n ginvault -o jsonpath='{.data.POSTGRES_U
 | Un servizio non raggiunge Kafka (timeout su `kafka:9092`) | Al pod manca la label `ginvault/usa-kafka: "true"` | Aggiungerla nel template del Deployment |
 | Un produttore fallisce con `UnknownTopicOrPartition` | Nome del topic sbagliato: la creazione automatica è spenta | Nomi in [`docs/eventi.md`](../docs/eventi.md); `kafka-topics.sh --list` |
 | `POST /api/...` → 403 subito, senza arrivare al servizio | Manca l'header `X-XSRF-TOKEN` uguale al cookie `XSRF-TOKEN` (CSRF del gateway) | Vedi [`docs/demo-storia-marco.md`](../docs/demo-storia-marco.md) |
-| `POST /api/edizioni/edizioni` → 503 "Ricette non disponibile" | Pod di ricette spento o non Ready | `kubectl get pods -n ginvault`; `kubectl scale deployment/ricette -n ginvault --replicas=1` |
-| Un servizio resta `0/1` dopo aver aggiunto le NetworkPolicy | Label del pod diversa da quella ammessa dalla policy | `kubectl get pods -n ginvault --show-labels` |
+| `POST /api/edizioni/edizioni` → 503 "Ricette non disponibile" | Pod di ricette spento o non Ready | `kubectl get pods -n ginvault`; `kubectl scale deployment/ricette -n ginvault --replicas=2` |
+| Edizioni risponde 503 subito anche con ricette acceso (`no healthy upstream`) | Circuito aperto: il sidecar di edizioni ha escluso i pod dopo 3 errori di fila | `istioctl proxy-config endpoint` di edizioni (vedi [circuit breaker](#istio-circuit-breaker-su-edizioni--ricette)): `OUTLIER CHECK FAILED`. Si richiude da solo dopo 30 s, se ricette risponde |
+| Nessuna statistica `outlier_detection` nel sidecar di edizioni | Manca l'annotazione `proxy.istio.io/config` nel template, o il pod è nato prima | `kubectl rollout restart deployment/edizioni -n ginvault` dopo l'`apply` |
+| Il `fault` del VirtualService dà 503, ma il circuito non si apre | Il fault agisce nel sidecar di chi chiama: Ricette non viene chiamato, nessun pod sbaglia | I guasti di `istio/demo/guasto-*.yaml`, sul sidecar di Ricette ([`docs/demo-istio.md`](../docs/demo-istio.md)) |
+| Ricette resta escluso 60 s invece di 30 | Escluso di nuovo appena riammesso: il tempo cresce a ogni esclusione di fila | Togliere il guasto e aspettare; prima di ogni prova, i due pod `OK` in `proxy-config endpoint` |
+| Dopo `kubectl apply -f k8s/istio/demo/guasto-*.yaml` le prime richieste passano ancora | Il filtro arriva ai sidecar in qualche secondo, e le connessioni già aperte finiscono sulla configurazione di prima | Ripetere le chiamate; controllare la label `ginvault/guasto=si` sui pod |
+| Un servizio resta `0/1` (o `1/2`) dopo aver aggiunto le NetworkPolicy | Label del pod diversa da quella ammessa dalla policy | `kubectl get pods -n ginvault --show-labels` |
 | Un servizio nuovo non verifica i JWT (401, timeout sulla JWKS) | Al pod manca la label `app.kubernetes.io/component: microservizio`, la policy del gateway lo blocca | Aggiungere la label nel template del Deployment |
 | `http://localhost` risponde 502 o 503 di nginx | Pod `frontend` non Ready o non ancora partiti | `kubectl get pods -n ginvault -l app.kubernetes.io/name=frontend` |
 | Dopo il login si finisce su `http://localhost:5173` | È rimasto `FRONTEND_URL` impostato per lo sviluppo con Vite (vedi [`frontend/README.md`](../frontend/README.md)) | `kubectl set env deployment/gateway -n ginvault FRONTEND_URL-` |
 | La porta 80 è occupata, il tunnel non parte | Stack Compose ancora acceso (il front-end usa la 80) | `docker compose down` |
-
+| Un microservizio `1/1` invece di `2/2` | Il pod è nato prima di Istio, o il namespace non ha la label | `kubectl get ns ginvault --show-labels`; `kubectl rollout restart deployment/<nome> -n ginvault` |
+| Un database o `kafka-0` `2/2` | Manca `sidecar.istio.io/inject: "false"` nel template del pod | Aggiungerla nel template: il pod si ricrea senza sidecar |
+| Un pod resta `1/2` | Il sidecar non è pronto (istiod spento?) | `kubectl get pods -n istio-system`; `kubectl logs -n ginvault <pod> -c istio-proxy` |
+| Nel test delle NetworkPolicy è tutto `APERTO` | La prova passa da Envoy, che accetta la connessione | `--labels=sidecar.istio.io/inject=false` su `kubectl run`, `-c istio-proxy` su `kubectl exec` |
+| Da un pod di prova `Connection reset by peer` verso un microservizio | Il pod non ha il sidecar e la PeerAuthentication è `STRICT`: il chiaro è rifiutato. È voluto | Per provare un servizio: `kubectl exec` nel container di un altro microservizio, o `kubectl port-forward` |
+| `http://localhost` risponde 502 dopo `apply -k k8s/istio/` | Manca la porta 8080 `PERMISSIVE` per frontend o gateway: l'Ingress non ha il sidecar | `kubectl get peerauthentication -n ginvault` (servono `frontend-da-ingress` e `gateway-da-ingress`) |
 In PowerShell 5.1: `curl` è un alias di `Invoke-WebRequest`, usare `curl.exe`;
 negli argomenti di `kubectl exec` evitare le virgolette doppie annidate, che
 vanno perse.
@@ -1051,8 +1495,33 @@ vanno perse.
   come le reti `<servizio>-db-net` e `frontend-net` di Compose. I servizi tra
   loro non sono isolati. Un passo successivo è il "default deny" su tutto il
   namespace, con regole esplicite (gateway → servizi, edizioni → ricette).
-  Le policy si fidano delle label; con Istio diventerà autorizzazione per
-  identità (mTLS).
+  Le policy si fidano delle label.
+- **mTLS STRICT, ma un'identità sola**: tutti i pod usano la ServiceAccount
+  `default`, quindi i certificati dicono solo "questo pod è nel mesh di
+  ginvault". Il passo successivo è una ServiceAccount per servizio e delle
+  `AuthorizationPolicy` (ricette solo da edizioni e dal gateway, magazzino:9084
+  solo da produzione): autorizzazione per identità, non per label.
+- **La porta 8080 di frontend e gateway accetta anche il chiaro**, perché
+  l'Ingress è nginx senza sidecar. Con l'ingress gateway di Istio, o con il
+  sidecar nel controller, anche quel tratto sarebbe mTLS.
+- **Circuit breaker solo verso Ricette, e deciso da ogni sidecar per sé.** La
+  DestinationRule vale anche per il gateway, ma ogni Envoy conta i suoi errori:
+  un pod escluso da edizioni può ricevere ancora le chiamate del gateway. Le
+  altre chiamate tra servizi (produzione → magazzino in gRPC, Stripe) restano
+  con i default di Istio.
+- **Il gateway verso Ricette ha i default di Istio**: nessun timeout e fino a 2
+  retry su connessione fallita e 503, anche per le POST dal browser.
+- **Il messaggio di edizioni per un 503 o 504 di Envoy** è "Ricette ha risposto
+  in modo inatteso": il risultato è giusto (503, nessuna edizione), il testo
+  meno preciso. Si correggerebbe in `CatalogoRicetteRest`, trattando 502, 503 e
+  504 come "non disponibile".
+- **Limiti del `connectionPool` bassi** (10 connessioni, 5 in coda): bastano
+  per il traffico di GinVault e rendono visibile la paratia nella demo, ma 25
+  richieste nello stesso istante ne fanno già traboccare qualcuna. In un
+  sistema vero si dimensionano sul traffico misurato.
+- **I guasti della demo sono EnvoyFilter**, cioè configurazione di Envoy così
+  com'è: un'API di basso livello, che può cambiare tra le versioni di Istio.
+  Vanno bene per una demo, non per la configurazione di tutti i giorni.
 - **Stessa immagine del front-end per Compose e Kubernetes**: nginx contiene
   anche il proxy verso `gateway:8080`, che serve a Compose. Su Kubernetes quel
   proxy non riceve traffico, perché l'Ingress manda `/api`, `/auth`, `/oauth2`,
@@ -1063,13 +1532,21 @@ vanno perse.
   (`/api/...`) e la stessa build va bene ovunque, purché pagine e API stiano
   sulla stessa origine.
 - **Solo requests di CPU, nessun limite**: oltre la richiesta un container
-  rallenta invece di fallire.
+  rallenta invece di fallire. Fanno eccezione i sidecar di Istio (vedi sotto).
+- **Istio con il profilo minimal**: solo istiod. L'Ingress resta nginx, senza
+  ingress gateway di Istio, e non ci sono Kiali, Prometheus, Grafana o
+  Jaeger: costerebbero 0,5-1 GiB su 8. Lo stato si legge con `istioctl` e le
+  statistiche di Envoy.
+- **Sidecar con un limite di memoria basso** (256Mi, un thread): il nodo
+  dichiara la memoria della VM di Docker Desktop, non gli 8 GiB del container
+  minikube, quindi lo scheduler non ci protegge.
 - **Kafka a un nodo**: niente repliche dei messaggi (replication factor 1) e un
   quorum KRaft di un solo controller. Se `kafka-0` si ferma, gli eventi aspettano
   nell'outbox dei servizi (dal passo 2) finché non torna. In un cluster vero: 3
   broker, replication factor 3, `min.insync.replicas=2`.
 - **Kafka in chiaro**, senza TLS né autenticazione: lo protegge solo la
-  NetworkPolicy. In un cluster vero si aggiungono TLS e SASL, oppure mTLS con Istio.
+  NetworkPolicy. Kafka è fuori dal mesh (senza sidecar), quindi nemmeno l'mTLS
+  di Istio lo copre. In un cluster vero si aggiungono TLS e SASL.
 
 ## Da Docker Compose a Kubernetes
 

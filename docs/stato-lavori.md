@@ -1,26 +1,36 @@
 # GinVault: stato dei lavori
 
-Aggiornato all'11 novembre 2026. Tutto quello che è stato fatto finora, in ordine,
+Aggiornato al 13 novembre 2026. Tutto quello che è stato fatto finora, in ordine,
 e il punto esatto in cui siamo arrivati.
 
 ## In breve: dove siamo
 
-- **Branch:** `storia-giulia`, creato l'11 novembre da `main` (`7af367a`).
+- **Branch:** `istio`, creato il 12 novembre da `main` aggiornato (`1d63dad`,
+  il merge della PR #6).
 - **Storia di Elena finita e unita in `main`:** i 7 passi, da `86fe672` a
   `cbb04e5`, sono nella **PR #4**, unita il 10 novembre con il merge commit
   `3d00b6f`. La **PR #5** (`7af367a`) ha aggiornato questo file. I branch
   `storia-elena` e `stato-lavori-pr4` sono cancellati, in locale e su GitHub.
-- **Storia di Giulia finita sul branch**, in 7 commit locali (vedi
-  [La storia di Giulia](#la-storia-di-giulia)): da `8443fb6` a `f4e7c9d`, più
-  quello del passo 7, l'integrazione e la demo. I passi 5, 6 e 7 sono fatti di
-  fila, senza fermarsi (richiesta dell'11 novembre). Niente push né PR: si
-  fanno quando lo dici.
-- **Da fare (utente):** la riga `STRIPE_SECRET_KEY=` nel `.env` (vedi
-  [passo 6](#passo-6-kubernetes-f4e7c9d)) e il giro dal browser, sul cluster,
-  delle demo di Elena e di Giulia.
+- **Storia di Giulia finita e unita in `main`:** i 7 commit (vedi
+  [La storia di Giulia](#la-storia-di-giulia)), da `8443fb6` a `a82d44b`, sono
+  nella **PR #6**, pushata l'11 novembre su richiesta dell'utente e unita il 12
+  novembre con il merge commit `1d63dad`. I passi 5, 6 e 7 sono fatti di fila,
+  senza fermarsi (richiesta dell'11 novembre). Il branch `storia-giulia` c'è
+  ancora, in locale e su GitHub.
+- **Istio e circuit breaker finiti sul branch `istio`:** i 4 passi (vedi
+  [Istio e circuit breaker](#istio-e-circuit-breaker)) sono fatti sul cluster
+  e nei file. Il passo 4 l'ho fatto senza fermarmi, su richiesta dell'utente
+  del 12 novembre («fai tutti i passi senza ok»). Il 13 novembre l'utente ha
+  dato l'ok: un commit per Istio, poi un secondo per il messaggio di edizioni
+  (`CatalogoRicetteRest`), push e PR verso `main`.
+- **Fatto dall'utente il 13 novembre:** il login e le demo dal browser, sul
+  cluster, funzionano. La chiave Stripe è nel Secret `pagamenti-stripe`
+  (controllato il 12 novembre, senza leggerne il valore).
 - Sul cluster girano `frontend:0.4`, `gateway:0.3`, `edizioni:0.6`,
-  `ricette:0.2`, `magazzino:0.3`, `produzione:0.4`, `pagamenti:0.1` e
-  `notifiche:0.1` (2 repliche).
+  `ricette:0.2` (2 repliche), `magazzino:0.3`, `produzione:0.4`,
+  `pagamenti:0.1` e `notifiche:0.1` (2 repliche), con Istio 1.31.4 (istiod, i
+  sidecar nei microservizi e nel front-end, mTLS STRICT tra i sidecar, circuit
+  breaker su edizioni → ricette).
   Dopo un riavvio del PC servono di nuovo Docker Desktop e `minikube start`.
 
 ## Cronologia dei commit
@@ -43,15 +53,337 @@ e il punto esatto in cui siamo arrivati.
 | `2c5b712` (PR #4) | 10 nov | **Elena, passo 6: frontend per Elena**, più la correzione di Produzione sul lotto della consegna (vedi sotto) |
 | `cbb04e5` (PR #4) | 10 nov | **Elena, passo 7: integrazione e demo** (vedi sotto) |
 | `47e9b33` (PR #5) | 11 nov | Stato dei lavori dopo l'unione della PR #4 |
-| `8443fb6` | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
-| `dab4cda` | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
-| `926e959` | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
-| `7b1edf3` | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
-| `33a1597` | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
-| `f4e7c9d` | 11 nov | **Giulia, passo 6: pagamenti e notifiche su Kubernetes** (vedi sotto) |
+| `8443fb6` (PR #6) | 11 nov | **Giulia, passo 1: prelazione e prenotazioni in Edizioni** (vedi sotto) |
+| `dab4cda` (PR #6) | 11 nov | **Giulia, passo 2: Pagamenti con Stripe in modalità test** (vedi sotto) |
+| `926e959` (PR #6) | 11 nov | **Giulia, passo 3: la SAGA del pagamento in Edizioni** (vedi sotto) |
+| `7b1edf3` (PR #6) | 11 nov | **Giulia, passo 4: Notifiche con Kafka e WebSocket** (vedi sotto) |
+| `33a1597` (PR #6) | 11 nov | **Giulia, passo 5: l'area soci con i dati veri** (vedi sotto) |
+| `f4e7c9d` (PR #6) | 11 nov | **Giulia, passo 6: pagamenti e notifiche su Kubernetes** (vedi sotto) |
+| `a82d44b` (PR #6) | 11 nov | **Giulia, passo 7: integrazione e demo** (vedi sotto) |
 
-Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
-#4 è `3d00b6f`, quello della PR #5 è `7af367a`.
+Le PR dalla #1 alla #6 sono unite in `main` con merge commit: quello della PR
+#4 è `3d00b6f`, quello della PR #5 è `7af367a`, quello della PR #6 è `1d63dad`
+(12 novembre).
+
+## Istio e circuit breaker
+
+Richiesta dell'11 novembre, con le stesse regole di lavoro: un passo alla
+volta, stop per l'ok, commit solo su richiesta, `.env` mai letto.
+
+| # | Passo | Stato |
+|---|---|---|
+| 1 | Installazione: istioctl, profilo minimal (solo istiod), sidecar solo nei microservizi e nel front-end; NetworkPolicy, probe, test busybox, le tre demo | ✅ commit «Istio e circuit breaker» |
+| 2 | mTLS: PeerAuthentication STRICT tra i microservizi; DB e Kafka senza sidecar raggiungibili; come vedere che edizioni → ricette è cifrato | ✅ commit «Istio e circuit breaker» |
+| 3 | Circuit breaker su Edizioni → Ricette: ricette a 2 repliche, DestinationRule (connectionPool, outlierDetection), VirtualService con timeout e un retry; nel README timeout dell'applicazione e timeout del mesh | ✅ commit «Istio e circuit breaker» |
+| 4 | Demo della resilienza con la fault injection (abort e delay): senza circuit breaker, con il circuito aperto, la richiusura dopo 30 s; `docs/demo-istio.md` | ✅ commit «Istio e circuit breaker» |
+
+Vincolo dell'utente: **la memoria**. Minikube ha 8 GiB e si cambiano solo
+ricreando il cluster: prima di installare si misura e si sceglie la
+configurazione più leggera; se ne servisse di più, si chiede prima.
+
+### Passo 1: installazione
+
+- **Misura prima di Istio:** il container minikube usava **3,66 GiB su 8**
+  (4 CPU). I 17 pod circa 2,5 GiB (i Java 250-320 MiB l'uno, kafka 510 MiB), il
+  sistema circa 0,85 GiB. Il nodo dichiara ~15,5 GiB, la memoria della VM di
+  Docker Desktop, e la somma dei limiti era già 9,6 GiB: lo scheduler non
+  protegge dagli 8 GiB veri.
+- **Branch:** `main` non aveva la storia di Giulia (nessun push). Scelta
+  dell'utente: prima push di `storia-giulia`, PR e merge, poi `istio` da
+  `main`. Il passo 1 è stato fatto intanto, senza commit. Dopo il merge della
+  PR #6 (`1d63dad`) il branch `istio` è nato da `main` aggiornato, e le
+  modifiche non committate ci sono passate così com'erano (i file toccati
+  erano uguali in `a82d44b` e in `1d63dad`).
+- **Istio 1.31.4** (supporta Kubernetes 1.32-1.37; la 1.32.0 era uscita da due
+  giorni). `istioctl` scaricato da GitHub, sha256 controllato, in
+  `$HOME\istio\1.31.4\istioctl.exe`, fuori dal repository.
+  `istioctl x precheck`: nessun problema.
+- **`k8s/istio/installazione.yaml`** (IstioOperator per `istioctl install`):
+  - profilo minimal: solo istiod, nessun ingress gateway (resta nginx), niente
+    Kiali/Prometheus/Grafana;
+  - istiod: una replica senza autoscaling, richiesta 100m / 256Mi (di default
+    2 GiB);
+  - sidecar: richiesta 10m / 48Mi, limite 500m / 256Mi (di default 1 GiB),
+    `concurrency: 1`, `holdApplicationUntilProxyStarts: true`.
+- **`k8s/istio/sidecar.yaml`**: Sidecar `default`, ogni Envoy conosce solo
+  `./*` e `istio-system/*`. **`k8s/istio/kustomization.yaml`**: le risorse di
+  Istio a parte, perché senza Istio installato `kubectl apply -k k8s/` deve
+  continuare a funzionare.
+- **Iniezione:**
+  - label `istio-injection: enabled` in `namespace.yaml`;
+  - la label `sidecar.istio.io/inject: "false"` (non l'annotazione,
+    deprecata) nel template dei sei DB, di Kafka e del Job `kafka-topic`;
+  - `appProtocol: tcp` sulle porte dei Service dei DB e di Kafka.
+- **Applicazione:**
+  - `kubectl apply -k k8s/istio`;
+  - `kubectl delete job kafka-topic` (template immutabile) e `kubectl apply -k k8s`:
+    DB e `kafka-0` si sono ricreati, con i dati nei volumi;
+  - poi `rollout restart` degli 8 Deployment, due alla volta (picco 4,14 GiB).
+- **Sidecar nativi:** con Kubernetes 1.37 `istio-proxy` è negli
+  `initContainers` con `restartPolicy: Always`. Le probe sono riscritte su
+  `:15020/app-health/<container>/...`.
+- **Verificato sul cluster (11 nov):**
+  - 17 pod Running: 10 `2/2` (frontend ×2, gateway, edizioni, ricette,
+    magazzino, produzione, pagamenti, notifiche ×2), 7 `1/1` (DB e
+    `kafka-0`); il Job `Completed` senza sidecar. `istioctl proxy-status`: 10
+    proxy sincronizzati.
+  - Memoria: **4,1 GiB su 8**. istiod 57 MiB, i 10 sidecar 281 MiB in tutto
+    (27-30 MiB l'uno).
+  - NetworkPolicy:
+    - istiod e il webhook non sono bloccati: le policy sono solo in entrata e
+      nessuna è in `istio-system`;
+    - le probe sulla 15020 passano anche verso frontend, gateway e magazzino:
+      nessun riavvio, pod Ready;
+    - il **test busybox** completo dà gli stessi risultati di prima.
+  - **Scoperta:** con il sidecar `nc -z` dal container dell'applicazione dice
+    sempre APERTO (la connessione la accetta Envoy: ricette → kafka «APERTO»).
+    Il test ora usa pod di prova con `sidecar.istio.io/inject=false` e, dai
+    microservizi, il container `istio-proxy` (utente 1337, fuori dal redirect,
+    stesso IP e stesse label). Ha `nc`, `curl` e `bash`, non `wget`.
+  - I percorsi delle tre demo, senza login:
+    - Ingress → front-end (`/`, `/soci`: 200);
+    - Ingress → gateway → i sei servizi (`/api/<servizio>/health`: 200), API
+      401 senza sessione;
+    - edizioni → ricette con `server: envoy` e in `istio_requests_total`;
+    - **gRPC** produzione → magazzino:9084: `grpcurl` da un container effimero
+      nel pod di produzione riceve `UNAUTHENTICATED`, e il sidecar di
+      magazzino lo conta (`source_workload="produzione"`, stato 16: tra i
+      sidecar c'è già mTLS in modalità PERMISSIVE);
+    - **WebSocket**: upgrade `101` da Envoy su `/avvisi`, poi la chiusura 4401
+      dell'applicazione;
+    - **Kafka**: consumer group con i loro membri (edizioni 6, produzione 6,
+      pagamenti 3, notifiche 2);
+    - pagamenti → api.stripe.com attraverso Envoy (401 senza chiave).
+  - Statistiche: Istio di default espone poche statistiche di Envoy (niente
+    `upstream_rq_*` per cluster né `outlier_detection`). Per il passo 4 vanno
+    accese con `proxyStatsMatcher`, solo sul pod di edizioni.
+- **`k8s/README.md`:**
+  - la sezione «Istio: istiod e i sidecar»;
+  - `istioctl` nei prerequisiti, Istio nell'avvio e nella demo completa;
+  - il test delle NetworkPolicy con i sidecar;
+  - quattro problemi frequenti nuovi e le scelte (profilo minimal, limiti dei
+    sidecar, Kafka fuori dal mesh).
+- **Non fatto:** il giro delle tre demo dal browser con il login OAuth (lo fa
+  l'utente). In particolare la creazione di un'edizione (edizioni → ricette
+  con il JWT), l'integrazione di un lotto (gRPC con il JWT) e gli avvisi in
+  diretta di Giulia.
+
+### Passo 2: mTLS
+
+- **`k8s/istio/peer-authentication.yaml`**, nel kustomization di `k8s/istio/`:
+  - PeerAuthentication `default`, senza selector: **STRICT** per tutto il
+    namespace;
+  - `frontend-da-ingress` e `gateway-da-ingress`: STRICT, tranne la porta
+    8080 del container, **PERMISSIVE**. Il controller ingress-nginx non ha il
+    sidecar: con STRICT anche lì il sito risponderebbe 502. Tra virgolette
+    (`"8080":`): kustomize rifiuta una chiave numerica («json: unsupported
+    type: map[interface {}]interface {}»).
+- **DB e Kafka restano raggiungibili** senza toccarli: non hanno un Envoy che
+  applichi la PeerAuthentication, e l'auto mTLS del client usa il chiaro
+  verso i pod senza la label `security.istio.io/tlsMode: istio`.
+- **Le identità:** tutti i pod usano la ServiceAccount `default`, quindi tutti
+  hanno `spiffe://cluster.local/ns/ginvault/sa/default`. Il certificato lo
+  firma istiod (la CA del mesh, radice di 10 anni), dura 24 ore e si rinnova
+  da solo. Non cambiato: una ServiceAccount per servizio è il passo successivo,
+  se servono `AuthorizationPolicy` per identità (da decidere con l'utente).
+- **Verificato sul cluster (12 nov):**
+  - `istioctl x describe pod`: ricette «Workload mTLS mode: STRICT»; gateway
+    STRICT con «8080: PERMISSIVE»;
+  - da un pod senza sidecar, HTTP in chiaro verso ricette, magazzino,
+    pagamenti e notifiche: «Connection reset by peer» (la connessione TCP si
+    apre, la accetta Envoy, poi la chiude). Il test delle NetworkPolicy con
+    `nc -z` dà gli stessi risultati di prima;
+  - Ingress: `/`, `/soci` e i sei `/api/<servizio>/health` 200,
+    `/api/edizioni/regole-di-vendita` 401;
+  - edizioni riavviato sotto STRICT: Hikari partito, 6 partizioni Kafka,
+    JWKS dal gateway, nessun errore;
+  - metriche del sidecar di ricette (`istio_requests_total`): edizioni e
+    gateway con `connection_security_policy="mutual_tls"` e il loro
+    `source_principal`; gRPC produzione → magazzino (stato 16) e WebSocket
+    verso notifiche (101) in `mutual_tls`;
+  - **cattura con tcpdump** (container effimero `--profile=netadmin` nel pod
+    di ricette): da edizioni su `eth0` solo byte TLS; su `lo`, da Envoy
+    (127.0.0.6) all'applicazione, il `GET /health` in chiaro con l'header
+    `x-forwarded-client-cert` (`By=spiffe://.../sa/default`); da busybox il
+    `GET` in chiaro su `eth0`, senza risposta;
+  - `istioctl proxy-config secret deploy/ricette`: «default» (24 ore) e
+    «ROOTCA»;
+  - `kubectl port-forward` verso ricette: 200 (entra da localhost, senza
+    Envoy);
+  - memoria: **4,33 GiB su 8**.
+- **`k8s/README.md`:** la sezione «Istio: mTLS tra i microservizi» (oggetti,
+  auto mTLS, certificati, le tre prove con i comandi PowerShell e come leggere
+  la cattura), la riga del file, la nota nel test delle NetworkPolicy, due
+  problemi frequenti, due scelte e limiti (un'identità sola, la 8080 in
+  chiaro dall'Ingress).
+
+### Passo 3: circuit breaker su Edizioni → Ricette
+
+- **Misura prima:** 4,49 GiB su 8 (ricette 250 MiB più 29 MiB di sidecar).
+  Richieste di memoria dei pod: 5,1 GiB, che con la seconda replica di ricette
+  salgono a 5,5 GiB, sotto gli 8 veri.
+- **`k8s/istio/circuit-breaker-ricette.yaml`**, nel kustomization di
+  `k8s/istio/`:
+  - **DestinationRule `ricette`**:
+    - `connectionPool`: 10 connessioni, 5 richieste in coda, 10 richieste e 2
+      retry attivi, `connectTimeout` 0,5 s;
+    - `outlierDetection`: `consecutive5xxErrors: 3`, `interval: 1s`,
+      `baseEjectionTime: 30s`, `maxEjectionPercent: 100`,
+      `minHealthPercent: 0`;
+    - niente `tls`: l'mTLS automatico resta.
+  - **VirtualService `ricette`**:
+    - la route `da-edizioni` (`sourceLabels`): `timeout: 1.8s`,
+      `attempts: 1`, `perTryTimeout: 0.8s`,
+      `retryOn: gateway-error,connect-failure,refused-stream`;
+    - la route `altri`, per il gateway, con i default di Istio.
+  - I numeri stanno dentro i 2 s di edizioni: 0,8 + 0,8 < 1,8 < 2. Il retry
+    è sicuro perché le due chiamate sono idempotenti: la GET, e la POST
+    `/utilizzo` per la stessa edizione.
+- **`k8s/ricette.yaml`:**
+  - `replicas: 2`: ricette non ha stato in memoria né lavori pianificati;
+  - il commento del Service: con Istio, a zero pod, il 503 arriva subito.
+- **`k8s/edizioni.yaml`:** l'annotazione `proxy.istio.io/config` con
+  `proxyStatsMatcher`, che accende le statistiche del cluster verso ricette.
+  Il nome del cluster nelle statistiche di Istio finisce con `;`
+  (`cluster.outbound|8082||ricette.ginvault.svc.cluster.local;.upstream_rq_total`).
+  Il primo prefisso, con il punto finale, non trovava niente: corretto e
+  riapplicato.
+- **Verificato sul cluster (12 nov):**
+  - `istioctl analyze` senza problemi; `proxy-config` di edizioni con tutti i
+    valori. La route di edizioni ha `previous_hosts`: il retry va sull'altro
+    pod. Il gateway ha solo `altri`: nessun timeout, 2 retry;
+  - 20 chiamate da edizioni: 200, divise 12 e 8 tra i pod, `mutual_tls`;
+  - ricette a zero repliche: 503 `no healthy upstream` in 3 ms. Riportato a
+    2 repliche;
+  - memoria: **4,82 GiB su 8**.
+- **Prove per il passo 4**, con oggetti temporanei già tolti (un
+  VirtualService con `fault`, due EnvoyFilter, un container effimero con curl
+  nel pod di edizioni):
+  - **`fault.abort` nel VirtualService non apre il circuito.**
+    - Il fault agisce nel sidecar di edizioni, prima di scegliere un pod: 8
+      risposte 503, ma `upstream_rq_total` fermo e `ejections_active: 0`.
+    - Il 503 lo inventa il sidecar di chi chiama, e ricette non è mai stato
+      chiamato.
+  - **`fault.delay` nel VirtualService non lo ferma il timeout di 1,8 s**: 3 s
+    di ritardo, poi 200. A fermarlo sarebbe solo il timeout di edizioni
+    (2 s).
+  - **Lo stesso filtro di Envoy, `envoy.filters.http.fault`, sul sidecar di
+    ricette (EnvoyFilter in entrata) funziona:**
+    - con un abort 503: dopo 3 richieste i due pod sono esclusi
+      (`ejections_active: 2`, `OUTLIER CHECK FAILED`). Per circa 1 s passano
+      ancora delle richieste: Envoy raccoglie gli aggiornamenti di stato in
+      finestre di 1 s. Poi `no healthy upstream` in 1-2 ms, senza chiamare
+      ricette (`upstream_rq_total` fermo, `upstream_cx_none_healthy` che
+      sale);
+    - dopo 30 s i pod sono riammessi. Con il guasto ancora attivo vengono
+      riesclusi per 60 s; tolto il guasto, 200;
+    - con un ritardo di 1,5 s: due 504 `upstream request timeout` a 1,6 s (due
+      tentativi da 0,8 s), poi il circuito aperto. I timeout contano come
+      errori 5xx;
+    - le probe non passano da Envoy (le manda l'agente da 127.0.0.6): il
+      guasto non rende i pod NotReady.
+- **Documentazione:**
+  - `k8s/README.md`, la sezione «Istio: circuit breaker su Edizioni → Ricette»:
+    - gli oggetti;
+    - la tabella timeout dell'applicazione / timeout del mesh, e chi decide
+      cosa;
+    - che cosa succede nei vari casi;
+    - comandi, verifiche e percorsi nella dashboard.
+  - Sempre in `k8s/README.md`:
+    - schema e tabella dei file;
+    - diciotto pod nella demo completa;
+    - Ricette spento con il 503 immediato;
+    - due problemi frequenti;
+    - tre scelte e limiti.
+- **Correzioni a cose rimaste indietro dal passo 1:**
+  - `docs/demo-storia-marco.md`, Ricette spento: con Istio il 503 arriva
+    subito, con il messaggio «Ricette ha risposto in modo inatteso…», non dopo
+    2 s. Riaccensione con 2 repliche;
+  - `docs/demo-storia-giulia.md`: i pod `2/2`;
+  - `README.md`: il circuit breaker non «arriverà con Istio», c'è (righe
+    toccate: solo le due frasi; la riga 7 dell'utente resta fuori).
+- **Proposte, non fatte:**
+  - `CatalogoRicetteRest` tratta un 503 o 504 di Envoy come «risposta
+    inattesa»: si potrebbero trattare 502, 503 e 504 come «non disponibile»
+    (edizioni 0.7). Il suo Javadoc dice ancora che il circuit breaker
+    «arriverà con Istio»;
+  - una ServiceAccount per servizio, dal passo 2.
+
+### Passo 4: la demo con i guasti
+
+- **Scelta:** i guasti stanno dalla parte di Ricette. Al passo 3 si era visto
+  che il `fault` del VirtualService agisce nel sidecar di chi chiama e non
+  apre il circuito. Avevo proposto l'EnvoyFilter, e l'utente ha detto di
+  andare avanti con tutti i passi.
+- **`k8s/istio/demo/`**, fuori da ogni kustomization:
+  - `guasto-503.yaml`, `guasto-lento.yaml` (1,5 s) e `guasto-un-po-lento.yaml`
+    (0,5 s):
+    - sono EnvoyFilter con lo stesso nome, `guasto-ricette`;
+    - aggiungono `envoy.filters.http.fault` al sidecar di Ricette, in
+      entrata;
+    - valgono solo sui pod con la label `ginvault/guasto=si`, che si mette al
+      volo, su un pod o su tutti e due;
+  - `senza-outlier-detection.yaml`: la DestinationRule con gli stessi
+    timeout, retry e connectionPool, ma senza circuit breaker;
+  - `vs-fault-abort.yaml` e `vs-fault-delay.yaml`: il VirtualService vero più
+    il `fault` di Istio, per mostrare che cosa non fa;
+  - ognuno si torna indietro con `kubectl apply -k k8s/istio/` o
+    `kubectl delete envoyfilter guasto-ricette`.
+- **`docs/demo-istio.md`:**
+  - prima di cominciare: il client è un container effimero con curl nel pod
+    di edizioni, e ci sono quattro funzioni PowerShell (`Chiamate`, `Stato`,
+    `Ricevute`, `Endpoint`);
+  - sidecar e mTLS in breve, poi la configurazione;
+  - un pod guasto;
+  - senza circuit breaker;
+  - con il circuito aperto;
+  - la richiusura dopo 30 s;
+  - la coda piena;
+  - perché non basta il `fault` del VirtualService;
+  - dal browser con il login, facoltativo;
+  - pulizia, riepilogo e la tabella delle statistiche di Envoy.
+- **Verificato sul cluster (12 nov)**, comandi PowerShell compresi:
+  - **un pod guasto:**
+    - 12 risposte 200 su 12: 3 retry, poi il pod escluso;
+    - la label letta al volo da istiod;
+  - **Ricette lento, senza outlier detection:** 8 risposte 504 su 8, tutte
+    dopo circa 1,62 s; Ricette riceve 16 chiamate, 2 a richiesta;
+  - **Ricette lento, con il circuit breaker:**
+    - 4 risposte 504, poi `no healthy upstream` in circa 1 ms;
+    - con altre 20 chiamate i contatori di Ricette e `upstream_rq_total` sono
+      fermi, mentre `upstream_cx_none_healthy` sale di 20;
+  - **richiusura:** esclusione alle 02:24:32 circa (ora UTC dei pod), di
+    nuovo 200 alle 02:25:02, cioè dopo 30 s;
+  - **coda:** 25 richieste insieme contro Ricette a 0,5 s danno 15 risposte
+    200 e 10 risposte 503, con `upstream_rq_pending_overflow` a +10, nessuna
+    esclusione e nessun retry. Anche senza guasto 25 richieste nello stesso
+    istante ne fanno traboccare 3;
+  - **`fault` del VirtualService:**
+    - abort: 10 risposte 503 in 1 ms, Ricette mai chiamato, 0 esclusioni;
+    - delay: 3 s di ritardo e poi 200, con `curl -m 2` resa dopo 2 s;
+  - **pod di Ricette:** sempre `2/2 Ready`, 0 riavvii. Le probe le manda
+    l'agente da 127.0.0.6, senza passare da Envoy;
+  - **alla fine:**
+    - nessun EnvoyFilter e nessuna label `ginvault/guasto`;
+    - `kubectl diff -k k8s/` vuoto;
+    - 18 pod Ready;
+    - dall'Ingress `/`, `/soci` e i sei `/health` 200, un'API 401;
+    - memoria **4,89 GiB su 8**.
+- **Documentazione:**
+  - `k8s/README.md`:
+    - la riga `istio/demo/` nella tabella dei file;
+    - «Provare i guasti» nella sezione del circuit breaker;
+    - il puntatore alla demo in «Demo per l'esame»;
+    - tre problemi frequenti, due scelte e limiti (i limiti del
+      connectionPool, l'EnvoyFilter);
+  - il link alla demo nel `README.md`;
+  - un commento in `kustomization.yaml` e in `circuit-breaker-ricette.yaml`.
+- **Altri numeri rimasti indietro, corretti:**
+  - `k8s/README.md`: `2/2` di magazzino senza Kafka, edizioni `1/2` senza
+    database, gli 11 sidecar di `proxy-status`, `0/1` o `1/2` nei problemi
+    frequenti;
+  - le demo di Elena e di Marco: 18 pod, `2/2`.
+- **Dal browser, con il login:** fatto dall'utente il 13 novembre, funziona.
 
 ## La storia di Giulia
 
@@ -60,7 +392,8 @@ Le PR dalla #1 alla #5 sono unite in `main` con merge commit: quello della PR
 > Elena porta la tiratura da 600 a 540: a Giulia arriva l'avviso in diretta, e
 > le sue bottiglie, la 112 e la 113, restano sue.
 
-I sette passi, sul branch `storia-giulia`:
+I sette passi, sul branch `storia-giulia`, uniti in `main` con la PR #6
+(`1d63dad`):
 
 | # | Passo | Stato |
 |---|---|---|
@@ -70,7 +403,7 @@ I sette passi, sul branch `storia-giulia`:
 | 4 | Notifiche (NestJS): consumer Kafka e WebSocket, `TiraturaRidotta` a chi ha prenotato | ✅ `7b1edf3` |
 | 5 | Front-end: l'area soci con i dati veri, le carte di prova, gli avvisi in diretta, senza lista d'attesa | ✅ `33a1597` |
 | 6 | Kubernetes: pagamenti e notifiche con i loro DB, NetworkPolicy, chiave Stripe nel Secret | ✅ `f4e7c9d` |
-| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | ✅ commit dopo `f4e7c9d` |
+| 7 | Integrazione e demo: `docs/demo-storia-giulia.md`, README | ✅ `a82d44b` |
 
 Le scelte dell'utente (11 novembre):
 
@@ -458,7 +791,7 @@ Le scelte dell'utente (11 novembre):
   - rilanciare `.\k8s\crea-secret.ps1`;
   - `kubectl rollout restart deployment/pagamenti -n ginvault`.
 
-### Passo 7: integrazione e demo
+### Passo 7: integrazione e demo (`a82d44b`)
 
 - **[`docs/demo-storia-giulia.md`](demo-storia-giulia.md):** la demo dal
   browser su Minikube, come quella di Elena.
@@ -517,7 +850,8 @@ Le scelte dell'utente (11 novembre):
   - la riga `STRIPE_SECRET_KEY=sk_test_...` nel `.env`, poi
     `.\k8s\crea-secret.ps1` e il riavvio di pagamenti;
   - il giro dal browser, con il login OAuth e lo Stripe vero in modalità test;
-  - il push del branch e la PR, quando lo dici.
+  - push e PR: fatti l'11 novembre su richiesta dell'utente (PR #6), unita
+    il 12 novembre (`1d63dad`).
 
 ## La storia di Elena
 
@@ -978,6 +1312,16 @@ c'erano già. Il dettaglio è in
 - **I messaggi di prova vanno solo su topic usa e getta** (`prova.chiavi`,
   `prova.outbox`), mai sui topic veri.
 - **Compose e `minikube tunnel` usano tutti e due la porta 80:** mai insieme.
+- **Memoria del cluster:** prima di installare qualcosa si misura
+  (`kubectl top`, `docker stats minikube`) e si propone la configurazione più
+  leggera; per più memoria bisogna ricreare il cluster, quindi si chiede prima.
+- **Con Istio** il test delle NetworkPolicy si fa senza Envoy: pod di prova con
+  `sidecar.istio.io/inject=false`, `kubectl exec -c istio-proxy` dai
+  microservizi.
+- **Prove dei guasti con Istio:** gli oggetti temporanei (EnvoyFilter, label
+  `ginvault/guasto`, varianti della DestinationRule e del VirtualService) si
+  tolgono sempre alla fine, e si controlla con `kubectl diff -k k8s/` e
+  `kubectl get envoyfilter -n ginvault`.
 
 ## Comandi per riprendere
 
@@ -1012,7 +1356,9 @@ PowerShell come amministratore, con Compose spento.
 
 ## Dopo la storia di Elena (dal piano, `docs/piano.md`)
 
-- **Storia di Giulia:** finita sul branch `storia-giulia`, da unire con una PR.
-- **Kubernetes:** Istio e circuit breaker.
+- **Storia di Giulia:** finita e unita in `main` (PR #6, `1d63dad`).
+- **Kubernetes:** Istio e circuit breaker, finiti sul branch `istio` (vedi
+  sopra). Dopo il merge: una ServiceAccount per servizio con le
+  AuthorizationPolicy.
 - **Plus rimanenti:** repliche del consumer Kafka.
 - **Documentazione e prova generale:** diagrammi, presentazione, checklist.

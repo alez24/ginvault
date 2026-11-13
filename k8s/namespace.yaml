@@ -8,9 +8,9 @@
 #     (nella dashboard: menu dei namespace in alto -> ginvault)
 #   - i nomi sono unici solo DENTRO un namespace: il Service "gateway" di
 #     ginvault non si scontra con un eventuale "gateway" di un altro namespace
-#   - più avanti si applicano regole a tutto il progetto in un colpo solo:
-#     quote di risorse, NetworkPolicy, l'iniezione dei sidecar di Istio
-#     (label istio-injection=enabled)
+#   - si applicano regole a tutto il progetto in un colpo solo: quote di
+#     risorse, NetworkPolicy, l'iniezione dei sidecar di Istio
+#     (label istio-injection=enabled, vedi k8s/istio/)
 #
 # Cancellare il namespace cancella TUTTO ciò che contiene, compresi Secret e
 # volume del database: kubectl delete namespace ginvault
@@ -22,3 +22,7 @@ metadata:
   labels:
     # Label "raccomandate" da Kubernetes: le useremo su tutti gli oggetti
     app.kubernetes.io/part-of: ginvault
+    # Istio aggiunge il sidecar (Envoy) a ogni pod nuovo del namespace, tranne
+    # a quelli con la label sidecar.istio.io/inject: "false" (database, Kafka,
+    # il Job dei topic). Senza Istio installato la label non fa niente.
+    istio-injection: enabled

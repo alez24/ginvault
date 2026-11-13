@@ -66,7 +66,7 @@ in [`grpc.md`](grpc.md).
 Controlli prima di cominciare:
 
 ```powershell
-kubectl get pods -n ginvault        # 12 pod 1/1 Running (2 del front-end, kafka-0)
+kubectl get pods -n ginvault        # 18 pod Running: 2/2 i servizi e il front-end (2 frontend, 2 ricette, 2 notifiche), 1/1 i DB e kafka-0; il Job kafka-topic Completed
 curl.exe -s http://localhost/api/magazzino/health     # {"status":"UP"}: la route del gateway verso magazzino
 curl.exe -s http://localhost/api/produzione/health    # {"status":"UP"}: la route verso produzione
 curl.exe -s -o NUL -w '%{http_code}' http://localhost/api/magazzino/ordini   # 401: senza login niente dati
@@ -330,7 +330,7 @@ mentre Kafka è spento.
 # 1) Kafka spento: il pod kafka-0 sparisce, il PVC dati-kafka-0 resta
 kubectl scale statefulset kafka -n ginvault --replicas=0
 kubectl wait -n ginvault --for=delete pod/kafka-0 --timeout=120s
-kubectl get pods -n ginvault        # magazzino, produzione ed edizioni restano 1/1 Ready
+kubectl get pods -n ginvault        # magazzino, produzione ed edizioni restano 2/2 Ready
 ```
 
 Dal browser, come Elena:

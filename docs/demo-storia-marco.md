@@ -26,7 +26,7 @@ REST una per una.
   nel `.env` da cui `k8s/crea-secret.ps1` ha creato il Secret `gateway-segreti`.
 
 ```powershell
-kubectl get pods -n ginvault          # 7 pod 1/1 Running (2 del front-end)
+kubectl get pods -n ginvault          # 18 pod Running: 2/2 i servizi e il front-end (2 frontend, 2 ricette, 2 notifiche), 1/1 i DB e kafka-0
 curl.exe -i http://localhost/api/ricette/health
 ```
 
@@ -218,13 +218,17 @@ await api('GET', `/api/edizioni/edizioni/${e.id}`);
 Atteso:
 
 - la POST risponde **503** con `Retry-After: 5`, titolo "Ricette non disponibile"
-  e un messaggio chiaro ("Ricette non risponde ... l'edizione non è stata
-  creata. Riprova tra poco."), senza stack trace. Arriva dopo circa **2
-  secondi**: il Service senza pod non rifiuta la connessione, i pacchetti si
-  perdono. A fermare l'attesa è il timeout di Edizioni, non un errore immediato.
-  Lo si vede anche senza login:
-  `kubectl exec -n ginvault deploy/edizioni -- wget -qO- -T 5 http://ricette:8082/health`
-  resta appeso 5 secondi e poi risponde `download timed out`;
+  e un messaggio chiaro ("Ricette ha risposto in modo inatteso alla lettura
+  della formulazione ...: l'edizione non è stata creata. Riprova tra poco."),
+  senza stack trace. Arriva **subito**: il sidecar Istio di Edizioni sa da
+  istiod che il Service non ha pod e risponde da solo 503 `no healthy upstream`,
+  che Edizioni traduce nel suo 503. Lo si vede anche senza login:
+  `kubectl exec -n ginvault deploy/edizioni -c edizioni -- wget -qO- -T 5 http://ricette:8082/health`
+  risponde in pochi millisecondi `server returned error: HTTP/1.1 503 Service Unavailable`.
+  Senza Istio (in Compose) il Service senza pod non rifiuta la connessione: si
+  aspettano i **2 secondi** del timeout di Edizioni, e il messaggio è "Ricette
+  non risponde ... più lento di 2 secondi" (vedi
+  [k8s/README.md](../k8s/README.md#istio-circuit-breaker-su-edizioni--ricette));
 - la GET dell'edizione di prima risponde **200**: Edizioni legge solo dal suo
   database, quindi anche con Ricette spento mostra le sue edizioni.
 
@@ -241,8 +245,8 @@ kubectl exec -n ginvault deployment/ricette-db -- psql -U ricette -d ricette -c 
 Riaccendi Ricette e riprova la stessa richiesta:
 
 ```powershell
-kubectl scale deployment/ricette -n ginvault --replicas=1
-kubectl rollout status deployment/ricette -n ginvault    # aspetta che sia Ready
+kubectl scale deployment/ricette -n ginvault --replicas=2
+kubectl rollout status deployment/ricette -n ginvault    # aspetta che i due pod siano Ready
 ```
 
 ```js

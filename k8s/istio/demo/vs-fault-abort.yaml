@@ -1,0 +1,52 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): il fault.abort di Istio, nel VirtualService.
+#
+# Il VirtualService "ricette" vero (circuit-breaker-ricette.yaml) più un
+# "fault" sulla route di edizioni: il 100% delle richieste riceve 503.
+# Il fault agisce nel sidecar di EDIZIONI, prima di scegliere un pod: ricette
+# non viene mai chiamato, e l'outlier detection non conta niente. Il 503 è
+# subito, ma non è il circuit breaker: per aprire il circuito il guasto va
+# messo dalla parte di ricette (guasto-503.yaml).
+#   kubectl apply -f k8s/istio/demo/vs-fault-abort.yaml
+#   kubectl apply -k k8s/istio/          per tornare al VirtualService vero
+# =============================================================================
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  hosts:
+    - ricette
+  http:
+    - name: da-edizioni
+      match:
+        - sourceLabels:
+            app.kubernetes.io/name: edizioni
+      timeout: 1.8s
+      fault:
+        abort:
+          httpStatus: 503
+          percentage:
+            value: 100
+      retries:
+        attempts: 1
+        perTryTimeout: 0.8s
+        # Solo gli errori per cui un altro pod può andare meglio: 502, 503, 504,
+        # tentativo scaduto, connessione fallita o rifiutata. Un 500 è un errore
+        # dell'applicazione: riprovare non serve
+        retryOn: gateway-error,connect-failure,refused-stream
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082
+    # Tutti gli altri (il gateway): come senza VirtualService
+    - name: altri
+      route:
+        - destination:
+            host: ricette
+            port:
+              number: 8082

@@ -1,0 +1,20 @@
+# =============================================================================
+# Le risorse di Istio per GinVault, a parte dal resto di k8s/: hanno bisogno
+# dei CRD di Istio, quindi si applicano solo dopo l'installazione.
+#
+#   istioctl install -f k8s/istio/installazione.yaml -y    una volta sola
+#   kubectl apply -k k8s/istio/
+#
+# installazione.yaml non è in elenco: lo legge istioctl, non kubectl.
+# Nemmeno demo/: sono i guasti per docs/demo-istio.md, si applicano a mano.
+# Così "kubectl apply -k k8s/" funziona anche su un cluster senza Istio.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ginvault
+
+resources:
+  - sidecar.yaml
+  - peer-authentication.yaml
+  - circuit-breaker-ricette.yaml

@@ -1,0 +1,55 @@
+# =============================================================================
+# Installazione di Istio 1.31.4 per GinVault, la più leggera che basta.
+#
+#   istioctl install -f k8s/istio/installazione.yaml -y
+#   istioctl manifest generate -f k8s/istio/installazione.yaml
+#                             gli oggetti che installerebbe, senza installarli
+#
+# NON è un oggetto da "kubectl apply": lo legge istioctl, che crea nel
+# namespace istio-system il control plane (istiod) e il webhook che aggiunge
+# i sidecar ai pod. Per questo non è in k8s/kustomization.yaml.
+#
+# Il vincolo: Minikube ha 8 GiB e prima di Istio ne usava 3,66 con 17 pod.
+#   - Profilo "minimal": solo istiod. Niente ingress gateway di Istio (resta
+#     l'Ingress di nginx), niente egress gateway, niente Kiali, Prometheus o
+#     Grafana: lo stato si legge con istioctl e le statistiche di Envoy.
+#   - istiod: una replica senza autoscaling. Di default chiede 2 GiB di
+#     memoria; ne usa intorno ai 100-150 MiB con questo cluster.
+#   - Sidecar (Envoy): richiesta 10m / 48Mi, limite 500m / 256Mi. Di default
+#     il limite è 1 GiB per sidecar. Attenzione: il nodo dichiara la memoria
+#     della VM di Docker Desktop (~15,5 GiB), non gli 8 GiB veri del container
+#     minikube, quindi lo scheduler non ci protegge: i limiti bassi sì.
+#   - concurrency 1: un solo thread di lavoro per Envoy (meno memoria; il
+#     traffico di una demo non ne chiede di più).
+#   - holdApplicationUntilProxyStarts: il container dell'applicazione parte
+#     solo quando il sidecar è pronto. I servizi Java si collegano subito a
+#     database, Kafka e JWKS: senza, le prime connessioni fallirebbero.
+# =============================================================================
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: ginvault
+  namespace: istio-system
+spec:
+  profile: minimal
+  meshConfig:
+    defaultConfig:
+      concurrency: 1
+      holdApplicationUntilProxyStarts: true
+  values:
+    pilot:
+      autoscaleEnabled: false
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+    global:
+      proxy:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 48Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi

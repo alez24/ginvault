@@ -1,0 +1,58 @@
+# =============================================================================
+# Demo (docs/demo-istio.md): Ricette "si rompe" senza toccare il codice.
+#
+# Il filtro "fault" di Envoy (envoy.filters.http.fault, lo stesso che Istio usa
+# per il fault.abort di un VirtualService) messo nel sidecar di ricette, IN
+# ENTRATA: risponde 503 a ogni richiesta prima che arrivi all'applicazione.
+# Così il 503 esce da un pod di ricette, e il sidecar di chi chiama lo conta
+# per l'outlier detection. Il fault.abort di un VirtualService agisce invece
+# nel sidecar di chi chiama, prima di scegliere il pod: il circuit breaker non
+# lo vede (vs-fault-abort.yaml).
+#
+# Solo sui pod di ricette con la label ginvault/guasto=si:
+#   kubectl label pod -n ginvault -l app.kubernetes.io/name=ricette ginvault/guasto=si   tutti e due
+#   kubectl label pod -n ginvault <nome-del-pod> ginvault/guasto=si                      uno solo
+#   kubectl apply -f k8s/istio/demo/guasto-503.yaml
+# Per toglierlo:
+#   kubectl delete envoyfilter guasto-ricette -n ginvault
+#   kubectl label pod -n ginvault -l app.kubernetes.io/name=ricette ginvault/guasto-
+#
+# guasto-lento.yaml e guasto-un-po-lento.yaml hanno lo stesso nome
+# (guasto-ricette): applicarne uno sostituisce l'altro.
+# Le probe non passano da Envoy (le manda l'agente del sidecar): i pod restano
+# Ready. EnvoyFilter è un'API di basso livello, la configurazione di Envoy così
+# com'è: va bene per una demo, non per la configurazione di tutti i giorni.
+# =============================================================================
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: guasto-ricette
+  namespace: ginvault
+  labels:
+    app.kubernetes.io/part-of: ginvault
+spec:
+  workloadSelector:
+    labels:
+      app.kubernetes.io/name: ricette
+      ginvault/guasto: "si"
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.fault
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+            abort:
+              http_status: 503
+              percentage:
+                numerator: 100
+                denominator: HUNDRED
